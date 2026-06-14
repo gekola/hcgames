@@ -46,9 +46,17 @@ async fn main() {
     let mut accum = 0.0f32;
 
     loop {
+        let n = game.body.len().max(1) as f32;
+        let hunger = if game.score >= 10 {
+            ((game.ticks_hungry as f32 - n) / n).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let tick_interval = TICK * (1.0 - 0.5 * hunger);
+
         accum += get_frame_time();
-        while accum >= TICK {
-            accum -= TICK;
+        while accum >= tick_interval {
+            accum -= tick_interval;
             if !game.tick() {
                 game = Game::new(game.generation + 1);
                 break;
@@ -94,15 +102,25 @@ async fn main() {
             Color { r: 0.95, g: 0.25, b: 0.25, a: 1.0 },
         );
 
-        let n = game.body.len().max(1) as f32;
         for (i, &seg) in game.body.iter().enumerate() {
-            let t = 1.0 - (i as f32 / n) * 0.65;
+            let color = if i == 0 {
+                // blue → white/gray as hunger rises
+                Color {
+                    r: 0.08 + 0.92 * hunger,
+                    g: 0.6 + 0.4 * hunger,
+                    b: 0.95 + 0.05 * hunger,
+                    a: 1.0,
+                }
+            } else {
+                let t = 1.0 - (i as f32 / n) * 0.65;
+                Color { r: 0.08, g: 0.6 * t, b: 0.95 * t, a: 1.0 }
+            };
             draw_rectangle(
                 ox + seg.x as f32 * cell + 1.0,
                 oy + seg.y as f32 * cell + 1.0,
                 cell - 2.0,
                 cell - 2.0,
-                Color { r: 0.08, g: 0.6 * t, b: 0.95 * t, a: 1.0 },
+                color,
             );
         }
 

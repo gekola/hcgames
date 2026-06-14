@@ -10,6 +10,7 @@ pub struct Game {
     pub score: u32,
     pub generation: u32,
     pub blocks: [bool; GRID],
+    pub ticks_hungry: u32,
 }
 
 impl Game {
@@ -18,7 +19,7 @@ impl Game {
         let head = Pt { x: COLS / 2, y: ROWS / 2 };
         let body = VecDeque::from([head]);
         let food = spawn_food(&body, &blocks);
-        Self { body, dir: (1, 0), food, score: 0, generation, blocks }
+        Self { body, dir: (1, 0), food, score: 0, generation, blocks, ticks_hungry: 0 }
     }
 
     pub fn tick(&mut self) -> bool {
@@ -31,8 +32,10 @@ impl Game {
         self.body.push_front(next);
         if next == self.food {
             self.score += 1;
+            self.ticks_hungry = 0;
             self.food = spawn_food(&self.body, &self.blocks);
         } else {
+            self.ticks_hungry += 1;
             self.body.pop_back();
         }
         true
@@ -46,18 +49,68 @@ impl Game {
 
         if let Some((path_len, dir)) = self.bfs_to(head, self.food, &bg) {
             let still_blocked = n.saturating_sub(path_len.saturating_sub(1));
-            if self.time_flood(self.food, still_blocked, &bg) > n
-                && self.bfs_to(self.food, tail, &bg).is_some()
+            let desperate = self.ticks_hungry > (n as u32).saturating_mul(2);
+            if desperate
+                || (self.time_flood(self.food, still_blocked, &bg) > n
+                    && self.bfs_to(self.food, tail, &bg).is_some())
             {
                 return dir;
             }
         }
 
-        if let Some((_, dir)) = self.bfs_to(head, tail, &bg) {
-            return dir;
+        // Safe-greedy: among moves with flood >= n, pick min distance to food.
+        // Replaces blind tail-chase that loops forever when food is inside a body cave.
+        self.safe_greedy_dir(&bg)
+    }
+
+    // BFS from food (blocks-only walls, body transparent) → per-cell distance map.
+    fn food_dist_map(&self, bg: &[u16; GRID]) -> [u16; GRID] {
+        let mut dist = [u16::MAX; GRID];
+        let mut queue = [Pt { x: 0, y: 0 }; GRID];
+        let (mut qh, mut qt) = (0, 0);
+        dist[self.food.idx()] = 0;
+        queue[qt] = self.food; qt += 1;
+        while qh < qt {
+            let cur = queue[qh]; qh += 1;
+            let d = dist[cur.idx()];
+            for (dx, dy) in DIRS {
+                let nb = cur.shifted(dx, dy);
+                if !nb.in_bounds() { continue; }
+                let ni = nb.idx();
+                if dist[ni] != u16::MAX || bg[ni] == BLOCK_SENTINEL { continue; }
+                dist[ni] = d + 1;
+                queue[qt] = nb; qt += 1;
+            }
+        }
+        dist
+    }
+
+    // Tail-chase as safe baseline; other flood-safe dirs can improve if closer to food.
+    fn safe_greedy_dir(&self, bg: &[u16; GRID]) -> (i32, i32) {
+        let head = self.body[0];
+        let n = self.body.len();
+        let tail = *self.body.back().unwrap();
+        let fdist = self.food_dist_map(bg);
+        // Tail-chase direction: guaranteed safe (tail always vacates ahead of head).
+        let tail_dir = self.bfs_to(head, tail, bg).map(|(_, d)| d);
+
+        let mut best = tail_dir;
+        let mut best_dist = tail_dir
+            .map(|(dx, dy)| fdist[head.shifted(dx, dy).idx()])
+            .unwrap_or(u16::MAX);
+
+        for (dx, dy) in DIRS {
+            if n > 1 && (dx, dy) == (-self.dir.0, -self.dir.1) { continue; }
+            if tail_dir == Some((dx, dy)) { continue; }
+            let nb = head.shifted(dx, dy);
+            if !nb.in_bounds() { continue; }
+            if bg[nb.idx()] != u16::MAX { continue; }
+            if self.time_flood(nb, n.saturating_sub(1), bg) < n { continue; }
+            let d = fdist[nb.idx()];
+            if d < best_dist { best_dist = d; best = Some((dx, dy)); }
         }
 
-        self.max_space_dir(&bg)
+        best.unwrap_or_else(|| self.max_space_dir(bg))
     }
 
     // body_grid[cell] = body index, BLOCK_SENTINEL if block, u16::MAX if empty
