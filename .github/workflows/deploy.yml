@@ -37,6 +37,7 @@ jobs:
       - name: Build all games
         env:
           MQ_JS: https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js
+          RUSTFLAGS: "-C link-arg=--import-undefined"
         run: |
           set -euo pipefail
           for game in games/*/; do
