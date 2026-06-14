@@ -1,0 +1,100 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-wasm-
+
+      - name: Build all games
+        env:
+          MQ_JS: https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js
+        run: |
+          set -euo pipefail
+          for game in games/*/; do
+            name=$(basename "$game")
+            cargo build --target wasm32-unknown-unknown --release --bin "$name"
+            mkdir -p "dist/$name"
+            cp "target/wasm32-unknown-unknown/release/$name.wasm" "dist/$name/"
+            cp "games/$name/index.html" "dist/$name/"
+            curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
+          done
+
+      - name: Generate root index
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          games = sorted(d for d in os.listdir("dist") if os.path.isdir(f"dist/{d}"))
+          rows = "\n".join(
+              f'    <li><a href="{g}/">{g.replace("-", " ").title()}</a></li>'
+              for g in games
+          )
+          html = f"""<!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>Hotel Chair Games</title>
+            <style>
+              body {{ font-family: system-ui, sans-serif; background: #111827; color: #e5e7eb;
+                     max-width: 480px; margin: 8rem auto; padding: 0 1.5rem; }}
+              h1   {{ font-size: 2rem; font-weight: 700; margin-bottom: 2rem; color: #f9fafb; }}
+              ul   {{ list-style: none; padding: 0; display: flex; flex-direction: column; gap: .75rem; }}
+              a    {{ display: block; padding: .75rem 1rem; border-radius: .5rem;
+                     background: #1f2937; color: #93c5fd; text-decoration: none;
+                     border: 1px solid #374151; transition: background .15s; }}
+              a:hover {{ background: #374151; color: #bfdbfe; }}
+            </style>
+          </head>
+          <body>
+            <h1>Hotel Chair Games</h1>
+            <ul>
+          {rows}
+            </ul>
+          </body>
+          </html>"""
+          with open("dist/index.html", "w") as f:
+              f.write(html)
+          print(f"wrote dist/index.html ({len(games)} game(s))")
+          PYEOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

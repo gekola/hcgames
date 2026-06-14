@@ -1,0 +1,43 @@
+[env]
+WASM_TARGET = "wasm32-unknown-unknown"
+MQ_JS = "https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"
+
+# Run a game natively: mise run run snake
+[tasks.run]
+description = "Run a game natively"
+run = """
+#!/usr/bin/env bash
+cargo run --bin "$1"
+"""
+
+# Build one game to WASM: mise run build-wasm snake
+[tasks.build-wasm]
+description = "Compile one game to WASM and stage it in dist/<name>/"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+name=$1
+cargo build --target "$WASM_TARGET" --release --bin "$name"
+mkdir -p "dist/$name"
+cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
+cp "games/$name/index.html" "dist/$name/"
+curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
+"""
+
+# Build all games and generate dist/: mise run deploy
+[tasks.deploy]
+description = "Build all games and prepare dist/ for deployment"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+rm -rf dist
+for game in games/*/; do
+    mise run build-wasm "$(basename "$game")"
+done
+mise run generate_index
+"""
+
+# Serve dist/ locally (WASM requires HTTP — can't open via file://)
+[tasks.serve]
+description = "Serve dist/ on http://localhost:8080"
+run = "python3 -m http.server 8080 --directory dist"
