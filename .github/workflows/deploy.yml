@@ -50,41 +50,7 @@ jobs:
           done
 
       - name: Generate root index
-        run: |
-          python3 - <<'PYEOF'
-          import os
-          games = sorted(d for d in os.listdir("dist") if os.path.isdir(f"dist/{d}"))
-          rows = "\n".join(
-              f'    <li><a href="{g}/">{g.replace("-", " ").title()}</a></li>'
-              for g in games
-          )
-          html = f"""<!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8">
-            <title>Hotel Chair Games</title>
-            <style>
-              body {{ font-family: system-ui, sans-serif; background: #111827; color: #e5e7eb;
-                     max-width: 480px; margin: 8rem auto; padding: 0 1.5rem; }}
-              h1   {{ font-size: 2rem; font-weight: 700; margin-bottom: 2rem; color: #f9fafb; }}
-              ul   {{ list-style: none; padding: 0; display: flex; flex-direction: column; gap: .75rem; }}
-              a    {{ display: block; padding: .75rem 1rem; border-radius: .5rem;
-                     background: #1f2937; color: #93c5fd; text-decoration: none;
-                     border: 1px solid #374151; transition: background .15s; }}
-              a:hover {{ background: #374151; color: #bfdbfe; }}
-            </style>
-          </head>
-          <body>
-            <h1>Hotel Chair Games</h1>
-            <ul>
-          {rows}
-            </ul>
-          </body>
-          </html>"""
-          with open("dist/index.html", "w") as f:
-              f.write(html)
-          print(f"wrote dist/index.html ({len(games)} game(s))")
-          PYEOF
+        run: python3 .mise/tasks/generate_index.py
 
       - uses: actions/upload-pages-artifact@v3
         with:

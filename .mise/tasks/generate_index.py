@@ -4,7 +4,7 @@ import os
 
 games = sorted(d for d in os.listdir("dist") if os.path.isdir(f"dist/{d}"))
 rows = "\n".join(
-    f'    <a class="game-link" href="{g}/">{g.replace("-", " ").title()}</a>'
+    f'    <a class="game-link" href="{g}/">{g.removeprefix("game").replace("-", " ").title()}</a>'
     for g in games
 )
 
