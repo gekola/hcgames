@@ -50,9 +50,11 @@ impl Game {
         if let Some((path_len, dir)) = self.bfs_to(head, self.food, &bg) {
             let still_blocked = n.saturating_sub(path_len.saturating_sub(1));
             let desperate = self.ticks_hungry > (n as u32).saturating_mul(2);
+            let next = head.shifted(dir.0, dir.1);
             if desperate
                 || (self.time_flood(self.food, still_blocked, &bg) > n
-                    && self.bfs_to(self.food, tail, &bg).is_some())
+                    && self.bfs_to(self.food, tail, &bg).is_some()
+                    && self.bfs_to(next, tail, &bg).is_some())
             {
                 return dir;
             }
@@ -91,11 +93,17 @@ impl Game {
         let n = self.body.len();
         let tail = *self.body.back().unwrap();
         let fdist = self.food_dist_map(bg);
-        // Tail-chase direction: guaranteed safe (tail always vacates ahead of head).
         let tail_dir = self.bfs_to(head, tail, bg).map(|(_, d)| d);
 
-        let mut best = tail_dir;
-        let mut best_dist = tail_dir
+        // Only use tail_dir as baseline if it also has enough reachable space; otherwise a
+        // flood-safe direction farther from food must be allowed to win over a pocket tail-path.
+        let tail_dir_safe = tail_dir.filter(|&(dx, dy)| {
+            let nb = head.shifted(dx, dy);
+            self.time_flood(nb, n.saturating_sub(1), bg) >= n
+        });
+
+        let mut best = tail_dir_safe;
+        let mut best_dist = best
             .map(|(dx, dy)| fdist[head.shifted(dx, dy).idx()])
             .unwrap_or(u16::MAX);
 
@@ -106,11 +114,14 @@ impl Game {
             if !nb.in_bounds() { continue; }
             if bg[nb.idx()] != u16::MAX { continue; }
             if self.time_flood(nb, n.saturating_sub(1), bg) < n { continue; }
+            // Reject moves that seal the tail off (e.g. filling the last cell of a row).
+            if self.bfs_to(nb, tail, bg).is_none() { continue; }
             let d = fdist[nb.idx()];
             if d < best_dist { best_dist = d; best = Some((dx, dy)); }
         }
 
-        best.unwrap_or_else(|| self.max_space_dir(bg))
+        // Fall back to tail_dir even if flood is low, then max_space as last resort.
+        best.or(tail_dir).unwrap_or_else(|| self.max_space_dir(bg))
     }
 
     // body_grid[cell] = body index, BLOCK_SENTINEL if block, u16::MAX if empty
