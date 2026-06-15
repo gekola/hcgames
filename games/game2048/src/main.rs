@@ -17,7 +17,7 @@ const OVER_PAUSE: f32 = 2.5;
 // --- Colors ---
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
-    Color::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., 1.)
+    rgba(r, g, b, 255)
 }
 fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., a as f32 / 255.)
@@ -132,11 +132,7 @@ fn slide_left_anim(board: [[u32; N]; N]) -> (Vec<AnimTile>, [[u32; N]; N], u32) 
 
 // --- AI heuristic ---
 
-fn rot90(b: [[u32; N]; N]) -> [[u32; N]; N] {
-    let mut r = [[0u32; N]; N];
-    for i in 0..N { for j in 0..N { r[j][N - 1 - i] = b[i][j]; } }
-    r
-}
+fn rot90(b: [[u32; N]; N]) -> [[u32; N]; N] { flip_h(transpose(b)) }
 
 // Snake weight matrix: top-left has highest weight, decreasing along a snake path.
 // Score = dot(board, weights); try all 8 orientations, keep the best.
@@ -152,12 +148,13 @@ fn heuristic(b: &[[u32; N]; N]) -> f64 {
     let dot = |b: &[[u32; N]; N]| -> f64 {
         (0..N).flat_map(|r| (0..N).map(move |c| b[r][c] as f64 * SNAKE[r][c])).sum::<f64>()
     };
-    let b0 = *b;
-    let b1 = rot90(b0); let b2 = rot90(b1); let b3 = rot90(b2);
-    let bf = flip_h(b0);
-    let bf1 = rot90(bf); let bf2 = rot90(bf1); let bf3 = rot90(bf2);
-    [b0, b1, b2, b3, bf, bf1, bf2, bf3]
-        .iter().map(dot).fold(f64::NEG_INFINITY, f64::max)
+    let mut board = *b;
+    let mut best = f64::NEG_INFINITY;
+    for _ in 0..4 {
+        best = best.max(dot(&board)).max(dot(&flip_h(board)));
+        board = rot90(board);
+    }
+    best
 }
 
 // Fast allocation-free slide for AI search
@@ -200,13 +197,14 @@ fn expectimax(board: [[u32; N]; N], depth: u8, player: bool) -> f64 {
         }
         if any { best } else { heuristic(&board) }
     } else {
-        let empties: Vec<(usize, usize)> = (0..N)
-            .flat_map(|r| (0..N).map(move |c| (r, c)))
-            .filter(|&(r, c)| board[r][c] == 0)
-            .collect();
-        if empties.is_empty() { return heuristic(&board); }
-        let n = empties.len() as f64;
-        empties.iter().map(|&(r, c)| {
+        let mut empties = [(0usize, 0usize); N * N];
+        let mut count = 0usize;
+        for r in 0..N { for c in 0..N {
+            if board[r][c] == 0 { empties[count] = (r, c); count += 1; }
+        }}
+        if count == 0 { return heuristic(&board); }
+        let n = count as f64;
+        empties[..count].iter().map(|&(r, c)| {
             let mut b2 = board; b2[r][c] = 2;
             expectimax(b2, depth - 1, true) / n
         }).sum()
@@ -215,20 +213,22 @@ fn expectimax(board: [[u32; N]; N], depth: u8, player: bool) -> f64 {
 
 // --- Game ---
 
+#[derive(PartialEq)]
+enum Phase { Playing, WinPause, GameOver }
+
 struct Game {
     board: [[u32; N]; N],
     next_board: [[u32; N]; N],
     score: u32,
     best: u32,
     pending: u32,
-    over: bool,
     won: bool,
-    show_win: bool,
+    phase: Phase,
+    overlay_timer: f32,
     anim_tiles: Vec<AnimTile>,
     anim_t: f32,
     pops: Vec<Pop>,
     ai_wait: f32,
-    overlay_timer: f32,
     last_dir: Option<u8>,
 }
 
@@ -237,10 +237,10 @@ impl Game {
         let mut g = Self {
             board: [[0; N]; N], next_board: [[0; N]; N],
             score: 0, best, pending: 0,
-            over: false, won: false, show_win: false,
+            won: false, phase: Phase::Playing, overlay_timer: 0.0,
             anim_tiles: Vec::new(), anim_t: 1.0,
             pops: Vec::new(),
-            ai_wait: 0.6, overlay_timer: 0.0,
+            ai_wait: 0.6,
             last_dir: None,
         };
         g.spawn(); g.spawn();
@@ -321,11 +321,11 @@ impl Game {
         self.spawn();
         if !self.won && self.board.iter().any(|row| row.iter().any(|&v| v >= 2048)) {
             self.won = true;
-            self.show_win = true;
+            self.phase = Phase::WinPause;
             self.overlay_timer = WIN_PAUSE;
         }
         if !self.can_move() {
-            self.over = true;
+            self.phase = Phase::GameOver;
             self.overlay_timer = OVER_PAUSE;
         }
     }
@@ -335,12 +335,12 @@ impl Game {
         for p in &mut self.pops { p.t += dt / POP_DUR; }
         self.pops.retain(|p| p.t < 1.0);
 
-        if self.show_win {
+        if self.phase == Phase::WinPause {
             self.overlay_timer -= dt;
-            if self.overlay_timer <= 0.0 { self.show_win = false; self.ai_wait = 0.3; }
+            if self.overlay_timer <= 0.0 { self.phase = Phase::Playing; self.ai_wait = 0.3; }
             return false;
         }
-        if self.over {
+        if self.phase == Phase::GameOver {
             self.overlay_timer -= dt;
             if self.overlay_timer <= 0.0 { return true; }
             return false;
@@ -353,7 +353,7 @@ impl Game {
         } else if let Some(dir) = self.choose_dir() {
             self.start_move(dir);
         } else {
-            self.over = true;
+            self.phase = Phase::GameOver;
             self.overlay_timer = OVER_PAUSE;
         }
         false
@@ -428,6 +428,7 @@ fn window_conf() -> Conf {
 async fn main() {
     rand::srand(macroquad::miniquad::date::now() as u64);
     let mut game = Game::new(0);
+    let title_w = measure_text("2048", None, 72, 1.0).width;
 
     loop {
         let dt = get_frame_time();
@@ -440,11 +441,10 @@ async fn main() {
         clear_background(rgb(250, 248, 239));
 
         // Title + direction triangle
-        let td = measure_text("2048", None, 72, 1.0);
         draw_text("2048", 15.0, 78.0, 72.0, rgb(119, 110, 101));
         if let Some(dir) = game.last_dir {
             // Vertically centred with the digit glyphs (baseline 78, cap-height ~49px)
-            draw_equilateral(15.0 + td.width + 28.0, 54.0, 20.0, dir, rgb(143, 122, 102));
+            draw_equilateral(15.0 + title_w + 28.0, 54.0, 20.0, dir, rgb(143, 122, 102));
         }
 
         // Score boxes
@@ -503,7 +503,7 @@ async fn main() {
         }
 
         // Win overlay (auto-dismisses)
-        if game.show_win {
+        if game.phase == Phase::WinPause {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(255, 243, 108, 185));
             let txt = "You win!";
             let d = measure_text(txt, None, 64, 1.0);
@@ -516,7 +516,7 @@ async fn main() {
         }
 
         // Game over overlay (auto-restarts)
-        if game.over && !game.show_win {
+        if game.phase == Phase::GameOver {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(199, 187, 177, 190));
             let txt = "Game over!";
             let d = measure_text(txt, None, 60, 1.0);
