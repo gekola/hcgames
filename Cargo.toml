@@ -1,5 +1,5 @@
 [workspace]
-members = ["games/snake", "games/arrow-blocks"]
+members = ["games/snake", "games/arrow-blocks", "games/game2048"]
 resolver = "2"
 
 [profile.release]
