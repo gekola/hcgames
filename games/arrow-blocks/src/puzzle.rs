@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use macroquad::rand;
 
@@ -472,68 +472,68 @@ pub fn generate(level: usize, field_w: i32, field_h: i32) -> Vec<((i32, i32), Di
     assign_dirs(positions, field_w, field_h)
 }
 
-fn rand_dirs() -> [Dir; 4] {
-    let mut d = [Dir::Up, Dir::Down, Dir::Left, Dir::Right];
-    shuffle(&mut d);
-    d
-}
-
 fn assign_dirs(
     positions: HashSet<(i32, i32)>,
     field_w: i32,
     field_h: i32,
 ) -> Vec<((i32, i32), Dir)> {
+    let all_dirs = [Dir::Up, Dir::Down, Dir::Left, Dir::Right];
     let mut remaining = positions;
     let mut result: Vec<((i32, i32), Dir)> = Vec::new();
+    let mut committed: HashMap<(i32, i32), Dir> = HashMap::new();
 
     while !remaining.is_empty() {
-        // Peel: collect every block that has at least one clear exit right now.
-        let mut layer: Vec<((i32, i32), Dir)> = Vec::new();
-        for &pos in &remaining {
-            for &dir in &rand_dirs() {
-                if path_clear(pos, dir, &remaining, field_w, field_h) {
-                    layer.push((pos, dir));
-                    break;
-                }
-            }
-        }
+        let mut layer: Vec<(i32, i32)> = remaining
+            .iter()
+            .copied()
+            .filter(|&pos| all_dirs.iter().any(|&d| path_clear(pos, d, &remaining, field_w, field_h)))
+            .collect();
+
         if layer.is_empty() {
             for &pos in &remaining {
-                layer.push((pos, best_outward_dir(pos, field_w, field_h)));
+                result.push((pos, best_outward_dir(pos, field_w, field_h)));
             }
+            break;
         }
 
-        // Scramble: with 50% chance replace the valid direction with a random one.
-        // Reject only if it would create an immediate 2-cycle with an already-committed
-        // neighbor (hard deadlock). Longer cycles are rare and resolved at runtime via
-        // the blocking_dist mechanism.
-        for &(pos, valid_dir) in &layer {
-            let final_dir = if rand::gen_range(0u32, 2) == 0 {
-                valid_dir
-            } else {
-                let mut chosen = valid_dir;
-                'pick: for &rd in &rand_dirs() {
-                    if rd == valid_dir { continue; }
-                    let (dc, dr) = rd.delta();
-                    let nbr = (pos.0 + dc, pos.1 + dr);
-                    for &(p, d) in &result {
-                        if p == nbr {
-                            let (ndc, ndr) = d.delta();
-                            if (p.0 + ndc, p.1 + ndr) == pos { continue 'pick; }
-                            break;
-                        }
-                    }
-                    chosen = rd;
-                    break;
-                }
-                chosen
-            };
-            result.push((pos, final_dir));
+        shuffle(&mut layer);
+
+        for pos in layer {
+            let valid: Vec<Dir> = all_dirs
+                .iter()
+                .copied()
+                .filter(|&d| path_clear(pos, d, &remaining, field_w, field_h))
+                .collect();
+            let dir = anti_aligned_pick(pos, &valid, &committed);
+            result.push((pos, dir));
+            committed.insert(pos, dir);
             remaining.remove(&pos);
         }
     }
 
     result
+}
+
+// Among valid directions, pick randomly from those least used by immediate neighbors.
+// Adjacent blocks repel each other's direction, breaking geometric alignment without
+// sacrificing solvability (only valid directions are ever assigned).
+fn anti_aligned_pick(
+    pos: (i32, i32),
+    valid: &[Dir],
+    committed: &HashMap<(i32, i32), Dir>,
+) -> Dir {
+    if valid.len() == 1 { return valid[0]; }
+
+    let nbr_count = |d: Dir| -> u32 {
+        [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+            .iter()
+            .filter(|&&(dc, dr)| committed.get(&(pos.0 + dc, pos.1 + dr)) == Some(&d))
+            .count() as u32
+    };
+
+    let min = valid.iter().copied().map(nbr_count).min().unwrap();
+    let candidates: Vec<Dir> = valid.iter().copied().filter(|&d| nbr_count(d) == min).collect();
+    candidates[rand::gen_range(0, candidates.len() as u32) as usize]
 }
 
 fn path_clear(
@@ -546,11 +546,8 @@ fn path_clear(
     let (dc, dr) = dir.delta();
     let (mut c, mut r) = (pos.0 + dc, pos.1 + dr);
     while c >= 0 && r >= 0 && c < field_w && r < field_h {
-        if remaining.contains(&(c, r)) {
-            return false;
-        }
-        c += dc;
-        r += dr;
+        if remaining.contains(&(c, r)) { return false; }
+        c += dc; r += dr;
     }
     true
 }
