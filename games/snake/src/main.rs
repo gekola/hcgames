@@ -12,7 +12,7 @@ pub const GRID: usize = (COLS * ROWS) as usize;
 pub const BLOCK_SENTINEL: u16 = u16::MAX - 1;
 pub const DIRS: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pt {
     pub x: i32,
     pub y: i32,

@@ -1,42 +1,49 @@
 use macroquad::prelude::*;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use crate::{Pt, COLS, ROWS, GRID, DIRS, BLOCK_SENTINEL};
 use crate::blocks::generate_blocks;
 
 pub struct Game {
     pub body: VecDeque<Pt>,
+    body_set: HashSet<Pt>,
     pub dir: (i32, i32),
     pub food: Pt,
     pub score: u32,
     pub generation: u32,
     pub blocks: [bool; GRID],
+    block_bg: [u16; GRID],
     pub ticks_hungry: u32,
 }
 
 impl Game {
     pub fn new(generation: u32) -> Self {
         let blocks = generate_blocks();
+        let mut block_bg = [u16::MAX; GRID];
+        for i in 0..GRID { if blocks[i] { block_bg[i] = BLOCK_SENTINEL; } }
         let head = Pt { x: COLS / 2, y: ROWS / 2 };
         let body = VecDeque::from([head]);
-        let food = spawn_food(&body, &blocks);
-        Self { body, dir: (1, 0), food, score: 0, generation, blocks, ticks_hungry: 0 }
+        let body_set: HashSet<Pt> = [head].into_iter().collect();
+        let food = spawn_food(&body_set, &blocks);
+        Self { body, body_set, dir: (1, 0), food, score: 0, generation, blocks, block_bg, ticks_hungry: 0 }
     }
 
     pub fn tick(&mut self) -> bool {
         let dir = self.choose_dir();
         self.dir = dir;
         let next = self.body[0].shifted(dir.0, dir.1);
-        if !next.in_bounds() || self.body.contains(&next) || self.blocks[next.idx()] {
+        if !next.in_bounds() || self.body_set.contains(&next) || self.blocks[next.idx()] {
             return false;
         }
         self.body.push_front(next);
+        self.body_set.insert(next);
         if next == self.food {
             self.score += 1;
             self.ticks_hungry = 0;
-            self.food = spawn_food(&self.body, &self.blocks);
+            self.food = spawn_food(&self.body_set, &self.blocks);
         } else {
             self.ticks_hungry += 1;
-            self.body.pop_back();
+            let removed = self.body.pop_back().unwrap();
+            self.body_set.remove(&removed);
         }
         true
     }
@@ -126,10 +133,7 @@ impl Game {
 
     // body_grid[cell] = body index, BLOCK_SENTINEL if block, u16::MAX if empty
     fn body_grid(&self) -> [u16; GRID] {
-        let mut bg = [u16::MAX; GRID];
-        for i in 0..GRID {
-            if self.blocks[i] { bg[i] = BLOCK_SENTINEL; }
-        }
+        let mut bg = self.block_bg;
         for (j, &seg) in self.body.iter().enumerate() {
             bg[seg.idx()] = j as u16;
         }
@@ -223,10 +227,10 @@ impl Game {
     }
 }
 
-fn spawn_food(body: &VecDeque<Pt>, blocks: &[bool; GRID]) -> Pt {
+fn spawn_food(body_set: &HashSet<Pt>, blocks: &[bool; GRID]) -> Pt {
     loop {
         let p = Pt { x: rand::gen_range(0, COLS), y: rand::gen_range(0, ROWS) };
-        if !body.contains(&p) && !blocks[p.idx()] {
+        if !body_set.contains(&p) && !blocks[p.idx()] {
             return p;
         }
     }

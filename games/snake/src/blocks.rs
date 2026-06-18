@@ -87,22 +87,24 @@ fn no_articulation_points(blocks: &[bool; GRID]) -> bool {
     let mut timer    = 0u32;
 
     disc[start] = timer; low[start] = timer; timer += 1;
-    let mut stk: Vec<(usize, usize)> = vec![(start, 0)]; // (node, next_dir_idx)
+    let mut stk = [(0usize, 0usize); GRID]; // (node, next_dir_idx)
+    let mut stk_top = 1usize;
+    stk[0] = (start, 0);
 
-    while !stk.is_empty() {
-        let (u, di) = *stk.last().unwrap();
+    while stk_top > 0 {
+        let (u, di) = stk[stk_top - 1];
 
         if di >= 4 {
-            stk.pop();
-            if let Some(&(p, _)) = stk.last() {
+            stk_top -= 1;
+            if stk_top > 0 {
+                let p = stk[stk_top - 1].0;
                 if low[u] < low[p] { low[p] = low[u]; }
-                // non-root AP: subtree under u can't reach above p without going through p
                 if par[p] != GRID && low[u] >= disc[p] { return false; }
             }
             continue;
         }
 
-        stk.last_mut().unwrap().1 += 1;
+        stk[stk_top - 1].1 += 1;
 
         let pu = Pt { x: (u % COLS as usize) as i32, y: (u / COLS as usize) as i32 };
         let (dx, dy) = DIRS[di];
@@ -115,7 +117,8 @@ fn no_articulation_points(blocks: &[bool; GRID]) -> bool {
             par[v] = u;
             children[u] += 1;
             disc[v] = timer; low[v] = timer; timer += 1;
-            stk.push((v, 0));
+            stk[stk_top] = (v, 0);
+            stk_top += 1;
         } else if v != par[u] {
             if disc[v] < low[u] { low[u] = disc[v]; }
         }
