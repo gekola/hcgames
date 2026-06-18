@@ -474,10 +474,7 @@ pub fn generate(level: usize, field_w: i32, field_h: i32) -> Vec<((i32, i32), Di
 
 fn rand_dirs() -> [Dir; 4] {
     let mut d = [Dir::Up, Dir::Down, Dir::Left, Dir::Right];
-    for i in (1..4usize).rev() {
-        let j = rand::gen_range(0, (i + 1) as u32) as usize;
-        d.swap(i, j);
-    }
+    shuffle(&mut d);
     d
 }
 
@@ -570,7 +567,7 @@ fn best_outward_dir(pos: (i32, i32), field_w: i32, field_h: i32) -> Dir {
     else                    { Dir::Right }
 }
 
-pub fn shuffle<T>(v: &mut Vec<T>) {
+pub fn shuffle<T>(v: &mut [T]) {
     let n = v.len();
     for i in (1..n).rev() {
         let j = rand::gen_range(0, (i + 1) as u32) as usize;

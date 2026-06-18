@@ -160,20 +160,23 @@ impl Game {
     }
 
     fn activate(&mut self, idx: usize) {
-        if self.is_path_clear(idx) {
-            let anim_dist    = self.cells_to_edge(idx) as f32;
-            let blocking     = self.cells_to_exit_figure(idx) as f32;
-            let b = &mut self.blocks[idx];
-            b.state = BlockState::Exiting;
-            b.anim_t = 0.0;
-            b.anim_max_dist = anim_dist;
-            b.blocking_dist = blocking;
-        } else {
-            let dist = self.cells_to_blocker(idx).max(1) as f32;
-            let b = &mut self.blocks[idx];
-            b.state = BlockState::ReturnFwd;
-            b.anim_t = 0.0;
-            b.anim_max_dist = dist;
+        match self.first_blocker_dist(idx) {
+            None => {
+                let anim_dist = self.cells_to_edge(idx) as f32;
+                let blocking  = self.cells_to_exit_figure(idx) as f32;
+                let b = &mut self.blocks[idx];
+                b.state = BlockState::Exiting;
+                b.anim_t = 0.0;
+                b.anim_max_dist = anim_dist;
+                b.blocking_dist = blocking;
+            }
+            Some(dist) => {
+                let dist = dist.max(1) as f32;
+                let b = &mut self.blocks[idx];
+                b.state = BlockState::ReturnFwd;
+                b.anim_t = 0.0;
+                b.anim_max_dist = dist;
+            }
         }
     }
 
@@ -211,27 +214,20 @@ impl Game {
         }
     }
 
-    pub fn is_path_clear(&self, idx: usize) -> bool {
-        let b = &self.blocks[idx];
-        let (dc, dr) = b.dir.delta();
-        let (mut c, mut r) = (b.col + dc, b.row + dr);
-        while c >= 0 && r >= 0 && c < FIELD_W && r < FIELD_H {
-            if self.occupied(c, r, idx) { return false; }
-            c += dc; r += dr;
-        }
-        true
-    }
-
-    fn cells_to_blocker(&self, idx: usize) -> i32 {
+    fn first_blocker_dist(&self, idx: usize) -> Option<i32> {
         let b = &self.blocks[idx];
         let (dc, dr) = b.dir.delta();
         let (mut c, mut r) = (b.col + dc, b.row + dr);
         let mut dist = 1;
         while c >= 0 && r >= 0 && c < FIELD_W && r < FIELD_H {
-            if self.occupied(c, r, idx) { return dist; }
+            if self.occupied(c, r, idx) { return Some(dist); }
             c += dc; r += dr; dist += 1;
         }
-        dist
+        None
+    }
+
+    pub fn is_path_clear(&self, idx: usize) -> bool {
+        self.first_blocker_dist(idx).is_none()
     }
 
     fn occupied(&self, col: i32, row: i32, exclude: usize) -> bool {
