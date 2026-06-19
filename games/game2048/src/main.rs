@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
+use game2048::{N, prep, unprep, can_move, choose_dir};
 
-const N: usize = 4;
 const WIN_W: f32 = 500.0;
 const WIN_H: f32 = 610.0;
 const GRID_X: f32 = 20.0;
@@ -8,17 +8,15 @@ const GRID_Y: f32 = 140.0;
 const GRID_W: f32 = WIN_W - GRID_X * 2.0;
 const GAP: f32 = 10.0;
 const CELL: f32 = (GRID_W - GAP * 5.0) / 4.0;
-const ANIM_SPEED: f32 = 4.0;  // reciprocal of slide duration in seconds
-const AI_DELAY: f32 = 0.15;   // pause between moves
-const POP_DUR: f32 = 0.28;    // spawn/merge pop duration
+const ANIM_SPEED: f32 = 4.0;
+const AI_DELAY: f32 = 0.15;
+const POP_DUR: f32 = 0.28;
 const WIN_PAUSE: f32 = 2.5;
 const OVER_PAUSE: f32 = 2.5;
 
 // --- Colors ---
 
-fn rgb(r: u8, g: u8, b: u8) -> Color {
-    rgba(r, g, b, 255)
-}
+fn rgb(r: u8, g: u8, b: u8) -> Color { rgba(r, g, b, 255) }
 fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::new(r as f32 / 255., g as f32 / 255., b as f32 / 255., a as f32 / 255.)
 }
@@ -45,28 +43,9 @@ fn tile_fg(val: u32) -> Color {
     if val <= 4 { rgb(119, 110, 101) } else { rgb(249, 246, 242) }
 }
 
-// --- Board transforms ---
+// --- Animation helpers ---
 
-fn flip_h(mut b: [[u32; N]; N]) -> [[u32; N]; N] {
-    for row in &mut b { row.reverse(); }
-    b
-}
-
-fn transpose(b: [[u32; N]; N]) -> [[u32; N]; N] {
-    let mut t = [[0u32; N]; N];
-    for i in 0..N { for j in 0..N { t[j][i] = b[i][j]; } }
-    t
-}
-
-fn prep(board: [[u32; N]; N], dir: u8) -> [[u32; N]; N] {
-    match dir { 0 => board, 1 => flip_h(board), 2 => transpose(board), _ => flip_h(transpose(board)) }
-}
-
-fn unprep(board: [[u32; N]; N], dir: u8) -> [[u32; N]; N] {
-    match dir { 0 => board, 1 => flip_h(board), 2 => transpose(board), _ => transpose(flip_h(board)) }
-}
-
-// Convert (row, col) from prep-space back to original board coordinates
+// Convert (row, col) from prep-space back to original board coordinates.
 fn inv_coord(r: f32, c: f32, dir: u8) -> (f32, f32) {
     let n = N as f32 - 1.0;
     match dir { 0 => (r, c), 1 => (r, n - c), 2 => (c, r), _ => (n - c, r) }
@@ -74,23 +53,19 @@ fn inv_coord(r: f32, c: f32, dir: u8) -> (f32, f32) {
 
 fn smoothstep(t: f32) -> f32 { let t = t.clamp(0., 1.); t * t * (3. - 2. * t) }
 
-// --- Animation types ---
-
 struct AnimTile {
-    fr: f32, fc: f32, // from (row, col)
-    tr: f32, tc: f32, // to (row, col)
+    fr: f32, fc: f32,
+    tr: f32, tc: f32,
     val: u32,
-    merge: bool, // this tile is absorbed at destination
+    merge: bool,
 }
 
 struct Pop {
     row: usize,
     col: usize,
-    t: f32,    // 0→1 over POP_DUR
-    spawn: bool, // spawn = scale-in; false = merge bounce
+    t: f32,
+    spawn: bool,
 }
-
-// --- Slide-left with animation data ---
 
 fn slide_row_anim(row: [u32; N], grid_row: usize) -> (Vec<AnimTile>, [u32; N], u32) {
     let src: Vec<(usize, u32)> = (0..N).filter(|&c| row[c] != 0).map(|c| (c, row[c])).collect();
@@ -128,87 +103,6 @@ fn slide_left_anim(board: [[u32; N]; N]) -> (Vec<AnimTile>, [[u32; N]; N], u32) 
         pts += rp;
     }
     (tiles, new_board, pts)
-}
-
-// --- AI heuristic ---
-
-fn rot90(b: [[u32; N]; N]) -> [[u32; N]; N] { flip_h(transpose(b)) }
-
-// Snake weight matrix: top-left has highest weight, decreasing along a snake path.
-// Score = dot(board, weights); try all 8 orientations, keep the best.
-// This directly encodes "big tile in corner, snake pattern down" with a single term.
-const SNAKE: [[f64; N]; N] = [
-    [32768.0, 16384.0,  8192.0, 4096.0],
-    [  256.0,   512.0,  1024.0, 2048.0],
-    [  128.0,    64.0,    32.0,   16.0],
-    [    1.0,     2.0,     4.0,    8.0],
-];
-
-fn heuristic(b: &[[u32; N]; N]) -> f64 {
-    let dot = |b: &[[u32; N]; N]| -> f64 {
-        (0..N).flat_map(|r| (0..N).map(move |c| b[r][c] as f64 * SNAKE[r][c])).sum::<f64>()
-    };
-    let mut board = *b;
-    let mut best = f64::NEG_INFINITY;
-    for _ in 0..4 {
-        best = best.max(dot(&board)).max(dot(&flip_h(board)));
-        board = rot90(board);
-    }
-    best
-}
-
-// Fast allocation-free slide for AI search
-fn merge_row_s(row: [u32; N]) -> [u32; N] {
-    let mut buf = [0u32; N];
-    let mut k = 0usize;
-    for &v in &row { if v != 0 { buf[k] = v; k += 1; } }
-    let mut i = 0;
-    while i + 1 < k {
-        if buf[i] == buf[i + 1] {
-            buf[i] *= 2;
-            for j in i + 1..k - 1 { buf[j] = buf[j + 1]; }
-            buf[k - 1] = 0;
-            k -= 1;
-        }
-        i += 1;
-    }
-    buf
-}
-
-fn slide_s(board: [[u32; N]; N], dir: u8) -> Option<[[u32; N]; N]> {
-    let p = prep(board, dir);
-    let mut sp = p;
-    for r in 0..N { sp[r] = merge_row_s(p[r]); }
-    if sp == p { None } else { Some(unprep(sp, dir)) }
-}
-
-// Depth-5 expectimax; chance nodes place only 2 (90% case) to limit branching.
-fn expectimax(board: [[u32; N]; N], depth: u8, player: bool) -> f64 {
-    if depth == 0 { return heuristic(&board); }
-    if player {
-        let mut best = f64::NEG_INFINITY;
-        let mut any = false;
-        for dir in 0..4u8 {
-            if let Some(nb) = slide_s(board, dir) {
-                any = true;
-                let s = expectimax(nb, depth - 1, false);
-                if s > best { best = s; }
-            }
-        }
-        if any { best } else { heuristic(&board) }
-    } else {
-        let mut empties = [(0usize, 0usize); N * N];
-        let mut count = 0usize;
-        for r in 0..N { for c in 0..N {
-            if board[r][c] == 0 { empties[count] = (r, c); count += 1; }
-        }}
-        if count == 0 { return heuristic(&board); }
-        let n = count as f64;
-        empties[..count].iter().map(|&(r, c)| {
-            let mut b2 = board; b2[r][c] = 2;
-            expectimax(b2, depth - 1, true) / n
-        }).sum()
-    }
 }
 
 // --- Game ---
@@ -258,35 +152,6 @@ impl Game {
         self.pops.push(Pop { row: r, col: c, t: 0.0, spawn: true });
     }
 
-    fn can_move(&self) -> bool {
-        for r in 0..N { for c in 0..N {
-            if self.board[r][c] == 0 { return true; }
-            if r + 1 < N && self.board[r + 1][c] == self.board[r][c] { return true; }
-            if c + 1 < N && self.board[r][c + 1] == self.board[r][c] { return true; }
-        }}
-        false
-    }
-
-    fn choose_dir(&self) -> Option<u8> {
-        let empty = self.board.iter().flat_map(|r| r.iter()).filter(|&&v| v == 0).count();
-        // depth=4 for most of the game so we always see 2 player moves ahead;
-        // depth=5 only in tight endgame where branching is naturally low.
-        let depth: u8 = match empty {
-            0..=3 => 5,
-            4..=9 => 4,
-            _     => 3,
-        };
-        let mut best = f64::NEG_INFINITY;
-        let mut result = None;
-        for dir in 0..4u8 {
-            if let Some(nb) = slide_s(self.board, dir) {
-                let s = expectimax(nb, depth, false);
-                if s > best { best = s; result = Some(dir); }
-            }
-        }
-        result
-    }
-
     fn start_move(&mut self, dir: u8) -> bool {
         let p = prep(self.board, dir);
         let (mut tiles, new_p, pts) = slide_left_anim(p);
@@ -305,7 +170,6 @@ impl Game {
     }
 
     fn commit(&mut self) {
-        // Track merge destinations for bounce pop
         let mut merge_dests = [[false; N]; N];
         for t in &self.anim_tiles {
             if t.merge { merge_dests[t.tr as usize][t.tc as usize] = true; }
@@ -324,13 +188,12 @@ impl Game {
             self.phase = Phase::WinPause;
             self.overlay_timer = WIN_PAUSE;
         }
-        if !self.can_move() {
+        if !can_move(&self.board) {
             self.phase = Phase::GameOver;
             self.overlay_timer = OVER_PAUSE;
         }
     }
 
-    // Returns true if the caller should replace self with Game::new(best)
     fn update(&mut self, dt: f32) -> bool {
         for p in &mut self.pops { p.t += dt / POP_DUR; }
         self.pops.retain(|p| p.t < 1.0);
@@ -350,7 +213,7 @@ impl Game {
             if self.anim_t >= 1.0 { self.commit(); self.ai_wait = AI_DELAY; }
         } else if self.ai_wait > 0.0 {
             self.ai_wait -= dt;
-        } else if let Some(dir) = self.choose_dir() {
+        } else if let Some(dir) = choose_dir(&self.board) {
             self.start_move(dir);
         } else {
             self.phase = Phase::GameOver;
@@ -404,12 +267,12 @@ fn score_box(x: f32, y: f32, w: f32, h: f32, label: &str, val: u32) {
 }
 
 fn draw_equilateral(cx: f32, cy: f32, r: f32, dir: u8, color: Color) {
-    let s = r * 0.866; // sqrt(3)/2 — half the base width
+    let s = r * 0.866;
     let (v1, v2, v3) = match dir {
-        0 => (vec2(cx - r, cy),  vec2(cx + r*0.5, cy - s), vec2(cx + r*0.5, cy + s)), // left
-        1 => (vec2(cx + r, cy),  vec2(cx - r*0.5, cy - s), vec2(cx - r*0.5, cy + s)), // right
-        2 => (vec2(cx, cy - r),  vec2(cx - s, cy + r*0.5), vec2(cx + s, cy + r*0.5)), // up
-        _ => (vec2(cx, cy + r),  vec2(cx - s, cy - r*0.5), vec2(cx + s, cy - r*0.5)), // down
+        0 => (vec2(cx - r, cy),  vec2(cx + r*0.5, cy - s), vec2(cx + r*0.5, cy + s)),
+        1 => (vec2(cx + r, cy),  vec2(cx - r*0.5, cy - s), vec2(cx - r*0.5, cy + s)),
+        2 => (vec2(cx, cy - r),  vec2(cx - s, cy + r*0.5), vec2(cx + s, cy + r*0.5)),
+        _ => (vec2(cx, cy + r),  vec2(cx - s, cy - r*0.5), vec2(cx + s, cy - r*0.5)),
     };
     draw_triangle(v1, v2, v3, color);
 }
@@ -437,41 +300,32 @@ async fn main() {
             game = Game::new(best);
         }
 
-        // --- Draw ---
         clear_background(rgb(250, 248, 239));
 
-        // Title + direction triangle
         draw_text("2048", 15.0, 78.0, 72.0, rgb(119, 110, 101));
         if let Some(dir) = game.last_dir {
-            // Vertically centred with the digit glyphs (baseline 78, cap-height ~49px)
             draw_equilateral(15.0 + title_w + 28.0, 54.0, 20.0, dir, rgb(143, 122, 102));
         }
 
-        // Score boxes
         score_box(300.0, 8.0, 90.0, 60.0, "SCORE", game.score);
         score_box(400.0, 8.0, 90.0, 60.0, "BEST", game.best);
 
-        // Grid background
         rrect(GRID_X, GRID_Y, GRID_W, GRID_W, 6.0, rgb(187, 173, 160));
 
-        // Tiles
         let animating = game.anim_t < 1.0;
         if animating {
-            // Mark source positions so we don't double-draw
             let mut from_grid = [[false; N]; N];
             for t in &game.anim_tiles {
                 from_grid[t.fr.round() as usize][t.fc.round() as usize] = true;
             }
-            // Static tiles (didn't move)
             for r in 0..N { for c in 0..N {
                 let (tx, ty) = grid_xy(r as f32, c as f32);
                 if from_grid[r][c] {
-                    tile_cell(tx, ty, 0, 1.0, 1.0); // draw empty slot
+                    tile_cell(tx, ty, 0, 1.0, 1.0);
                 } else {
                     tile_cell(tx, ty, game.board[r][c], 1.0, 1.0);
                 }
             }}
-            // Moving tiles at interpolated positions
             let t = smoothstep(game.anim_t);
             for tile in &game.anim_tiles {
                 let r = tile.fr + (tile.tr - tile.fr) * t;
@@ -481,7 +335,6 @@ async fn main() {
                 tile_cell(tx, ty, tile.val, 1.0, alpha);
             }
         } else {
-            // Final board with pop animations
             for r in 0..N { for c in 0..N {
                 let (tx, ty) = grid_xy(r as f32, c as f32);
                 let val = game.board[r][c];
@@ -490,10 +343,8 @@ async fn main() {
                     .map(|p| {
                         let t = p.t.clamp(0., 1.);
                         if p.spawn {
-                            // Scale in from 0
                             (t * std::f32::consts::PI / 2.0).sin()
                         } else {
-                            // Merge bounce: 1 → 1.2 → 1
                             1.0 + 0.2 * (t * std::f32::consts::PI).sin()
                         }
                     })
@@ -502,7 +353,6 @@ async fn main() {
             }}
         }
 
-        // Win overlay (auto-dismisses)
         if game.phase == Phase::WinPause {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(255, 243, 108, 185));
             let txt = "You win!";
@@ -515,7 +365,6 @@ async fn main() {
             draw_text(&sub, cx - sd.width / 2.0, cy + 15.0, 20.0, rgb(119, 110, 101));
         }
 
-        // Game over overlay (auto-restarts)
         if game.phase == Phase::GameOver {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(199, 187, 177, 190));
             let txt = "Game over!";
