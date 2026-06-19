@@ -1,0 +1,11 @@
+[package]
+name = "minesweeper"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "minesweeper"
+path = "src/lib.rs"
+
+[dependencies]
+macroquad = "0.4"
