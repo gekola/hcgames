@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # mise description="Generate root index.html listing all games"
 import os
+from string import Template
+
+gtag_id = os.environ.get("GTAG_ID", "")
 
 games = sorted(d for d in os.listdir("dist") if os.path.isdir(f"dist/{d}"))
 rows = "\n".join(
@@ -8,11 +11,25 @@ rows = "\n".join(
     for g in games
 )
 
-page = r"""<!DOCTYPE html>
+if gtag_id:
+    gtag_loader = f'  <script async src="https://www.googletagmanager.com/gtag/js?id={gtag_id}"></script>'
+    gtag_config = f"""<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){{dataLayer.push(arguments);}}
+  gtag('js', new Date());
+
+  gtag('config', '{gtag_id}');
+</script>"""
+else:
+    gtag_loader = ""
+    gtag_config = ""
+
+page = Template("""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>Hotel Chair Games</title>
+$GTAG_LOADER
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -118,7 +135,7 @@ page = r"""<!DOCTYPE html>
     <canvas id="hotel" width="480" height="360"></canvas>
     <section class="games">
       <h2>games</h2>
-      GAME_LINKS
+$GAME_LINKS
     </section>
   </div>
 
@@ -285,9 +302,11 @@ page = r"""<!DOCTYPE html>
 })();
 </script>
 
+$GTAG_CONFIG
+
 </body>
 </html>
-""".replace("  GAME_LINKS", rows)
+""").safe_substitute(GTAG_LOADER=gtag_loader, GAME_LINKS=rows, GTAG_CONFIG=gtag_config)
 
 with open("dist/index.html", "w") as f:
     f.write(page)

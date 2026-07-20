@@ -50,6 +50,8 @@ jobs:
           done
 
       - name: Generate root index
+        env:
+          GTAG_ID: ${{ secrets.GTAG_ID }}
         run: python3 .mise/tasks/generate_index.py
 
       - uses: actions/upload-pages-artifact@v3
