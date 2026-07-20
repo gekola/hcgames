@@ -1,0 +1,11 @@
+[package]
+name = "cards"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "cards"
+path = "src/lib.rs"
+
+[dependencies]
+macroquad = "0.4"
