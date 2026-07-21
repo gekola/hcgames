@@ -45,7 +45,7 @@ jobs:
 
       # resvg rasterizes the homepage hero SVG to a PNG for social-preview meta tags.
       - name: Install resvg
-        run: cargo install resvg --locked
+        run: cargo install resvg --locked --force
 
       - uses: jdx/mise-action@v2
 
