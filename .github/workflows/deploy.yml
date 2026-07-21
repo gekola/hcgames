@@ -17,6 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: github-pages
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +39,7 @@ jobs:
         env:
           MQ_JS: https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js
           RUSTFLAGS: "-C link-arg=--import-undefined"
+          GTAG_ID: ${{ secrets.GTAG_ID }}
         run: |
           set -euo pipefail
           for game in games/*/; do
@@ -45,9 +47,10 @@ jobs:
             cargo build --target wasm32-unknown-unknown --release --bin "$name"
             mkdir -p "dist/$name"
             cp "target/wasm32-unknown-unknown/release/$name.wasm" "dist/$name/"
-            cp "games/$name/index.html" "dist/$name/"
+            python3 .mise/tasks/generate_game_html.py "$name"
             curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
           done
+          cp static/* dist/
 
       - name: Generate root index
         env:

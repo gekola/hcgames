@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- chair back frame -->
+  <rect x="1" y="0" width="14" height="6" fill="#4a1a08"/>
+  <!-- chair back cushion -->
+  <rect x="2" y="1" width="12" height="4" fill="#8a3020"/>
+  <!-- left armrest -->
+  <rect x="0" y="5" width="3" height="5" fill="#5c1e0e"/>
+  <!-- right armrest -->
+  <rect x="13" y="5" width="3" height="5" fill="#5c1e0e"/>
+  <!-- seat -->
+  <rect x="2" y="7" width="12" height="4" fill="#702818"/>
+  <!-- seat front face -->
+  <rect x="2" y="11" width="12" height="1" fill="#501808"/>
+  <!-- left leg -->
+  <rect x="3" y="12" width="2" height="3" fill="#3a1008"/>
+  <!-- right leg -->
+  <rect x="11" y="12" width="2" height="3" fill="#3a1008"/>
+</svg>

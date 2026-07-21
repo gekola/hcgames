@@ -20,7 +20,7 @@ name=$1
 cargo build --target "$WASM_TARGET" --release --bin "$name"
 mkdir -p "dist/$name"
 cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
-cp "games/$name/index.html" "dist/$name/"
+python3 .mise/tasks/generate_game_html.py "$name"
 curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
 """
 
@@ -34,6 +34,7 @@ rm -rf dist
 for game in games/*/; do
     mise run build-wasm "$(basename "$game")"
 done
+cp static/* dist/
 mise run generate_index
 """
 

@@ -29,6 +29,7 @@ page = Template("""<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <title>Hotel Chair Games</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 $GTAG_LOADER
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
