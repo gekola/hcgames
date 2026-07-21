@@ -7,16 +7,23 @@ const SITE_DESCRIPTION: &str =
     "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
 const STYLE: &str = r#"
+:root { color-scheme: dark; }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { overflow-x: hidden; }
 
 body {
   background: #111827;
   color: #e5e7eb;
   font-family: system-ui, sans-serif;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
+  overflow-x: hidden;
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 header {
@@ -25,7 +32,7 @@ header {
 }
 
 header h1 {
-  font-size: 2rem;
+  font-size: clamp(1.5rem, 7vw, 2rem);
   font-weight: 700;
   color: #f9fafb;
 }
@@ -39,16 +46,25 @@ header h1 {
   margin: 1.5rem 0 3rem;
 }
 
-.scene-wrap { flex-shrink: 0; }
+.scene-wrap {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 480px;
+}
 
 #hotel {
   display: block;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  aspect-ratio: 4 / 3;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
 
 .quotes {
   flex: 1;
+  min-width: 0;
   border-left: 2px solid #374151;
   padding-left: 1.5rem;
   padding-top: 0.5rem;
@@ -86,7 +102,9 @@ header h1 {
 }
 
 .game-link {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   background: #1f2937;
@@ -95,9 +113,32 @@ header h1 {
   border: 1px solid #374151;
   transition: background 0.15s;
   margin-bottom: 0.5rem;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.game-link:hover { background: #374151; color: #bfdbfe; }
+.game-link:hover, .game-link:active { background: #374151; color: #bfdbfe; }
+
+@media (max-width: 720px) {
+  header { padding: 2rem 1rem 0.5rem; }
+
+  .main {
+    flex-direction: column;
+    align-items: center;
+    gap: 2rem;
+    margin: 1rem 0 2rem;
+  }
+
+  .scene-wrap { max-width: 420px; margin: 0 auto; }
+
+  .quotes {
+    width: 100%;
+    border-left: none;
+    border-top: 2px solid #374151;
+    padding-left: 0;
+    padding-top: 1.25rem;
+  }
+}
 "#;
 
 const HOTEL_SCENE_SCRIPT: &str = r#"
@@ -275,6 +316,7 @@ fn main() {
         html lang="en" {
             head {
                 meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
                 title { "Hotel Chair Games" }
                 (favicon_links(&base_url, dist))
                 meta name="description" content=(SITE_DESCRIPTION);

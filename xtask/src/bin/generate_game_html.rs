@@ -18,6 +18,7 @@ fn main() {
         html lang="en" {
             head {
                 meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no";
                 (favicon_links(&base_url, dist))
                 title { (title) " — Hotel Chair Games" }
                 meta name="description" content=(description);
