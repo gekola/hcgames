@@ -1,7 +1,7 @@
 //! Generates dist/<name>/index.html for a game.
 use maud::{DOCTYPE, html};
 use std::path::Path;
-use xtask::{base_url, description, favicon_links, gtag_head, social_image, title};
+use xtask::{base_url, description, favicon_links, gtag_head, native_size_style, social_image, title};
 
 fn main() {
     let name = std::env::args().nth(1).expect("usage: generate_game_html <name>");
@@ -31,11 +31,7 @@ fn main() {
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
                 (gtag_head())
-                style {
-                    "* { margin: 0; padding: 0; box-sizing: border-box; }\n"
-                    "body { background: #000; overflow: hidden; }\n"
-                    "canvas { display: block; width: 100vw; height: 100vh; }"
-                }
+                (native_size_style(&name))
             }
             body {
                 canvas id="glcanvas" tabindex="1" {}

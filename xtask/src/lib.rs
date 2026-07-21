@@ -32,6 +32,46 @@ pub fn title(name: &str) -> String {
         .join(" ")
 }
 
+/// Each game's fixed logical canvas resolution (its `window_width`/`window_height` in
+/// `Conf`). Games draw at absolute pixel coordinates rather than scaling to
+/// `screen_width()`/`screen_height()`, so the canvas must stay at exactly this size —
+/// see `native_size_style`.
+pub fn native_size(name: &str) -> (u32, u32) {
+    match name {
+        "game2048" => (500, 610),
+        _ => (900, 720),
+    }
+}
+
+/// CSS + JS that pins the canvas to its native design resolution (so games drawing at
+/// absolute pixel coordinates render correctly) and scales it uniformly to fit the
+/// viewport via `transform: scale`, letterboxed and centered. A CSS transform doesn't
+/// change `clientWidth`/`clientHeight`, so `mq_js_bundle.js`'s resize handling (which
+/// syncs the canvas's backing resolution to its CSS box) never sees a mismatch.
+pub fn native_size_style(name: &str) -> Markup {
+    let (w, h) = native_size(name);
+    html! {
+        style {
+            (PreEscaped(format!(
+                "* {{ margin: 0; padding: 0; box-sizing: border-box; }}\n\
+                 html, body {{ height: 100%; overflow: hidden; background: #000; }}\n\
+                 body {{ display: flex; align-items: center; justify-content: center; }}\n\
+                 canvas {{ display: block; width: {w}px; height: {h}px; transform-origin: center; outline: none; }}"
+            )))
+        }
+        script {
+            (PreEscaped(format!(
+                "function fitCanvas() {{\n\
+                 \x20 const k = Math.min(window.innerWidth / {w}, window.innerHeight / {h});\n\
+                 \x20 document.querySelector('canvas').style.transform = `scale(${{k}})`;\n\
+                 }}\n\
+                 window.addEventListener('resize', fitCanvas);\n\
+                 document.addEventListener('DOMContentLoaded', fitCanvas);"
+            )))
+        }
+    }
+}
+
 pub fn description(name: &str) -> String {
     let title = title(name);
     match name {
