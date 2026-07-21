@@ -12,7 +12,7 @@ cargo run --bin "$1"
 
 # Build one game to WASM: mise run build-wasm snake
 [tasks.build-wasm]
-description = "Compile one game to WASM and stage it in dist/<name>/"
+description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -20,9 +20,44 @@ name=$1
 RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin "$name"
 mkdir -p "dist/$name"
 cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
-python3 .mise/tasks/generate_game_html.py "$name"
+mise run screenshot "$name"
+cargo run --release --package xtask --bin generate_game_html -- "$name"
 curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
 """
+
+# Capture a representative in-game screenshot: mise run screenshot snake
+[tasks.screenshot]
+description = "Capture dist/<name>/preview.png by running the native build headless for a few seconds (needs xvfb-run; runs automatically in CI, skipped locally if unavailable)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+name=$1
+mkdir -p "dist/$name"
+if command -v xvfb-run >/dev/null 2>&1; then
+    HCG_SEED=42 HCG_SCREENSHOT="dist/$name/preview.png" xvfb-run -a cargo run --release --bin "$name"
+else
+    echo "xvfb-run not found — skipping screenshot for $name (runs automatically in CI)" >&2
+fi
+"""
+
+# Rasterize SVG art to PNG: mise run rasterize
+[tasks.rasterize]
+description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG (needs resvg; runs automatically in CI, skipped locally if unavailable)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+if command -v resvg >/dev/null 2>&1; then
+    resvg static/hotel-scene.svg dist/og-image.png --width 1200 --height 900
+    resvg static/favicon.svg dist/favicon.png --width 192 --height 192
+else
+    echo "resvg not found — skipping SVG rasterization (runs automatically in CI)" >&2
+fi
+"""
+
+# Generate the homepage + sitemap.xml: mise run generate-index
+[tasks.generate-index]
+description = "Generate dist/index.html and dist/sitemap.xml"
+run = "cargo run --release --package xtask --bin generate_index"
 
 # Build all games and generate dist/: mise run deploy
 [tasks.deploy]
@@ -31,11 +66,13 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 rm -rf dist
+mkdir -p dist
+cp static/* dist/
+mise run rasterize
 for game in games/*/; do
     mise run build-wasm "$(basename "$game")"
 done
-cp static/* dist/
-mise run generate_index
+mise run generate-index
 """
 
 # Serve dist/ locally (WASM requires HTTP — can't open via file://)

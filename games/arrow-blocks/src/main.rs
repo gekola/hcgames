@@ -64,8 +64,9 @@ fn draw_arrow(cx: f32, cy: f32, dir: Dir, size: f32, color: Color) {
 
 #[macroquad::main(conf)]
 async fn main() {
-    rand::srand(macroquad::miniquad::date::now() as u64);
+    rand::srand(screenshot::seed());
     let mut game = game::Game::new(0);
+    let mut shot = screenshot::Capture::from_env();
     loop {
         let dt = get_frame_time().min(0.05);
         let now = macroquad::miniquad::date::now();
@@ -173,6 +174,7 @@ async fn main() {
         );
         draw_text(&hud, fx + 4.0, 20.0, font_size, Color { r: 0.6, g: 0.6, b: 0.7, a: 1.0 });
 
+        shot.tick();
         next_frame().await;
     }
 }

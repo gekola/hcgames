@@ -9,3 +9,4 @@ path = "src/lib.rs"
 
 [dependencies]
 macroquad = "0.4"
+screenshot = { path = "../screenshot" }

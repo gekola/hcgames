@@ -176,7 +176,7 @@ fn conf() -> Conf {
 
 #[macroquad::main(conf)]
 async fn main() {
-    macroquad::rand::srand(macroquad::miniquad::date::now() as u64);
+    macroquad::rand::srand(screenshot::seed());
 
     let mut game = Game::new(0);
     let mut display_game = game.clone();
@@ -185,6 +185,7 @@ async fn main() {
     let mut anim_t: f32 = 1.0; // start settled so first move fires immediately
     let mut flying: Vec<FlyingCard> = Vec::new();
     let mut end_time: Option<f64> = None;
+    let mut shot = screenshot::Capture::from_env();
 
     loop {
         let now = macroquad::miniquad::date::now();
@@ -244,6 +245,7 @@ async fn main() {
             draw_card_face(x, y, layout.cw, layout.ch, fc.card);
         }
 
+        shot.tick();
         next_frame().await;
     }
 }

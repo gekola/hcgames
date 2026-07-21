@@ -289,9 +289,10 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    rand::srand(macroquad::miniquad::date::now() as u64);
+    rand::srand(screenshot::seed());
     let mut game = Game::new(0);
     let title_w = measure_text("2048", None, 72, 1.0).width;
+    let mut shot = screenshot::Capture::from_env();
 
     loop {
         let dt = get_frame_time();
@@ -380,6 +381,7 @@ async fn main() {
             draw_text(&sub, cx - sd.width / 2.0, cy + 40.0, 18.0, rgb(119, 110, 101));
         }
 
+        shot.tick();
         next_frame().await;
     }
 }

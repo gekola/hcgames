@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "generate_game_html"
+path = "src/bin/generate_game_html.rs"
+
+[[bin]]
+name = "generate_index"
+path = "src/bin/generate_index.rs"
+
+[dependencies]
+maud = "0.27"
+time = { version = "0.3", features = ["std"] }

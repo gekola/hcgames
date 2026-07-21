@@ -31,31 +31,29 @@ jobs:
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
+            ~/.cargo/bin/
             target/
           key: ${{ runner.os }}-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-wasm-
 
-      - name: Build all games
+      # xvfb + a software GL driver give macroquad/miniquad a real GLX context with no
+      # physical display, so games can be run natively to capture screenshots in CI.
+      - name: Install headless screenshot dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1 libglx-mesa0 libgl1-mesa-dri
+
+      # resvg rasterizes the homepage hero SVG to a PNG for social-preview meta tags.
+      - name: Install resvg
+        run: cargo install resvg --locked
+
+      - uses: jdx/mise-action@v2
+
+      - name: Build all games and generate dist/
         env:
           MQ_JS: https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js
-          RUSTFLAGS: "-C link-arg=--import-undefined"
           GTAG_ID: ${{ secrets.GTAG_ID }}
-        run: |
-          set -euo pipefail
-          for game in games/*/; do
-            name=$(basename "$game")
-            cargo build --target wasm32-unknown-unknown --release --bin "$name"
-            mkdir -p "dist/$name"
-            cp "target/wasm32-unknown-unknown/release/$name.wasm" "dist/$name/"
-            python3 .mise/tasks/generate_game_html.py "$name"
-            curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
-          done
-          cp static/* dist/
-
-      - name: Generate root index
-        env:
-          GTAG_ID: ${{ secrets.GTAG_ID }}
-        run: python3 .mise/tasks/generate_index.py
+        run: mise run deploy
 
       - uses: actions/upload-pages-artifact@v3
         with:

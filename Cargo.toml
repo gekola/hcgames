@@ -1,5 +1,5 @@
 [workspace]
-members = ["games/snake", "games/arrow-blocks", "games/game2048", "lib/minesweeper", "games/minesweeper-square", "games/minesweeper-hex", "lib/cards", "games/klondike"]
+members = ["games/snake", "games/arrow-blocks", "games/game2048", "lib/minesweeper", "games/minesweeper-square", "games/minesweeper-hex", "lib/cards", "games/klondike", "lib/screenshot", "xtask"]
 resolver = "2"
 
 [profile.release]

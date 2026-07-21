@@ -12,6 +12,5 @@ fn conf() -> Conf {
 
 #[macroquad::main(conf)]
 async fn main() {
-    macroquad::rand::srand(macroquad::miniquad::date::now() as u64);
     minesweeper::run(GridKind::Hex).await;
 }

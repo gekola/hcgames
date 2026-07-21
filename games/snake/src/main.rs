@@ -41,9 +41,10 @@ fn conf() -> Conf {
 
 #[macroquad::main(conf)]
 async fn main() {
-    rand::srand(macroquad::miniquad::date::now() as u64);
+    rand::srand(screenshot::seed());
     let mut game = Game::new(1);
     let mut accum = 0.0f32;
+    let mut shot = screenshot::Capture::from_env();
 
     loop {
         let n = game.body.len().max(1) as f32;
@@ -128,6 +129,7 @@ async fn main() {
         let hud = format!("Score: {:>4}   Gen: {}", game.score, game.generation);
         draw_text(&hud, ox, oy - font_size * 0.35, font_size, Color { r: 0.65, g: 0.65, b: 0.82, a: 1.0 });
 
+        shot.tick();
         next_frame().await;
     }
 }

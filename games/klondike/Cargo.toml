@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 macroquad = "0.4"
 cards = { path = "../../lib/cards" }
+screenshot = { path = "../../lib/screenshot" }

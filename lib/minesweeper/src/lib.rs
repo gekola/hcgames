@@ -9,8 +9,10 @@ const TICK: f32 = 0.18;
 const RESTART_DELAY: f64 = 3.5;
 
 pub async fn run(kind: GridKind) {
+    rand::srand(screenshot::seed());
     let mut board = Board::new(kind);
     let mut accum = 0.0f32;
+    let mut shot = screenshot::Capture::from_env();
 
     loop {
         accum += get_frame_time().min(0.1);
@@ -56,6 +58,7 @@ pub async fn run(kind: GridKind) {
         }
 
         draw_board(&board);
+        shot.tick();
         next_frame().await;
     }
 }
