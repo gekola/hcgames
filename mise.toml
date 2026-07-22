@@ -19,8 +19,13 @@ set -euo pipefail
 name=$1
 RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin "$name"
 mkdir -p "dist/$name"
+# --all-features made wasm-opt enable engine features (reference-types, multivalue, ...)
+# beyond what rustc's wasm32-unknown-unknown target actually emits, and combining them
+# corrupted the type section ("wasm validation error ... bad type" in the browser). Pass
+# only the 4 features this target really uses.
 if command -v wasm-opt >/dev/null; then
-  wasm-opt -Oz --all-features -o "dist/$name/$name.wasm" "target/$WASM_TARGET/release/$name.wasm"
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-mutable-globals --enable-sign-ext \
+    -o "dist/$name/$name.wasm" "target/$WASM_TARGET/release/$name.wasm"
 else
   cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
 fi
