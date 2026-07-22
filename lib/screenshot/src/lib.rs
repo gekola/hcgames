@@ -29,7 +29,11 @@ impl Capture {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3.0);
-        Self { start: macroquad::miniquad::date::now(), after_secs, path }
+        Self {
+            start: macroquad::miniquad::date::now(),
+            after_secs,
+            path,
+        }
     }
 
     /// Call once per frame, after drawing, before `next_frame().await`.

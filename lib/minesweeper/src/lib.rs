@@ -1,14 +1,150 @@
 pub mod board;
 pub mod solver;
 
-use macroquad::prelude::*;
 use board::{Board, Cell, CellState, GridKind, Phase};
+use macroquad::prelude::*;
 use solver::{Action, next_action, update_probs};
 
 const TICK: f32 = 0.18;
 const RESTART_DELAY: f64 = 3.5;
 
-pub async fn run(kind: GridKind) {
+// ── CLI args (native only — meaningless in a browser tab) ───────────────────────
+// Shared by both `minesweeper-square` and `minesweeper-hex`, which are thin binaries
+// wrapping this crate's `run`/`run_headless`.
+
+pub struct CliArgs {
+    /// `--debug`: print every action (flag/open/guess) plus episode results to stderr.
+    pub debug: bool,
+    /// `--once`: play one board to Won/GameOver, print a result line, then exit
+    /// instead of looping into a new board forever.
+    pub once: bool,
+    /// `--no-ui`: run with no window, no GL context, and no miniquad involvement at
+    /// all (see `run_headless`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub no_ui: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn parse_cli_args() -> CliArgs {
+    let mut debug = false;
+    let mut once = false;
+    let mut no_ui = false;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--debug" => debug = true,
+            "--once" => once = true,
+            "--no-ui" => no_ui = true,
+            other => {
+                eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    CliArgs { debug, once, no_ui }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn parse_cli_args() -> CliArgs {
+    CliArgs {
+        debug: false,
+        once: false,
+    }
+}
+
+fn log_action(debug: bool, board: &Board) {
+    if !debug {
+        return;
+    }
+    let kind = if board.last_was_flag { "flag" } else { "open" };
+    let revealed = board
+        .cells
+        .iter()
+        .filter(|c| c.state == CellState::Revealed)
+        .count();
+    eprintln!("{kind} idx={:?} revealed={revealed}", board.last_action);
+}
+
+/// Runs one tick's worth of AI decision-making against `board` — shared by the
+/// windowed loop (`run`) and `run_headless` so the two can't drift. Returns `true`
+/// when the board just reached `GameOver`/`Won` (the caller decides what "episode
+/// end" means: print+exit for `--once`, otherwise start a fresh board).
+fn step(board: &mut Board, cli: &CliArgs) -> bool {
+    match board.phase {
+        Phase::FirstClick => {
+            let center = (board.rows / 2 * board.cols + board.cols / 2) as usize;
+            board.place_mines(center);
+            board.phase = Phase::Playing;
+            board.reveal(center);
+            board.last_action = Some(center);
+            board.last_was_flag = false;
+            update_probs(board);
+            log_action(cli.debug, board);
+            false
+        }
+        Phase::Playing => {
+            let action = next_action(board);
+            match action {
+                Action::Flag(idx) => {
+                    board.flag(idx);
+                    board.last_action = Some(idx);
+                    board.last_was_flag = true;
+                }
+                Action::Open(idx) | Action::Guess(idx) => {
+                    board.last_action = Some(idx);
+                    board.last_was_flag = false;
+                    board.reveal(idx);
+                }
+            }
+            if matches!(board.phase, Phase::Playing) {
+                update_probs(board);
+            }
+            log_action(cli.debug, board);
+            false
+        }
+        Phase::GameOver(_) | Phase::Won(_) => true,
+    }
+}
+
+fn episode_result(board: &Board) -> (bool, usize) {
+    let won = matches!(board.phase, Phase::Won(_));
+    let revealed = board
+        .cells
+        .iter()
+        .filter(|c| c.state == CellState::Revealed)
+        .count();
+    (won, revealed)
+}
+
+/// Runs the game with no window, no GL context, and no miniquad involvement at all —
+/// `Board`'s logic has no rendering dependency (`macroquad::rand` is a pure `no_std`
+/// PRNG, safe to call standalone), and miniquad has no headless backend to opt into,
+/// so the only way to guarantee zero window creation is to never call
+/// `miniquad::start`/`Window::from_config` in the first place.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_headless(kind: GridKind, cli: CliArgs) -> ! {
+    rand::srand(screenshot::seed());
+    let mut board = Board::new(kind);
+
+    loop {
+        if step(&mut board, &cli) {
+            let (won, revealed) = episode_result(&board);
+            let result = if won { "won" } else { "lost" };
+            if cli.debug {
+                eprintln!("result={result} revealed={revealed}");
+            }
+            if cli.once {
+                println!("result={result} revealed={revealed}");
+                std::process::exit(0);
+            }
+            board = Board::new(kind);
+            update_probs(&mut board);
+        }
+    }
+}
+
+pub async fn run(kind: GridKind, cli: CliArgs) {
     rand::srand(screenshot::seed());
     let mut board = Board::new(kind);
     let mut accum = 0.0f32;
@@ -25,44 +161,29 @@ pub async fn run(kind: GridKind) {
 
         while accum >= TICK {
             accum -= TICK;
-            match board.phase {
-                Phase::FirstClick => {
-                    let center = (board.rows / 2 * board.cols + board.cols / 2) as usize;
-                    board.place_mines(center);
-                    board.phase = Phase::Playing;
-                    board.reveal(center);
-                    board.last_action = Some(center);
-                    board.last_was_flag = false;
+            if step(&mut board, &cli) {
+                if let Phase::GameOver(t) | Phase::Won(t) = board.phase
+                    && macroquad::miniquad::date::now() - t > RESTART_DELAY
+                {
+                    let (won, revealed) = episode_result(&board);
+                    if cli.debug {
+                        eprintln!(
+                            "result={} revealed={revealed}",
+                            if won { "won" } else { "lost" }
+                        );
+                    }
+                    control.episode_complete(game_name, revealed as i64);
+                    if cli.once {
+                        println!(
+                            "result={} revealed={revealed}",
+                            if won { "won" } else { "lost" }
+                        );
+                        std::process::exit(0);
+                    }
+                    board = Board::new(kind);
                     update_probs(&mut board);
                 }
-                Phase::Playing => {
-                    let action = next_action(&board);
-                    match action {
-                        Action::Flag(idx) => {
-                            board.flag(idx);
-                            board.last_action = Some(idx);
-                            board.last_was_flag = true;
-                        }
-                        Action::Open(idx) | Action::Guess(idx) => {
-                            board.last_action = Some(idx);
-                            board.last_was_flag = false;
-                            board.reveal(idx);
-                        }
-                    }
-                    if matches!(board.phase, Phase::Playing) {
-                        update_probs(&mut board);
-                    }
-                }
-                Phase::GameOver(t) | Phase::Won(t) => {
-                    if macroquad::miniquad::date::now() - t > RESTART_DELAY {
-                        let revealed =
-                            board.cells.iter().filter(|c| c.state == CellState::Revealed).count();
-                        control.episode_complete(game_name, revealed as i64);
-                        board = Board::new(kind);
-                        update_probs(&mut board);
-                    }
-                    break;
-                }
+                break;
             }
         }
 
@@ -79,15 +200,20 @@ pub async fn run(kind: GridKind) {
 fn prob_color(p: f32, pivot: f32) -> Color {
     let p = p.clamp(0.0, 1.0);
     let pivot = pivot.clamp(0.01, 0.99);
-    const GREEN:   (f32, f32, f32) = (0.37, 0.45, 0.39);
+    const GREEN: (f32, f32, f32) = (0.37, 0.45, 0.39);
     const NEUTRAL: (f32, f32, f32) = (0.42, 0.42, 0.42);
-    const ORANGE:  (f32, f32, f32) = (0.52, 0.44, 0.34);
+    const ORANGE: (f32, f32, f32) = (0.52, 0.44, 0.34);
     let (t, lo, hi) = if p <= pivot {
         (p / pivot, GREEN, NEUTRAL)
     } else {
         ((p - pivot) / (1.0 - pivot), NEUTRAL, ORANGE)
     };
-    Color { r: lo.0 + t * (hi.0 - lo.0), g: lo.1 + t * (hi.1 - lo.1), b: lo.2 + t * (hi.2 - lo.2), a: 1.0 }
+    Color {
+        r: lo.0 + t * (hi.0 - lo.0),
+        g: lo.1 + t * (hi.1 - lo.1),
+        b: lo.2 + t * (hi.2 - lo.2),
+        a: 1.0,
+    }
 }
 
 fn adj_color(n: u8) -> Color {
@@ -111,18 +237,38 @@ fn cell_bg(cell: &Cell, idx: usize, hit: Option<usize>, global_prob: Option<f32>
         CellState::Revealed => {
             if cell.is_mine {
                 if hit == Some(idx) {
-                    Color { r: 1.0, g: 0.08, b: 0.08, a: 1.0 }
+                    Color {
+                        r: 1.0,
+                        g: 0.08,
+                        b: 0.08,
+                        a: 1.0,
+                    }
                 } else {
-                    Color { r: 0.30, g: 0.30, b: 0.34, a: 1.0 }
+                    Color {
+                        r: 0.30,
+                        g: 0.30,
+                        b: 0.34,
+                        a: 1.0,
+                    }
                 }
             } else {
-                Color { r: 0.20, g: 0.22, b: 0.28, a: 1.0 }
+                Color {
+                    r: 0.20,
+                    g: 0.22,
+                    b: 0.28,
+                    a: 1.0,
+                }
             }
         }
         CellState::Hidden => prob_color(cell.mine_prob, pivot),
         CellState::Flagged => match global_prob {
             Some(p) => prob_color(p, pivot),
-            None    => Color { r: 0.42, g: 0.42, b: 0.42, a: 1.0 },
+            None => Color {
+                r: 0.42,
+                g: 0.42,
+                b: 0.42,
+                a: 1.0,
+            },
         },
     }
 }
@@ -131,26 +277,71 @@ fn cell_bg(cell: &Cell, idx: usize, hit: Option<usize>, global_prob: Option<f32>
 
 fn draw_hud(board: &Board, sw: f32, speed_label: &str) {
     let hud_bg = match board.phase {
-        Phase::GameOver(_) => Color { r: 0.28, g: 0.06, b: 0.06, a: 1.0 },
-        Phase::Won(_) => Color { r: 0.06, g: 0.20, b: 0.10, a: 1.0 },
-        _ => Color { r: 0.09, g: 0.09, b: 0.16, a: 1.0 },
+        Phase::GameOver(_) => Color {
+            r: 0.28,
+            g: 0.06,
+            b: 0.06,
+            a: 1.0,
+        },
+        Phase::Won(_) => Color {
+            r: 0.06,
+            g: 0.20,
+            b: 0.10,
+            a: 1.0,
+        },
+        _ => Color {
+            r: 0.09,
+            g: 0.09,
+            b: 0.16,
+            a: 1.0,
+        },
     };
     let text_col = match board.phase {
-        Phase::GameOver(_) => Color { r: 1.0, g: 0.35, b: 0.35, a: 1.0 },
-        Phase::Won(_) => Color { r: 0.30, g: 1.0, b: 0.55, a: 1.0 },
-        _ => Color { r: 0.68, g: 0.68, b: 0.85, a: 1.0 },
+        Phase::GameOver(_) => Color {
+            r: 1.0,
+            g: 0.35,
+            b: 0.35,
+            a: 1.0,
+        },
+        Phase::Won(_) => Color {
+            r: 0.30,
+            g: 1.0,
+            b: 0.55,
+            a: 1.0,
+        },
+        _ => Color {
+            r: 0.68,
+            g: 0.68,
+            b: 0.85,
+            a: 1.0,
+        },
     };
     draw_rectangle(0.0, 0.0, sw, 34.0, hud_bg);
-    let flagged = board.cells.iter().filter(|c| c.state == CellState::Flagged).count();
+    let flagged = board
+        .cells
+        .iter()
+        .filter(|c| c.state == CellState::Flagged)
+        .count();
     let label = match board.kind {
         GridKind::Square => "Square",
         GridKind::Hex => "Hex",
     };
     let msg = match board.phase {
-        Phase::FirstClick | Phase::Playing =>
-            format!("{}  Mines: {}  Flagged: {}  Remaining: {}", label, board.mine_count, flagged, board.remaining_mines()),
-        Phase::GameOver(_) => format!("{}  MINE HIT — restarting in {:.0}s…", label, RESTART_DELAY as u32),
-        Phase::Won(_) => format!("{}  SOLVED! Restarting in {:.0}s…", label, RESTART_DELAY as u32),
+        Phase::FirstClick | Phase::Playing => format!(
+            "{}  Mines: {}  Flagged: {}  Remaining: {}",
+            label,
+            board.mine_count,
+            flagged,
+            board.remaining_mines()
+        ),
+        Phase::GameOver(_) => format!(
+            "{}  MINE HIT — restarting in {:.0}s…",
+            label, RESTART_DELAY as u32
+        ),
+        Phase::Won(_) => format!(
+            "{}  SOLVED! Restarting in {:.0}s…",
+            label, RESTART_DELAY as u32
+        ),
     };
     draw_text(&msg, 10.0, 24.0, 20.0, text_col);
 
@@ -167,10 +358,27 @@ fn draw_flag(cx: f32, cy: f32, size: f32) {
     let pole_x = cx - size * 0.04;
     let flag_w = size * 0.28;
     let flag_h = size * 0.22;
-    let dark = Color { r: 0.10, g: 0.10, b: 0.12, a: 1.0 };
-    let red  = Color { r: 0.95, g: 0.15, b: 0.15, a: 1.0 };
+    let dark = Color {
+        r: 0.10,
+        g: 0.10,
+        b: 0.12,
+        a: 1.0,
+    };
+    let red = Color {
+        r: 0.95,
+        g: 0.15,
+        b: 0.15,
+        a: 1.0,
+    };
     // pole
-    draw_line(pole_x, pole_top, pole_x, pole_bot, (size * 0.055).max(1.5), dark);
+    draw_line(
+        pole_x,
+        pole_top,
+        pole_x,
+        pole_bot,
+        (size * 0.055).max(1.5),
+        dark,
+    );
     // triangular flag pointing right
     draw_triangle(
         vec2(pole_x, pole_top),
@@ -179,30 +387,69 @@ fn draw_flag(cx: f32, cy: f32, size: f32) {
         red,
     );
     // base
-    draw_line(pole_x - size * 0.12, pole_bot, pole_x + size * 0.12, pole_bot, (size * 0.055).max(1.5), dark);
+    draw_line(
+        pole_x - size * 0.12,
+        pole_bot,
+        pole_x + size * 0.12,
+        pole_bot,
+        (size * 0.055).max(1.5),
+        dark,
+    );
 }
 
 // ── Mine glyph ───────────────────────────────────────────────────────────────
 
 fn draw_mine(cx: f32, cy: f32, size: f32) {
     let r = size * 0.26;
-    let col = Color { r: 0.06, g: 0.06, b: 0.07, a: 1.0 };
+    let col = Color {
+        r: 0.06,
+        g: 0.06,
+        b: 0.07,
+        a: 1.0,
+    };
     let thick = (size * 0.055).max(1.5);
     // 8 spikes
     for i in 0..8 {
         let a = i as f32 * std::f32::consts::PI * 0.25;
         let (sa, ca) = a.sin_cos();
-        draw_line(cx + ca * r * 0.75, cy + sa * r * 0.75, cx + ca * r * 1.5, cy + sa * r * 1.5, thick, col);
+        draw_line(
+            cx + ca * r * 0.75,
+            cy + sa * r * 0.75,
+            cx + ca * r * 1.5,
+            cy + sa * r * 1.5,
+            thick,
+            col,
+        );
     }
     draw_circle(cx, cy, r, col);
     // shine
-    draw_circle(cx - r * 0.28, cy - r * 0.28, r * 0.22, Color { r: 0.85, g: 0.85, b: 0.88, a: 0.55 });
+    draw_circle(
+        cx - r * 0.28,
+        cy - r * 0.28,
+        r * 0.22,
+        Color {
+            r: 0.85,
+            g: 0.85,
+            b: 0.88,
+            a: 0.55,
+        },
+    );
 }
 
 // ── Square grid ───────────────────────────────────────────────────────────────
 
-fn draw_square(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, global_prob: Option<f32>) {
-    let cell = (avail_w / board.cols as f32).min(avail_h / board.rows as f32).floor().max(4.0);
+fn draw_square(
+    board: &Board,
+    ox: f32,
+    oy: f32,
+    avail_w: f32,
+    avail_h: f32,
+    global_prob: Option<f32>,
+) {
+    let cell = (avail_w / board.cols as f32)
+        .min(avail_h / board.rows as f32)
+        .floor()
+        .max(4.0);
     let gw = board.cols as f32 * cell;
     let gh = board.rows as f32 * cell;
     let ox = ox + ((avail_w - gw) * 0.5).floor();
@@ -216,7 +463,13 @@ fn draw_square(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, glob
         let cell_ref = &board.cells[idx];
         let pad = 1.5_f32.max(cell * 0.03);
 
-        draw_rectangle(px + pad, py + pad, cell - 2.0 * pad, cell - 2.0 * pad, cell_bg(cell_ref, idx, board.hit_mine, global_prob));
+        draw_rectangle(
+            px + pad,
+            py + pad,
+            cell - 2.0 * pad,
+            cell - 2.0 * pad,
+            cell_bg(cell_ref, idx, board.hit_mine, global_prob),
+        );
 
         let cx = px + cell * 0.5;
         let cy = py + cell * 0.5;
@@ -233,11 +486,24 @@ fn draw_square(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, glob
             let fs = (cell * 0.55).max(10.0);
             let txt = cell_ref.adj_mines.to_string();
             let d = measure_text(&txt, None, fs as u16, 1.0);
-            draw_text(&txt, cx - d.width * 0.5, cy + d.height * 0.5, fs, adj_color(cell_ref.adj_mines));
+            draw_text(
+                &txt,
+                cx - d.width * 0.5,
+                cy + d.height * 0.5,
+                fs,
+                adj_color(cell_ref.adj_mines),
+            );
         }
 
         if board.last_action == Some(idx) {
-            draw_rectangle_lines(px + pad, py + pad, cell - 2.0 * pad, cell - 2.0 * pad, 2.5, YELLOW);
+            draw_rectangle_lines(
+                px + pad,
+                py + pad,
+                cell - 2.0 * pad,
+                cell - 2.0 * pad,
+                2.5,
+                YELLOW,
+            );
         }
     }
 }
@@ -245,7 +511,14 @@ fn draw_square(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, glob
 // ── Hex grid ─────────────────────────────────────────────────────────────────
 // flat-top hexagons, odd columns shifted down by row_spacing/2
 
-fn draw_hex_grid(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, global_prob: Option<f32>) {
+fn draw_hex_grid(
+    board: &Board,
+    ox: f32,
+    oy: f32,
+    avail_w: f32,
+    avail_h: f32,
+    global_prob: Option<f32>,
+) {
     let cols = board.cols as f32;
     let rows = board.rows as f32;
     // hex_r = circumscribed radius; col_spacing = 1.5*r; row_spacing = sqrt(3)*r
@@ -264,12 +537,26 @@ fn draw_hex_grid(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, gl
         let col = (idx as i32 % board.cols) as f32;
         let row = (idx as i32 / board.cols) as f32;
         let cx = ox + col * col_sp + hex_r;
-        let cy = oy + row * row_sp + (if (idx as i32 % board.cols) % 2 == 1 { row_sp * 0.5 } else { 0.0 }) + hex_r;
+        let cy = oy
+            + row * row_sp
+            + (if (idx as i32 % board.cols) % 2 == 1 {
+                row_sp * 0.5
+            } else {
+                0.0
+            })
+            + hex_r;
 
         let cell_ref = &board.cells[idx];
         let r_inner = hex_r - 1.5;
 
-        draw_poly(cx, cy, 6, r_inner, 0.0, cell_bg(cell_ref, idx, board.hit_mine, global_prob));
+        draw_poly(
+            cx,
+            cy,
+            6,
+            r_inner,
+            0.0,
+            cell_bg(cell_ref, idx, board.hit_mine, global_prob),
+        );
 
         if cell_ref.state == CellState::Flagged {
             draw_flag(cx, cy, hex_r * 2.0);
@@ -283,7 +570,13 @@ fn draw_hex_grid(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, gl
             let fs = (hex_r * 0.85).max(10.0);
             let txt = cell_ref.adj_mines.to_string();
             let d = measure_text(&txt, None, fs as u16, 1.0);
-            draw_text(&txt, cx - d.width * 0.5, cy + d.height * 0.5, fs, adj_color(cell_ref.adj_mines));
+            draw_text(
+                &txt,
+                cx - d.width * 0.5,
+                cy + d.height * 0.5,
+                fs,
+                adj_color(cell_ref.adj_mines),
+            );
         }
 
         if board.last_action == Some(idx) {
@@ -298,10 +591,19 @@ fn draw_board(board: &Board, speed_label: &str) {
     let sw = screen_width();
     let sh = screen_height();
 
-    clear_background(Color { r: 0.07, g: 0.07, b: 0.12, a: 1.0 });
+    clear_background(Color {
+        r: 0.07,
+        g: 0.07,
+        b: 0.12,
+        a: 1.0,
+    });
     draw_hud(board, sw, speed_label);
 
-    let total_hidden = board.cells.iter().filter(|c| c.state == CellState::Hidden).count() as i32;
+    let total_hidden = board
+        .cells
+        .iter()
+        .filter(|c| c.state == CellState::Hidden)
+        .count() as i32;
     let remaining = board.remaining_mines();
     // None when equal (all remaining hidden are mines) → flagged tiles use flat gray
     let global_prob: Option<f32> = if total_hidden > 0 && total_hidden != remaining {

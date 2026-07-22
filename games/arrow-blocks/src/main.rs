@@ -62,12 +62,127 @@ fn draw_arrow(cx: f32, cy: f32, dir: Dir, size: f32, color: Color) {
     draw_triangle(v1, v2, v3, color);
 }
 
-#[macroquad::main(conf)]
-async fn main() {
+// ── CLI args (native only — meaningless in a browser tab) ───────────────────────
+
+struct CliArgs {
+    /// `--debug`: print each block that finishes exiting, plus level completions, to stderr.
+    debug: bool,
+    /// `--once`: solve one figure, print a result line, then exit instead of cycling
+    /// through figures forever.
+    once: bool,
+    /// `--no-ui`: run with no window, no GL context, and no miniquad involvement at
+    /// all (see `run_headless`).
+    #[cfg(not(target_arch = "wasm32"))]
+    no_ui: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_cli_args() -> CliArgs {
+    let mut debug = false;
+    let mut once = false;
+    let mut no_ui = false;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--debug" => debug = true,
+            "--once" => once = true,
+            "--no-ui" => no_ui = true,
+            other => {
+                eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    CliArgs { debug, once, no_ui }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn parse_cli_args() -> CliArgs {
+    CliArgs {
+        debug: false,
+        once: false,
+    }
+}
+
+/// `game::Game::tick` is driven by real `dt`/`now` values (block-exit animation speed,
+/// and the `Considering`/`Pause`/`Done` phase timers), not a discrete move list — so
+/// headless mode drives a virtual clock forward by this fixed step each iteration
+/// instead of reading `get_frame_time()`/`miniquad::date::now()`, matching the same
+/// 0.05s cap the windowed loop applies to `dt`, just without waiting on real time
+/// between iterations.
+#[cfg(not(target_arch = "wasm32"))]
+const HEADLESS_DT: f32 = 0.05;
+
+/// Runs the game with no window, no GL context, and no miniquad involvement at all —
+/// `game::Game` has no rendering dependency (`macroquad::rand` is a pure `no_std` PRNG,
+/// safe to call standalone), and miniquad has no headless backend to opt into, so the
+/// only way to guarantee zero window creation is to never call
+/// `miniquad::start`/`Window::from_config` in the first place.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_headless(cli: CliArgs) -> ! {
+    rand::srand(screenshot::seed());
+    let mut game = game::Game::new(0);
+    let mut now: f64 = 0.0;
+    let mut last_remaining = game.remaining();
+
+    loop {
+        now += HEADLESS_DT as f64;
+        game.tick(HEADLESS_DT, now);
+
+        let remaining = game.remaining();
+        if cli.debug && remaining != last_remaining {
+            eprintln!("block_exited remaining={remaining} level={}", game.level);
+        }
+        last_remaining = remaining;
+
+        if let game::Phase::Done { since } = game.phase
+            && now - since > 0.4
+        {
+            if cli.debug {
+                eprintln!(
+                    "level_complete level={} blocks={}",
+                    game.level,
+                    game.blocks.len()
+                );
+            }
+            if cli.once {
+                println!(
+                    "result=solved level={} blocks={}",
+                    game.level,
+                    game.blocks.len()
+                );
+                std::process::exit(0);
+            }
+            let next = (game.level + 1) % puzzle::NFIGURES;
+            game = game::Game::new(next);
+            now = 0.0;
+            last_remaining = game.remaining();
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    let cli = parse_cli_args();
+    if cli.no_ui {
+        run_headless(cli);
+    } else {
+        macroquad::Window::from_config(conf(), amain(cli));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    macroquad::Window::from_config(conf(), amain(parse_cli_args()));
+}
+
+async fn amain(cli: CliArgs) {
     rand::srand(screenshot::seed());
     let mut game = game::Game::new(0);
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
+    let mut last_remaining = game.remaining();
     loop {
         control.handle_keys();
         let dt = control.scale(get_frame_time().min(0.05));
@@ -75,12 +190,34 @@ async fn main() {
 
         game.tick(dt, now);
 
-        if let game::Phase::Done { since } = game.phase {
-            if now - since > 0.4 {
-                control.episode_complete("arrow-blocks", game.blocks.len() as i64);
-                let next = (game.level + 1) % puzzle::NFIGURES;
-                game = game::Game::new(next);
+        let remaining = game.remaining();
+        if cli.debug && remaining != last_remaining {
+            eprintln!("block_exited remaining={remaining} level={}", game.level);
+        }
+        last_remaining = remaining;
+
+        if let game::Phase::Done { since } = game.phase
+            && now - since > 0.4
+        {
+            if cli.debug {
+                eprintln!(
+                    "level_complete level={} blocks={}",
+                    game.level,
+                    game.blocks.len()
+                );
             }
+            control.episode_complete("arrow-blocks", game.blocks.len() as i64);
+            if cli.once {
+                println!(
+                    "result=solved level={} blocks={}",
+                    game.level,
+                    game.blocks.len()
+                );
+                std::process::exit(0);
+            }
+            let next = (game.level + 1) % puzzle::NFIGURES;
+            game = game::Game::new(next);
+            last_remaining = game.remaining();
         }
 
         // --- render ---
@@ -175,11 +312,33 @@ async fn main() {
             puzzle::NFIGURES,
             remaining,
         );
-        draw_text(&hud, fx + 4.0, 20.0, font_size, Color { r: 0.6, g: 0.6, b: 0.7, a: 1.0 });
+        draw_text(
+            &hud,
+            fx + 4.0,
+            20.0,
+            font_size,
+            Color {
+                r: 0.6,
+                g: 0.6,
+                b: 0.7,
+                a: 1.0,
+            },
+        );
 
         let speed_label = control.label();
         let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
-        draw_text(&speed_label, sw - 8.0 - sd.width, 20.0, font_size, Color { r: 0.6, g: 0.6, b: 0.7, a: 1.0 });
+        draw_text(
+            &speed_label,
+            sw - 8.0 - sd.width,
+            20.0,
+            font_size,
+            Color {
+                r: 0.6,
+                g: 0.6,
+                b: 0.7,
+                a: 1.0,
+            },
+        );
 
         shot.tick();
         screenshot::handle_hotkey();

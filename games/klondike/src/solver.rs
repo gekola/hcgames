@@ -1,6 +1,6 @@
+use crate::game::{Game, Move, Phase, Variant};
 use beam_solver::{BeamSearch, SearchState};
 use cards::card::Card;
-use crate::game::{Game, Move, Phase, Variant};
 
 /// See [[beam_solver]] docs and `games/spider/src/solver.rs` for the shared search
 /// engine and its rationale; these constants and the move-scoring below are Klondike's
@@ -42,7 +42,8 @@ impl Solver {
     }
 
     pub fn choose_move(&mut self, game: &Game) -> Option<Move> {
-        self.beam.choose_move(game, is_pointless, score_root, score_core)
+        self.beam
+            .choose_move(game, is_pointless, score_root, score_core)
     }
 }
 
@@ -56,7 +57,24 @@ impl Solver {
 /// earn its keep.
 fn is_pointless(game: &Game, m: &Move) -> bool {
     let tableau_pointless = game.variant != Variant::Yukon && is_pointless_tableau_move(game, m);
-    tableau_pointless || is_pointless_foundation_return(game, m)
+    tableau_pointless || is_pointless_king_swap(game, m) || is_pointless_foundation_return(game, m)
+}
+
+/// A King-led run with nothing below it (no face-downs) moved onto an empty column just
+/// relabels which column is empty — no card becomes more or less reachable. Unlike the
+/// rest of `is_pointless_tableau_move`, this holds regardless of variant (Yukon included:
+/// see its doc comment), so it isn't gated behind `game.variant != Variant::Yukon`. Without
+/// this, Yukon repeatedly shuffled an already-settled base King between empty columns
+/// instead of spending beam width on runs that actually dig toward a face-down card.
+fn is_pointless_king_swap(game: &Game, m: &Move) -> bool {
+    let Move::TableauToTableau { from, n, to } = *m else {
+        return false;
+    };
+    if n != game.n_up(from) || game.n_down[from] != 0 || !game.tableau[to].is_empty() {
+        return false;
+    }
+    let from_len = game.tableau[from].len();
+    game.tableau[from][from_len - n].rank == 12
 }
 
 /// TableauToTableau is only useful when it makes concrete immediate progress:
@@ -64,7 +82,7 @@ fn is_pointless(game: &Game, m: &Move) -> bool {
 /// 2. Exposes a card on `from` that can immediately go to the foundation, OR
 /// 3. Empties a pile (no face-downs, whole run moved) when a King is available to fill it.
 fn is_pointless_tableau_move(game: &Game, m: &Move) -> bool {
-    let Move::TableauToTableau { from, n, to } = *m else {
+    let Move::TableauToTableau { from, n, .. } = *m else {
         return false;
     };
     let n_up = game.n_up(from);
@@ -83,14 +101,9 @@ fn is_pointless_tableau_move(game: &Game, m: &Move) -> bool {
         }
     }
 
-    // 3. Empties the pile and a King is available to occupy it.
-    //    But not if we're moving a King-led run to an empty column from a pile with no
-    //    face-downs — that just swaps one free space for another.
-    let bottom_card = game.tableau[from][from_len - n];
-    let to_is_empty = game.tableau[to].is_empty();
-    if n == n_up && game.n_down[from] == 0 && king_available(game)
-        && !(bottom_card.rank == 12 && to_is_empty)
-    {
+    // 3. Empties the pile and a King is available to occupy it. The degenerate
+    //    King-led-run-to-empty-column case is already caught by `is_pointless_king_swap`.
+    if n == n_up && game.n_down[from] == 0 && king_available(game) {
         return false;
     }
 
@@ -105,7 +118,7 @@ fn is_pointless_foundation_return(game: &Game, m: &Move) -> bool {
         return false;
     };
     // Aces can never be built on in tableau.
-    if game.foundations[suit].last().map_or(true, |c| c.rank == 0) {
+    if game.foundations[suit].last().is_none_or(|c| c.rank == 0) {
         return true;
     }
     let mut preview = game.clone();
@@ -129,7 +142,7 @@ fn is_pointless_foundation_return(game: &Game, m: &Move) -> bool {
 }
 
 fn king_available(game: &Game) -> bool {
-    if game.waste.last().map_or(false, |c| c.rank == 12) {
+    if game.waste.last().is_some_and(|c| c.rank == 12) {
         return true;
     }
     // A King at the bottom of a face-up run that isn't already alone on an empty pile
@@ -146,7 +159,11 @@ fn score_root(game: &Game, after: &Game, m: &Move) -> i32 {
     let mut s = score_core(game, after, m);
 
     if matches!(m, Move::TableauToTableau { .. }) {
-        let follow_ups = after.legal_moves().iter().filter(|mv| !is_pointless(after, mv)).count() as i32;
+        let follow_ups = after
+            .legal_moves()
+            .iter()
+            .filter(|mv| !is_pointless(after, mv))
+            .count() as i32;
         s += follow_ups;
     }
 
@@ -165,8 +182,8 @@ fn score_core(game: &Game, after: &Game, m: &Move) -> i32 {
         Move::WasteToFoundation => 110,
 
         Move::TableauToFoundation(from) => {
-            let uncovers = game.n_down[from] > 0
-                && game.tableau[from].len() == game.n_down[from] + 1;
+            let uncovers =
+                game.n_down[from] > 0 && game.tableau[from].len() == game.n_down[from] + 1;
             100 + if uncovers { 15 } else { 0 }
         }
 

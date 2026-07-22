@@ -7,7 +7,9 @@ use xtask::{
 };
 
 fn main() {
-    let name = std::env::args().nth(1).expect("usage: generate_game_html <name>");
+    let name = std::env::args()
+        .nth(1)
+        .expect("usage: generate_game_html <name>");
     let dist = Path::new("dist");
 
     let base_url = base_url();

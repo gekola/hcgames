@@ -1,7 +1,7 @@
-use std::collections::HashSet;
-use macroquad::prelude::*;
 use cards::card::Card;
 use cards::render::{draw_card_back, draw_card_face, draw_empty_slot, draw_suit_symbol};
+use macroquad::prelude::*;
+use std::collections::HashSet;
 
 mod game;
 mod solver;
@@ -30,12 +30,20 @@ impl Layout {
         let sw = screen_width();
         let sh = screen_height();
         let avail_w = sw - 20.0;
-        let cw = ((avail_w - 6.0 * 12.0) / 7.0).min(105.0).max(36.0);
+        let cw = ((avail_w - 6.0 * 12.0) / 7.0).clamp(36.0, 105.0);
         let ch = cw * 1.40;
         let gap = ((avail_w - 7.0 * cw) / 6.0).max(4.0);
         let top_y = 42.0;
         let tab_y = top_y + ch + 16.0;
-        Self { cw, ch, gap, ox: 10.0, top_y, tab_y, sh }
+        Self {
+            cw,
+            ch,
+            gap,
+            ox: 10.0,
+            top_y,
+            tab_y,
+            sh,
+        }
     }
 
     fn col_x(&self, i: usize) -> f32 {
@@ -119,19 +127,37 @@ fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard
             let card = *game.waste.last().unwrap();
             let (x0, y0) = layout.waste_top_pos(game);
             let (x1, y1) = layout.foundation_pos(card.suit as usize);
-            vec![FlyingCard { card, x0, y0, x1, y1 }]
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
         }
         Move::WasteToTableau(to) => {
             let card = *game.waste.last().unwrap();
             let (x0, y0) = layout.waste_top_pos(game);
             let (x1, y1) = layout.tableau_top_pos(&after, to);
-            vec![FlyingCard { card, x0, y0, x1, y1 }]
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
         }
         Move::TableauToFoundation(from) => {
             let card = *game.tableau[from].last().unwrap();
             let (x0, y0) = layout.tableau_top_pos(game, from);
             let (x1, y1) = layout.foundation_pos(card.suit as usize);
-            vec![FlyingCard { card, x0, y0, x1, y1 }]
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
         }
         Move::TableauToTableau { from, n, to } => {
             let t = &game.tableau[from];
@@ -142,7 +168,13 @@ fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard
                     let (x0, y0) = layout.tableau_card_pos(game, from, card_idx);
                     let (x1, y1) =
                         layout.tableau_card_pos(&after, to, after.tableau[to].len() - n + i);
-                    FlyingCard { card, x0, y0, x1, y1 }
+                    FlyingCard {
+                        card,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                    }
                 })
                 .collect()
         }
@@ -150,7 +182,13 @@ fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard
             let card = *game.foundations[suit].last().unwrap();
             let (x0, y0) = layout.foundation_pos(suit);
             let (x1, y1) = layout.tableau_top_pos(&after, to);
-            vec![FlyingCard { card, x0, y0, x1, y1 }]
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
         }
     }
 }
@@ -199,7 +237,13 @@ impl VariantMode {
         match self {
             VariantMode::Draw1 => 1,
             VariantMode::Draw3 => 3,
-            VariantMode::Auto => if generation % 2 == 0 { 1 } else { 3 },
+            VariantMode::Auto => {
+                if generation.is_multiple_of(2) {
+                    1
+                } else {
+                    3
+                }
+            }
             VariantMode::Yukon => 1, // unused: Yukon has no stock/waste
         }
     }
@@ -263,7 +307,9 @@ fn parse_cli_args() -> CliArgs {
                     "auto" => VariantMode::Auto,
                     "yukon" => VariantMode::Yukon,
                     other => {
-                        eprintln!("unknown --variant value '{other}': expected 1, 3, auto, or yukon");
+                        eprintln!(
+                            "unknown --variant value '{other}': expected 1, 3, auto, or yukon"
+                        );
                         std::process::exit(2);
                     }
                 });
@@ -278,12 +324,22 @@ fn parse_cli_args() -> CliArgs {
         i += 1;
     }
 
-    CliArgs { debug, once, variant, no_ui }
+    CliArgs {
+        debug,
+        once,
+        variant,
+        no_ui,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn parse_cli_args() -> CliArgs {
-    CliArgs { debug: false, once: false, variant: None, no_ui: false }
+    CliArgs {
+        debug: false,
+        once: false,
+        variant: None,
+        no_ui: false,
+    }
 }
 
 fn variant_label(mode_variant: Variant, draw_count: u8) -> String {
@@ -318,7 +374,11 @@ fn log_stall(game: &Game) {
 fn print_result(game: &Game) {
     println!(
         "result={} variant={} moves={} foundation={}/52",
-        if game.phase == Phase::Won { "won" } else { "stuck" },
+        if game.phase == Phase::Won {
+            "won"
+        } else {
+            "stuck"
+        },
         variant_label(game.variant, game.draw_count),
         game.moves,
         game.foundations.iter().map(|f| f.len()).sum::<usize>(),
@@ -540,7 +600,14 @@ fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
 // ── Game board ────────────────────────────────────────────────────────────────
 
 fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<Card>) {
-    let Layout { cw, ch, top_y, tab_y, sh: _, .. } = *layout;
+    let Layout {
+        cw,
+        ch,
+        top_y,
+        tab_y,
+        sh: _,
+        ..
+    } = *layout;
 
     // ── Stock ─────────────────────────────────────────────────────────────────
     let sx = layout.col_x(0);
@@ -589,7 +656,13 @@ fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<Card>) {
         };
         if f.is_empty() {
             draw_empty_slot(fx, top_y, cw, ch);
-            draw_suit_symbol(fx + cw * 0.5, top_y + ch * 0.52, (ch * 0.32).max(12.0), s as u8, gcol);
+            draw_suit_symbol(
+                fx + cw * 0.5,
+                top_y + ch * 0.52,
+                (ch * 0.32).max(12.0),
+                s as u8,
+                gcol,
+            );
         } else {
             let top = *f.last().unwrap();
             if !in_flight.contains(&top) {
@@ -598,7 +671,13 @@ fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<Card>) {
                 draw_card_face(fx, top_y, cw, ch, f[f.len() - 2]);
             } else {
                 draw_empty_slot(fx, top_y, cw, ch);
-                draw_suit_symbol(fx + cw * 0.5, top_y + ch * 0.52, (ch * 0.32).max(12.0), s as u8, gcol);
+                draw_suit_symbol(
+                    fx + cw * 0.5,
+                    top_y + ch * 0.52,
+                    (ch * 0.32).max(12.0),
+                    s as u8,
+                    gcol,
+                );
             }
         }
     }

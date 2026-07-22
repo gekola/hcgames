@@ -7,10 +7,10 @@ pub fn base_url() -> String {
     if let Ok(url) = std::env::var("BASE_URL") {
         return url;
     }
-    if let Ok(repo) = std::env::var("GITHUB_REPOSITORY") {
-        if let Some((owner, name)) = repo.split_once('/') {
-            return format!("https://{owner}.github.io/{name}/");
-        }
+    if let Ok(repo) = std::env::var("GITHUB_REPOSITORY")
+        && let Some((owner, name)) = repo.split_once('/')
+    {
+        return format!("https://{owner}.github.io/{name}/");
     }
     "http://localhost:8080/".to_owned() // matches `mise run serve`
 }
@@ -243,16 +243,22 @@ pub struct SocialImage {
 /// bare favicon SVG that most crawlers won't render. All fall back locally, where those
 /// build steps are skipped without xvfb-run/resvg.
 pub fn social_image(base_url: &str, dist: &Path, preview: Option<&str>) -> SocialImage {
-    if let Some(preview) = preview {
-        if dist.join(preview).exists() {
-            return SocialImage {
-                url: format!("{base_url}{preview}"),
-                twitter_card: "summary_large_image",
-            };
-        }
+    if let Some(preview) = preview
+        && dist.join(preview).exists()
+    {
+        return SocialImage {
+            url: format!("{base_url}{preview}"),
+            twitter_card: "summary_large_image",
+        };
     }
     if dist.join("favicon.png").exists() {
-        return SocialImage { url: format!("{base_url}favicon.png"), twitter_card: "summary" };
+        return SocialImage {
+            url: format!("{base_url}favicon.png"),
+            twitter_card: "summary",
+        };
     }
-    SocialImage { url: format!("{base_url}favicon.svg"), twitter_card: "summary" }
+    SocialImage {
+        url: format!("{base_url}favicon.svg"),
+        twitter_card: "summary",
+    }
 }

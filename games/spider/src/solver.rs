@@ -1,5 +1,5 @@
-use beam_solver::{BeamSearch, SearchState};
 use crate::game::{Game, Move, Phase};
+use beam_solver::{BeamSearch, SearchState};
 
 /// How many of the best candidate lines to keep alive at each ply of the search — a
 /// small beam search (Bjarnason/Cazenave-adjacent: cheaper than a full rollout per
@@ -68,7 +68,9 @@ fn is_real_progress(game: &Game, m: &Move) -> bool {
         return true; // completes a run
     }
 
-    game.tableau[to].is_empty() && !game.stock.is_empty() && after.tableau.iter().all(|t| !t.is_empty())
+    game.tableau[to].is_empty()
+        && !game.stock.is_empty()
+        && after.tableau.iter().all(|t| !t.is_empty())
 }
 
 /// The only move that's truly pointless — filtered out entirely rather than merely
@@ -99,8 +101,11 @@ fn score(game: &Game, after: &Game, m: &Move) -> i32 {
     let mut s = score_core(game, after, m);
 
     if matches!(m, Move::TableauToTableau { .. }) {
-        let follow_ups =
-            after.legal_moves().iter().filter(|mv| !is_pointless(after, mv)).count() as i32;
+        let follow_ups = after
+            .legal_moves()
+            .iter()
+            .filter(|mv| !is_pointless(after, mv))
+            .count() as i32;
         s += follow_ups;
     }
 
@@ -123,7 +128,10 @@ fn score_core(game: &Game, after: &Game, m: &Move) -> i32 {
         // position for 100+ moves. Deal only needs to win against *real* progress
         // (an uncover, a completion, or unlocking a future deal) — not against noise.
         Move::Deal => {
-            let has_real_alt = game.legal_moves().into_iter().any(|mv| is_real_progress(game, &mv));
+            let has_real_alt = game
+                .legal_moves()
+                .into_iter()
+                .any(|mv| is_real_progress(game, &mv));
             if has_real_alt { 5 } else { 45 }
         }
 

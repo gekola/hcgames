@@ -1,5 +1,5 @@
+use crate::{COLS, DIRS, GRID, Pt, ROWS};
 use macroquad::prelude::*;
-use crate::{Pt, COLS, ROWS, GRID, DIRS};
 
 pub fn generate_blocks() -> [bool; GRID] {
     let cx = COLS / 2;
@@ -14,7 +14,9 @@ pub fn generate_blocks() -> [bool; GRID] {
             let x = rand::gen_range(1, COLS - w - 1);
             let y = rand::gen_range(1, ROWS - h - 1);
             // skip if overlaps snake spawn zone
-            if (x..x + w).any(|bx| (y..y + h).any(|by| (bx - cx).abs() <= 5 && (by - cy).abs() <= 4)) {
+            if (x..x + w)
+                .any(|bx| (y..y + h).any(|by| (bx - cx).abs() <= 5 && (by - cy).abs() <= 4))
+            {
                 continue;
             }
             for bx in x..x + w {
@@ -34,9 +36,11 @@ fn is_valid_layout(blocks: &[bool; GRID]) -> bool {
     // Find start and count total passable in a single pass
     let mut start = None;
     let mut total_passable = 0usize;
-    for i in 0..GRID {
-        if !blocks[i] {
-            if start.is_none() { start = Some(i); }
+    for (i, &blocked) in blocks.iter().enumerate() {
+        if !blocked {
+            if start.is_none() {
+                start = Some(i);
+            }
             total_passable += 1;
         }
     }
@@ -49,24 +53,36 @@ fn is_valid_layout(blocks: &[bool; GRID]) -> bool {
     let mut queue = [0usize; GRID];
     let (mut qh, mut qt) = (0, 0);
     visited[start] = true;
-    queue[qt] = start; qt += 1;
+    queue[qt] = start;
+    qt += 1;
     let mut reachable = 1usize;
 
     while qh < qt {
-        let cur = queue[qh]; qh += 1;
-        let p = Pt { x: (cur % COLS as usize) as i32, y: (cur / COLS as usize) as i32 };
+        let cur = queue[qh];
+        qh += 1;
+        let p = Pt {
+            x: (cur % COLS as usize) as i32,
+            y: (cur / COLS as usize) as i32,
+        };
         for (dx, dy) in DIRS {
             let nb = p.shifted(dx, dy);
-            if !nb.in_bounds() { continue; }
+            if !nb.in_bounds() {
+                continue;
+            }
             let ni = nb.idx();
-            if visited[ni] || blocks[ni] { continue; }
+            if visited[ni] || blocks[ni] {
+                continue;
+            }
             visited[ni] = true;
-            queue[qt] = ni; qt += 1;
+            queue[qt] = ni;
+            qt += 1;
             reachable += 1;
         }
     }
 
-    if reachable != total_passable { return false; }
+    if reachable != total_passable {
+        return false;
+    }
     // Dead-end check omitted: a degree-1 node's sole neighbor is always an AP,
     // so no_articulation_points subsumes it.
     no_articulation_points(blocks)
@@ -80,13 +96,15 @@ fn no_articulation_points(blocks: &[bool; GRID]) -> bool {
         None => return true,
     };
 
-    let mut disc     = [u32::MAX; GRID];
-    let mut low      = [0u32; GRID];
-    let mut par      = [GRID; GRID]; // GRID = no parent (sentinel)
+    let mut disc = [u32::MAX; GRID];
+    let mut low = [0u32; GRID];
+    let mut par = [GRID; GRID]; // GRID = no parent (sentinel)
     let mut children = [0u32; GRID];
-    let mut timer    = 0u32;
+    let mut timer = 0u32;
 
-    disc[start] = timer; low[start] = timer; timer += 1;
+    disc[start] = timer;
+    low[start] = timer;
+    timer += 1;
     let mut stk = [(0usize, 0usize); GRID]; // (node, next_dir_idx)
     let mut stk_top = 1usize;
     stk[0] = (start, 0);
@@ -98,29 +116,42 @@ fn no_articulation_points(blocks: &[bool; GRID]) -> bool {
             stk_top -= 1;
             if stk_top > 0 {
                 let p = stk[stk_top - 1].0;
-                if low[u] < low[p] { low[p] = low[u]; }
-                if par[p] != GRID && low[u] >= disc[p] { return false; }
+                if low[u] < low[p] {
+                    low[p] = low[u];
+                }
+                if par[p] != GRID && low[u] >= disc[p] {
+                    return false;
+                }
             }
             continue;
         }
 
         stk[stk_top - 1].1 += 1;
 
-        let pu = Pt { x: (u % COLS as usize) as i32, y: (u / COLS as usize) as i32 };
+        let pu = Pt {
+            x: (u % COLS as usize) as i32,
+            y: (u / COLS as usize) as i32,
+        };
         let (dx, dy) = DIRS[di];
         let pv = pu.shifted(dx, dy);
-        if !pv.in_bounds() { continue; }
+        if !pv.in_bounds() {
+            continue;
+        }
         let v = pv.idx();
-        if blocks[v] { continue; }
+        if blocks[v] {
+            continue;
+        }
 
         if disc[v] == u32::MAX {
             par[v] = u;
             children[u] += 1;
-            disc[v] = timer; low[v] = timer; timer += 1;
+            disc[v] = timer;
+            low[v] = timer;
+            timer += 1;
             stk[stk_top] = (v, 0);
             stk_top += 1;
-        } else if v != par[u] {
-            if disc[v] < low[u] { low[u] = disc[v]; }
+        } else if v != par[u] && disc[v] < low[u] {
+            low[u] = disc[v];
         }
     }
 

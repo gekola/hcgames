@@ -9,7 +9,7 @@ Cargo.toml          workspace root (resolver = "2", opt-level = "z" + lto for re
 mise.toml           task runner — primary interface for builds
 games/
   snake/            one crate per game
-lib/                shared crates (cards, minesweeper, screenshot, control)
+lib/                shared crates (cards, minesweeper, screenshot, control, beam_solver)
 xtask/              native-only site generator (see "Site generation" below)
 static/             assets copied verbatim into dist/ (favicon.svg, hotel-scene.svg, robots.txt)
 dist/               build output (git-ignored), served via python HTTP
@@ -61,6 +61,51 @@ WASM target: `wasm32-unknown-unknown`. **Not** wasm-bindgen — macroquad uses m
 5. If `window_width`/`window_height` in `Conf` isn't 900×720, add a case to `xtask::native_size`
 6. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM (also generates `dist/<name>/index.html` — there's no separate dev HTML template to maintain)
 
+## Self-playing solver games (klondike, spider, and similar)
+
+Games where an AI plays itself (not just a level-solving bot like snake/2048) split into
+`game.rs` (rules/state — `Game`, `Move`, `legal_moves()`, `apply()`, `state_hash()`),
+`solver.rs` (move selection), and `main.rs` (rendering + game loop, ticks the solver at a
+fixed interval for watchability). Keep that split for new games in this family.
+
+For move selection smarter than a 1-ply greedy pick, use `lib/beam_solver`
+(`beam_solver::{SearchState, BeamSearch}`) rather than hand-rolling a search loop —
+implement `SearchState` for the game's `Game` type and drive `BeamSearch::choose_move`
+with the game's own `is_pointless`/scoring closures. It's a plain beam search (expand,
+score, truncate to width, carry terminal lines forward unchanged, hard-exclude moves that
+lead back to an already-visited state rather than merely penalizing them) shared by
+Klondike and Spider; see either's `solver.rs` for a reference implementation.
+
+## Native CLI flags (every game)
+
+Every game — not just this solver family — takes the same native-only CLI flags (see
+any game's `main.rs` `parse_cli_args`/`run_headless`, or `lib/minesweeper/src/lib.rs`
+for a game sharing one `run`/`run_headless` pair across two thin binaries):
+
+| Flag | Behavior |
+|------|----------|
+| `--debug` | Print every move/tick/action to stderr (a raw-candidates dump on stall too, for the beam-search games) |
+| `--once` | Play one episode to its natural end (Won/Stuck, game-over, level-solved, …), print a `result=...` line, exit |
+| `--variant <...>` | Klondike/Spider only — pin the starting variant/mode instead of the default rotation. Games without a selectable mode don't have this flag |
+| `--no-ui` | Skip macroquad/window/GL setup entirely (manual `fn main()` branching *before* calling `macroquad::Window::from_config` — `#[macroquad::main]` initializes the window unconditionally, too late to skip it) |
+
+`--no-ui` plus `--once` plus `HCG_SEED=<n>` (env var, already read by `screenshot::seed()`)
+is the standard way to reproduce and benchmark a specific game deterministically —
+prefer it over a windowed process, which paces moves at the interactive tick rate and can
+take real minutes per game for no algorithmic reason. Always benchmark/soak-test compute
+cost with `--release`: a beam search that's sub-millisecond per move in release can be
+~100x slower in a debug build.
+
+For a game whose "tick" needs a real `dt`/timestamp (animation speed, phase-transition
+timers — e.g. arrow-blocks, game2048) rather than a discrete move list, `run_headless`
+drives a fixed virtual `dt` forward each iteration instead of reading
+`get_frame_time()`/`miniquad::date::now()`, so it still runs flat-out with no window.
+
+Add these flags to any new game in the same shape, even one-off scripts: a plain
+(non-`#[macroquad::main]`) `fn main()` that parses args first, then either calls
+`run_headless(cli)` directly or `macroquad::Window::from_config(conf(), amain(cli))` —
+never the macro, since it initializes the window before `main()`'s body runs at all.
+
 ## In-game controls (all games)
 
 Every game uses `lib/control` (`Control::new()`, call `handle_keys()` once per frame, feed
@@ -78,6 +123,14 @@ before the wasm module loads) rather than wasm-bindgen; see "WASM caveats" below
 pure page-level HTML/CSS/JS (`xtask::hotkey_popup`, `xtask::screenshot_bridge`), not drawn
 by the games themselves. If you add a new hotkey to `control::Control`, update the `dl` in
 `hotkey_popup()` to match, or the popup will lie.
+
+When adding a new selectable mode/variant to an existing game, prefer folding it into an
+existing cycling hotkey (e.g. klondike/spider's `V` variant cycle) over adding a dedicated
+new key — even if the mode should stay out of the *automatic* rotation (an `Auto` mode
+that self-alternates by generation). An explicit key press reaching a mode via the
+existing cycle still counts as "explicit select"; it just shouldn't be something `Auto`
+lands on by itself. Only add a new hotkey if the existing control genuinely can't express
+the distinction.
 
 **Canvas sizing is load-bearing**: games draw at absolute pixel coordinates assuming the
 canvas is exactly their native `window_width`/`window_height` — none of them scale drawing
@@ -99,3 +152,17 @@ without also making every game's drawing code scale-aware.
   `load(...)` instantiates the module; Rust then declares a matching `unsafe extern "C"`
   fn. `control::ga_event` / `xtask::analytics_bridge` is the reference example — strings
   cross as `(ptr, len)` pairs, decoded JS-side with the bundle's own global `UTF8ToString`.
+
+## After a significant change
+
+Once a piece of work lands (a new game/variant, an architectural change like extracting a
+shared lib, a fixed bug whose cause wasn't obvious, a measured before/after result) — before
+ending the turn:
+
+1. Save whatever's durably worth remembering to memory (per the memory-system instructions
+   already in context) — project facts, feedback/corrections, and non-obvious lessons, not
+   things re-derivable by reading the code.
+2. If the change is the kind this file should reflect (a new convention, a new shared crate,
+   a new standard pattern future work should follow — not a one-off bugfix or tuning pass),
+   either update this file directly or explicitly ask whether it should be updated. Don't
+   let CLAUDE.md silently drift out of date with the conventions it's supposed to document.

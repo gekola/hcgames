@@ -1,12 +1,12 @@
-use std::collections::HashSet;
-use macroquad::prelude::*;
 use cards::card::Card;
 use cards::render::{draw_card_back, draw_card_face, draw_empty_slot};
+use macroquad::prelude::*;
+use std::collections::HashSet;
 
 mod game;
 mod solver;
 
-use game::{Game, Move, Phase, NUM_COLS, TOTAL_RUNS};
+use game::{Game, Move, NUM_COLS, Phase, TOTAL_RUNS};
 use solver::Solver;
 
 const TICK: f32 = 0.16;
@@ -30,12 +30,20 @@ impl Layout {
         let sw = screen_width();
         let sh = screen_height();
         let avail_w = sw - 20.0;
-        let cw = ((avail_w - 9.0 * 10.0) / NUM_COLS as f32).min(78.0).max(26.0);
+        let cw = ((avail_w - 9.0 * 10.0) / NUM_COLS as f32).clamp(26.0, 78.0);
         let ch = cw * 1.40;
         let gap = ((avail_w - NUM_COLS as f32 * cw) / (NUM_COLS as f32 - 1.0)).max(3.0);
         let top_y = 42.0;
         let tab_y = top_y + ch + 16.0;
-        Self { cw, ch, gap, ox: 10.0, top_y, tab_y, sh }
+        Self {
+            cw,
+            ch,
+            gap,
+            ox: 10.0,
+            top_y,
+            tab_y,
+            sh,
+        }
     }
 
     fn col_x(&self, i: usize) -> f32 {
@@ -111,7 +119,14 @@ fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard
                 let card = game.stock[game.stock.len() - 1 - i];
                 let (x0, y0) = layout.stock_pos();
                 let (x1, y1) = layout.tableau_top_pos(&after, i);
-                FlyingCard { card, x0, y0, x1, y1, hide_at: None }
+                FlyingCard {
+                    card,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    hide_at: None,
+                }
             })
             .collect(),
 
@@ -128,7 +143,14 @@ fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard
                     // from the now-shorter length would underflow `usize` (wrapping to
                     // near-u64::MAX in release builds) and hang the position-offset loop.
                     let (x1, y1) = layout.tableau_card_pos(&after, to, game.tableau[to].len() + i);
-                    FlyingCard { card, x0, y0, x1, y1, hide_at: Some((from, card_idx)) }
+                    FlyingCard {
+                        card,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        hide_at: Some((from, card_idx)),
+                    }
                 })
                 .collect()
         }
@@ -249,12 +271,21 @@ fn parse_cli_args() -> CliArgs {
         i += 1;
     }
 
-    CliArgs { debug, once, variant, no_ui }
+    CliArgs {
+        debug,
+        once,
+        variant,
+        no_ui,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 fn parse_cli_args() -> CliArgs {
-    CliArgs { debug: false, once: false, variant: None }
+    CliArgs {
+        debug: false,
+        once: false,
+        variant: None,
+    }
 }
 
 fn log_move(debug: bool, game: &Game, m: Move) {
@@ -314,7 +345,11 @@ fn run_headless(cli: CliArgs) -> ! {
                 if cli.once {
                     println!(
                         "result={} variant={}-suit moves={} completed={}/{}",
-                        if game.phase == Phase::Won { "won" } else { "stuck" },
+                        if game.phase == Phase::Won {
+                            "won"
+                        } else {
+                            "stuck"
+                        },
                         game.n_suits,
                         game.moves,
                         game.completed,
@@ -415,7 +450,11 @@ async fn amain(cli: CliArgs) {
                 if cli.once {
                     println!(
                         "result={} variant={}-suit moves={} completed={}/{}",
-                        if game.phase == Phase::Won { "won" } else { "stuck" },
+                        if game.phase == Phase::Won {
+                            "won"
+                        } else {
+                            "stuck"
+                        },
                         game.n_suits,
                         game.moves,
                         game.completed,
@@ -440,7 +479,8 @@ async fn amain(cli: CliArgs) {
             }
         }
 
-        let in_flight: HashSet<(usize, usize)> = flying.iter().filter_map(|fc| fc.hide_at).collect();
+        let in_flight: HashSet<(usize, usize)> =
+            flying.iter().filter_map(|fc| fc.hide_at).collect();
 
         clear_background(Color::new(0.10, 0.22, 0.14, 1.0));
         draw_hud(&game, mode.label(), &control.label());
@@ -503,7 +543,13 @@ fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
 // ── Game board ────────────────────────────────────────────────────────────────
 
 fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<(usize, usize)>) {
-    let Layout { cw, ch, top_y, tab_y, .. } = *layout;
+    let Layout {
+        cw,
+        ch,
+        top_y,
+        tab_y,
+        ..
+    } = *layout;
 
     // ── Stock ─────────────────────────────────────────────────────────────────
     let (sx, _) = layout.stock_pos();

@@ -220,7 +220,7 @@ impl Game {
         self.moves += 1;
         match m {
             Move::ResetStock => self.no_progress += 1, // full lap completed
-            Move::DrawStock => {}                       // mid-lap, don't count
+            Move::DrawStock => {}                      // mid-lap, don't count
             _ => self.no_progress = 0,                 // productive move resets lap counter
         }
         self.check_phase();
@@ -229,17 +229,25 @@ impl Game {
     pub fn state_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        for c in &self.stock { c.hash(&mut h); }
+        for c in &self.stock {
+            c.hash(&mut h);
+        }
         0u8.hash(&mut h);
-        for c in &self.waste { c.hash(&mut h); }
+        for c in &self.waste {
+            c.hash(&mut h);
+        }
         1u8.hash(&mut h);
         for f in &self.foundations {
-            for c in f { c.hash(&mut h); }
+            for c in f {
+                c.hash(&mut h);
+            }
             2u8.hash(&mut h);
         }
         for (i, t) in self.tableau.iter().enumerate() {
             self.n_down[i].hash(&mut h);
-            for c in t { c.hash(&mut h); }
+            for c in t {
+                c.hash(&mut h);
+            }
             3u8.hash(&mut h);
         }
         h.finish()

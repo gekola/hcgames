@@ -16,7 +16,12 @@ unsafe extern "C" {
 fn ga_event(name: &str, params_json: &str) {
     #[cfg(target_arch = "wasm32")]
     unsafe {
-        hcg_ga_event(name.as_ptr(), name.len() as u32, params_json.as_ptr(), params_json.len() as u32);
+        hcg_ga_event(
+            name.as_ptr(),
+            name.len() as u32,
+            params_json.as_ptr(),
+            params_json.len() as u32,
+        );
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -35,7 +40,11 @@ pub struct Control {
 
 impl Control {
     pub fn new() -> Self {
-        Self { mult: 1.0, paused: false, episode: 0 }
+        Self {
+            mult: 1.0,
+            paused: false,
+            episode: 0,
+        }
     }
 
     pub fn handle_keys(&mut self) {
@@ -60,7 +69,11 @@ impl Control {
 
     /// `x1.000`-style label for the in-canvas HUD, or `PAUSED` when paused.
     pub fn label(&self) -> String {
-        if self.paused { "PAUSED".to_owned() } else { format!("x{:.3}", self.mult) }
+        if self.paused {
+            "PAUSED".to_owned()
+        } else {
+            format!("x{:.3}", self.mult)
+        }
     }
 
     /// Call when a game round ends. Bumps the episode counter and reports it, with the
@@ -69,7 +82,10 @@ impl Control {
         self.episode += 1;
         ga_event(
             "episode_complete",
-            &format!("{{\"game\":\"{game}\",\"episode\":{},\"score\":{score}}}", self.episode),
+            &format!(
+                "{{\"game\":\"{game}\",\"episode\":{},\"score\":{score}}}",
+                self.episode
+            ),
         );
     }
 }

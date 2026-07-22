@@ -85,3 +85,13 @@ mise run generate-index
 [tasks.serve]
 description = "Serve dist/ on http://localhost:8080"
 run = "python3 -m http.server 8080 --directory dist"
+
+# Fast checks, run by the pre-commit hook: mise run check
+[tasks.check]
+description = "Format + lint check (used by the pre-commit hook, see .githooks/pre-commit)"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+"""

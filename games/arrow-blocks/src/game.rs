@@ -28,7 +28,7 @@ impl Block {
     pub fn vis_offset(&self, cell: f32) -> (f32, f32) {
         let (dc, dr) = self.dir.delta();
         let frac = match self.state {
-            BlockState::Exiting   => self.anim_t,
+            BlockState::Exiting => self.anim_t,
             BlockState::ReturnFwd => self.anim_t / 0.5,
             BlockState::ReturnBack => 1.0 - (self.anim_t - 0.5) / 0.5,
             _ => 0.0,
@@ -43,8 +43,8 @@ impl Block {
 pub enum Phase {
     Selecting,
     Considering { idx: usize, until: f64 }, // brief dim-highlight before fire
-    Pause       { until: f64 },             // short gap after firing
-    Done        { since: f64 },
+    Pause { until: f64 },                   // short gap after firing
+    Done { since: f64 },
 }
 
 pub struct Game {
@@ -63,7 +63,9 @@ impl Game {
         let blocks = assignments
             .into_iter()
             .map(|((col, row), dir)| Block {
-                col, row, dir,
+                col,
+                row,
+                dir,
                 state: BlockState::Idle,
                 anim_t: 0.0,
                 anim_max_dist: 0.0,
@@ -74,8 +76,10 @@ impl Game {
         let cy = (FIELD_H / 2) as f32;
         Game {
             blocks,
-            cam_x: cx, cam_y: cy,
-            cam_tx: cx, cam_ty: cy,
+            cam_x: cx,
+            cam_y: cy,
+            cam_tx: cx,
+            cam_ty: cy,
             phase: Phase::Selecting,
             level,
         }
@@ -93,7 +97,9 @@ impl Game {
             match block.state {
                 BlockState::Exiting => {
                     block.anim_t += dt * 12.0 / dist;
-                    if block.anim_t >= 1.0 { block.state = BlockState::Gone; }
+                    if block.anim_t >= 1.0 {
+                        block.state = BlockState::Gone;
+                    }
                 }
                 BlockState::ReturnFwd => {
                     block.anim_t += dt * 12.0 / dist;
@@ -104,7 +110,9 @@ impl Game {
                 }
                 BlockState::ReturnBack => {
                     block.anim_t += dt * 12.0 / dist;
-                    if block.anim_t >= 1.0 { block.state = BlockState::Idle; }
+                    if block.anim_t >= 1.0 {
+                        block.state = BlockState::Idle;
+                    }
                 }
                 _ => {}
             }
@@ -121,7 +129,10 @@ impl Game {
                             self.cam_tx = self.blocks[idx].col as f32;
                             self.cam_ty = self.blocks[idx].row as f32;
                         }
-                        self.phase = Phase::Considering { idx, until: now + 0.35 };
+                        self.phase = Phase::Considering {
+                            idx,
+                            until: now + 0.35,
+                        };
                     }
                     None => {
                         if self.remaining() == 0 {
@@ -163,7 +174,7 @@ impl Game {
         match self.first_blocker_dist(idx) {
             None => {
                 let anim_dist = self.cells_to_edge(idx) as f32;
-                let blocking  = self.cells_to_exit_figure(idx) as f32;
+                let blocking = self.cells_to_exit_figure(idx) as f32;
                 let b = &mut self.blocks[idx];
                 b.state = BlockState::Exiting;
                 b.anim_t = 0.0;
@@ -181,12 +192,16 @@ impl Game {
     }
 
     fn figure_bounds(&self) -> (i32, i32, i32, i32) {
-        let mut min_c = i32::MAX; let mut max_c = i32::MIN;
-        let mut min_r = i32::MAX; let mut max_r = i32::MIN;
+        let mut min_c = i32::MAX;
+        let mut max_c = i32::MIN;
+        let mut min_r = i32::MAX;
+        let mut max_r = i32::MIN;
         for b in &self.blocks {
             if b.state != BlockState::Gone {
-                min_c = min_c.min(b.col); max_c = max_c.max(b.col);
-                min_r = min_r.min(b.row); max_r = max_r.max(b.row);
+                min_c = min_c.min(b.col);
+                max_c = max_c.max(b.col);
+                min_r = min_r.min(b.row);
+                max_r = max_r.max(b.row);
             }
         }
         (min_c, max_c, min_r, max_r)
@@ -197,9 +212,9 @@ impl Game {
         let (min_c, max_c, min_r, max_r) = self.figure_bounds();
         let pad = 3;
         match b.dir {
-            Dir::Up    => (b.row - min_r + pad).max(1),
-            Dir::Down  => (max_r - b.row + pad).max(1),
-            Dir::Left  => (b.col - min_c + pad).max(1),
+            Dir::Up => (b.row - min_r + pad).max(1),
+            Dir::Down => (max_r - b.row + pad).max(1),
+            Dir::Left => (b.col - min_c + pad).max(1),
             Dir::Right => (max_c - b.col + pad).max(1),
         }
     }
@@ -207,9 +222,9 @@ impl Game {
     fn cells_to_edge(&self, idx: usize) -> i32 {
         let b = &self.blocks[idx];
         match b.dir {
-            Dir::Up    => b.row + 1,
-            Dir::Down  => FIELD_H - b.row,
-            Dir::Left  => b.col + 1,
+            Dir::Up => b.row + 1,
+            Dir::Down => FIELD_H - b.row,
+            Dir::Left => b.col + 1,
             Dir::Right => FIELD_W - b.col,
         }
     }
@@ -220,8 +235,12 @@ impl Game {
         let (mut c, mut r) = (b.col + dc, b.row + dr);
         let mut dist = 1;
         while c >= 0 && r >= 0 && c < FIELD_W && r < FIELD_H {
-            if self.occupied(c, r, idx) { return Some(dist); }
-            c += dc; r += dr; dist += 1;
+            if self.occupied(c, r, idx) {
+                return Some(dist);
+            }
+            c += dc;
+            r += dr;
+            dist += 1;
         }
         None
     }
@@ -246,19 +265,28 @@ impl Game {
         let (dc, dr) = b.dir.delta();
         let (mut c, mut r) = (b.col + dc, b.row + dr);
         while c >= 0 && r >= 0 && c < FIELD_W && r < FIELD_H {
-            if let Some(i) = self.blocks.iter().position(|ob| {
-                ob.state != BlockState::Gone && ob.col == c && ob.row == r
-            }) {
-                if i != idx { return Some(i); }
+            if let Some(i) = self
+                .blocks
+                .iter()
+                .position(|ob| ob.state != BlockState::Gone && ob.col == c && ob.row == r)
+                && i != idx
+            {
+                return Some(i);
             }
-            c += dc; r += dr;
+            c += dc;
+            r += dr;
         }
         None
     }
 
     fn find_target(&self) -> Option<usize> {
         let mut idxs: Vec<usize> = (0..self.blocks.len())
-            .filter(|&i| matches!(self.blocks[i].state, BlockState::Idle | BlockState::Considered))
+            .filter(|&i| {
+                matches!(
+                    self.blocks[i].state,
+                    BlockState::Idle | BlockState::Considered
+                )
+            })
             .collect();
         shuffle(&mut idxs);
 
@@ -266,15 +294,22 @@ impl Game {
             let mut visited = HashSet::new();
             let mut cur = start;
             loop {
-                if !visited.insert(cur) { break; }
-                // Never target a block that is already animating
-                if !matches!(self.blocks[cur].state, BlockState::Idle | BlockState::Considered) {
+                if !visited.insert(cur) {
                     break;
                 }
-                if self.is_path_clear(cur) { return Some(cur); }
+                // Never target a block that is already animating
+                if !matches!(
+                    self.blocks[cur].state,
+                    BlockState::Idle | BlockState::Considered
+                ) {
+                    break;
+                }
+                if self.is_path_clear(cur) {
+                    return Some(cur);
+                }
                 match self.blocker_in_dir(cur) {
                     Some(b) => cur = b,
-                    None    => return Some(cur),
+                    None => return Some(cur),
                 }
             }
         }
@@ -282,6 +317,9 @@ impl Game {
     }
 
     pub fn remaining(&self) -> usize {
-        self.blocks.iter().filter(|b| b.state != BlockState::Gone).count()
+        self.blocks
+            .iter()
+            .filter(|b| b.state != BlockState::Gone)
+            .count()
     }
 }

@@ -52,7 +52,12 @@ struct BeamNode<S: SearchState> {
 
 impl<S: SearchState> BeamSearch<S> {
     pub fn new(width: usize, depth: u32, is_revisit_exempt: fn(&S::Move) -> bool) -> Self {
-        Self { width, depth, visited: HashSet::new(), is_revisit_exempt }
+        Self {
+            width,
+            depth,
+            visited: HashSet::new(),
+            is_revisit_exempt,
+        }
     }
 
     /// Picks the best move from `game` by expanding a beam of `width` candidate lines
@@ -108,7 +113,11 @@ impl<S: SearchState> BeamSearch<S> {
                 let mut g = game.clone();
                 g.apply(m);
                 let score = score_root(game, &g, &m);
-                BeamNode { game: g, first_move: m, score }
+                BeamNode {
+                    game: g,
+                    first_move: m,
+                    score,
+                }
             })
             .collect();
         beam.sort_unstable_by_key(|n| std::cmp::Reverse(n.score));
@@ -146,7 +155,11 @@ impl<S: SearchState> BeamSearch<S> {
                     let mut g = node.game.clone();
                     g.apply(m);
                     let step = score_step(&node.game, &g, &m);
-                    next.push(BeamNode { game: g, first_move: node.first_move, score: node.score + step });
+                    next.push(BeamNode {
+                        game: g,
+                        first_move: node.first_move,
+                        score: node.score + step,
+                    });
                 }
             }
 

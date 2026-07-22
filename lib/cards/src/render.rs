@@ -1,5 +1,5 @@
-use macroquad::prelude::*;
 use crate::card::Card;
+use macroquad::prelude::*;
 
 pub const RANK_STRS: [&str; 13] = [
     "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K",
@@ -19,12 +19,12 @@ fn suit_color(suit: u8) -> Color {
 // ── Rounded rectangle helpers ─────────────────────────────────────────────────
 
 fn draw_rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
-    draw_rectangle(x + r, y,         w - 2.0 * r, h,         color);
-    draw_rectangle(x,     y + r,     r,            h - 2.0*r, color);
-    draw_rectangle(x+w-r, y + r,     r,            h - 2.0*r, color);
-    draw_circle(x + r,     y + r,     r, color);
-    draw_circle(x + w - r, y + r,     r, color);
-    draw_circle(x + r,     y + h - r, r, color);
+    draw_rectangle(x + r, y, w - 2.0 * r, h, color);
+    draw_rectangle(x, y + r, r, h - 2.0 * r, color);
+    draw_rectangle(x + w - r, y + r, r, h - 2.0 * r, color);
+    draw_circle(x + r, y + r, r, color);
+    draw_circle(x + w - r, y + r, r, color);
+    draw_circle(x + r, y + h - r, r, color);
     draw_circle(x + w - r, y + h - r, r, color);
 }
 
@@ -48,14 +48,14 @@ fn corner_arc(cx: f32, cy: f32, outer_r: f32, start_deg: f32, thickness: f32, co
 }
 
 fn draw_rounded_rect_border(x: f32, y: f32, w: f32, h: f32, r: f32, t: f32, color: Color) {
-    draw_rectangle(x + r,     y,         w - 2.0*r, t,         color);
-    draw_rectangle(x + r,     y + h - t, w - 2.0*r, t,         color);
-    draw_rectangle(x,         y + r,     t,          h - 2.0*r, color);
-    draw_rectangle(x + w - t, y + r,     t,          h - 2.0*r, color);
-    corner_arc(x + r,     y + r,     r, 180.0, t, color);
-    corner_arc(x + w - r, y + r,     r, 270.0, t, color);
-    corner_arc(x + w - r, y + h - r, r,   0.0, t, color);
-    corner_arc(x + r,     y + h - r, r,  90.0, t, color);
+    draw_rectangle(x + r, y, w - 2.0 * r, t, color);
+    draw_rectangle(x + r, y + h - t, w - 2.0 * r, t, color);
+    draw_rectangle(x, y + r, t, h - 2.0 * r, color);
+    draw_rectangle(x + w - t, y + r, t, h - 2.0 * r, color);
+    corner_arc(x + r, y + r, r, 180.0, t, color);
+    corner_arc(x + w - r, y + r, r, 270.0, t, color);
+    corner_arc(x + w - r, y + h - r, r, 0.0, t, color);
+    corner_arc(x + r, y + h - r, r, 90.0, t, color);
 }
 
 // ── Suit shape helpers ────────────────────────────────────────────────────────
@@ -65,10 +65,10 @@ fn draw_rounded_rect_border(x: f32, y: f32, w: f32, h: f32, r: f32, t: f32, colo
 // Works for both normal (bot_y > apex_y) and flipped (bot_y < apex_y) orientation.
 fn draw_stem(cx: f32, apex_y: f32, bot_y: f32, bw: f32, col: Color) {
     let apex = vec2(cx, apex_y);
-    let pr   = vec2(cx + bw, bot_y);
-    let pl   = vec2(cx - bw, bot_y);
+    let pr = vec2(cx + bw, bot_y);
+    let pl = vec2(cx - bw, bot_y);
     let ctrl = vec2(cx, apex_y + (bot_y - apex_y) * 0.70);
-    let bz   = |p0: Vec2, p1: Vec2, p2: Vec2, t: f32| -> Vec2 {
+    let bz = |p0: Vec2, p1: Vec2, p2: Vec2, t: f32| -> Vec2 {
         let u = 1.0 - t;
         p0 * (u * u) + p1 * (2.0 * t * u) + p2 * (t * t)
     };
@@ -87,8 +87,18 @@ fn draw_stem(cx: f32, apex_y: f32, bot_y: f32, bw: f32, col: Color) {
 fn draw_diamond(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
     let hw = size * 0.40;
     let hh = size * 0.54;
-    draw_triangle(vec2(cx, cy - hh * y_sign), vec2(cx - hw, cy), vec2(cx + hw, cy), col);
-    draw_triangle(vec2(cx, cy + hh * y_sign), vec2(cx - hw, cy), vec2(cx + hw, cy), col);
+    draw_triangle(
+        vec2(cx, cy - hh * y_sign),
+        vec2(cx - hw, cy),
+        vec2(cx + hw, cy),
+        col,
+    );
+    draw_triangle(
+        vec2(cx, cy + hh * y_sign),
+        vec2(cx - hw, cy),
+        vec2(cx + hw, cy),
+        col,
+    );
 }
 
 fn draw_heart(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
@@ -97,10 +107,7 @@ fn draw_heart(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
     let y_c = -2.7_f32;
     let pt = |t: f32| {
         let x = 16.0 * t.sin().powi(3);
-        let y = 13.0 * t.cos()
-            - 5.0 * (2.0 * t).cos()
-            - 2.0 * (3.0 * t).cos()
-            - (4.0 * t).cos();
+        let y = 13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos();
         vec2(cx + x * sx, cy + (y_c - y) * sy * y_sign)
     };
     for i in 0..32u32 {
@@ -118,10 +125,7 @@ fn draw_spade(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
 
     let pt = |t: f32| {
         let x = 16.0 * t.sin().powi(3);
-        let y = 13.0 * t.cos()
-            - 5.0 * (2.0 * t).cos()
-            - 2.0 * (3.0 * t).cos()
-            - (4.0 * t).cos();
+        let y = 13.0 * t.cos() - 5.0 * (2.0 * t).cos() - 2.0 * (3.0 * t).cos() - (4.0 * t).cos();
         vec2(cx + x * sx, body_cy + (y - y_c) * sy * y_sign)
     };
     let notch_y = body_cy + 7.7 * sy * y_sign;
@@ -137,7 +141,7 @@ fn draw_spade(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
 
 fn draw_club(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
     let r = size * 0.23;
-    let ca = vec2(cx,             cy - r * 0.65 * y_sign);
+    let ca = vec2(cx, cy - r * 0.65 * y_sign);
     let cb = vec2(cx - r * 0.88, cy + r * 0.36 * y_sign);
     let cc = vec2(cx + r * 0.88, cy + r * 0.36 * y_sign);
 
@@ -155,7 +159,7 @@ fn draw_club(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
         let centroid = (ca + cb + cc) / 3.0;
         const N: usize = 72;
         let mut pts = [Vec2::ZERO; N];
-        for i in 0..N {
+        for (i, pt) in pts.iter_mut().enumerate() {
             let angle = i as f32 / N as f32 * TAU;
             let dir = vec2(angle.cos(), angle.sin());
             let mut max_t = 0.0f32;
@@ -165,17 +169,19 @@ fn draw_club(cx: f32, cy: f32, size: f32, col: Color, y_sign: f32) {
                 let disc = b * b - (oc.dot(oc) - r * r);
                 if disc >= 0.0 {
                     let t = -b + disc.sqrt();
-                    if t > max_t { max_t = t; }
+                    if t > max_t {
+                        max_t = t;
+                    }
                 }
             }
-            pts[i] = centroid + dir * max_t;
+            *pt = centroid + dir * max_t;
         }
         for i in 0..N {
             draw_triangle(centroid, pts[i], pts[(i + 1) % N], col);
         }
     }
 
-    let st   = cy + r * 0.35 * y_sign;
+    let st = cy + r * 0.35 * y_sign;
     let bbot = st + size * 0.40 * y_sign;
     draw_stem(cx, st, bbot, size * 0.18, col);
 }
@@ -209,11 +215,11 @@ pub fn draw_card_face(x: f32, y: f32, w: f32, h: f32, card: Card) {
     draw_rounded_rect(x, y, w, h, r, Color::new(0.97, 0.96, 0.93, 1.0));
     draw_rounded_rect_border(x, y, w, h, r, 2.5, Color::new(0.45, 0.45, 0.50, 1.0));
 
-    let col  = suit_color(card.suit);
+    let col = suit_color(card.suit);
     let rank = RANK_STRS[card.rank as usize];
-    let pad  = (w * 0.07).max(3.0);
-    let fs   = (h * 0.175).max(9.0);
-    let sym  = fs * 0.72; // fits within cap-height of font line
+    let pad = (w * 0.07).max(3.0);
+    let fs = (h * 0.175).max(9.0);
+    let sym = fs * 0.72; // fits within cap-height of font line
 
     let rd = measure_text(rank, None, fs as u16, 1.0);
     // offset from text baseline to vertical center of glyphs (~cap-height midpoint)
@@ -225,7 +231,9 @@ pub fn draw_card_face(x: f32, y: f32, w: f32, h: f32, card: Card) {
     draw_suit_symbol(
         x + pad + rd.width + fs * 0.06 + sym * 0.5,
         tl_base - mid,
-        sym, card.suit, col,
+        sym,
+        card.suit,
+        col,
     );
 
     // centre suit (large)
@@ -239,11 +247,20 @@ pub fn draw_card_face(x: f32, y: f32, w: f32, h: f32, card: Card) {
     draw_suit_symbol_flipped(
         br_x - rd.width - fs * 0.06 - sym * 0.5,
         br_y + mid,
-        sym, card.suit, col,
+        sym,
+        card.suit,
+        col,
     );
     draw_text_ex(
-        rank, br_x, br_y,
-        TextParams { font_size: fs as u16, rotation: PI, color: col, ..Default::default() },
+        rank,
+        br_x,
+        br_y,
+        TextParams {
+            font_size: fs as u16,
+            rotation: PI,
+            color: col,
+            ..Default::default()
+        },
     );
 }
 
@@ -253,8 +270,12 @@ pub fn draw_card_back(x: f32, y: f32, w: f32, h: f32) {
     draw_rounded_rect_border(x, y, w, h, r, 2.5, Color::new(0.55, 0.60, 0.84, 0.90));
     let m = (w * 0.10).max(3.0);
     draw_rounded_rect_border(
-        x + m, y + m, w - 2.0 * m, h - 2.0 * m,
-        (r * 0.5).max(1.5), 1.5,
+        x + m,
+        y + m,
+        w - 2.0 * m,
+        h - 2.0 * m,
+        (r * 0.5).max(1.5),
+        1.5,
         Color::new(0.32, 0.48, 0.85, 0.50),
     );
 }

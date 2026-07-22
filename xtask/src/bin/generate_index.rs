@@ -3,8 +3,7 @@ use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{base_url, favicon_links, gtag_head, social_image, title};
 
-const SITE_DESCRIPTION: &str =
-    "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
+const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
 const STYLE: &str = r#"
 :root { color-scheme: dark; }
@@ -277,7 +276,10 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
 "#;
 
 const QUOTES: &[(&str, &str)] = &[
-    ("Gaming is solved.", "a man in a hoodie who discovered Pong last Tuesday"),
+    (
+        "Gaming is solved.",
+        "a man in a hoodie who discovered Pong last Tuesday",
+    ),
     (
         "I haven't pressed a button in weeks. I just describe my intended gameplay and the AI plays for me.",
         "a thought leader on the future of fun",
@@ -294,7 +296,10 @@ const QUOTES: &[(&str, &str)] = &[
         "The era of human gameplay is over. These are the last games played by hand.",
         "a VC who just funded an AI esports team",
     ),
-    ("No one will need gamers in 6 months.", "someone who has never finished a game in their life"),
+    (
+        "No one will need gamers in 6 months.",
+        "someone who has never finished a game in their life",
+    ),
 ];
 
 fn main() {
@@ -364,12 +369,19 @@ fn main() {
     let today = time::OffsetDateTime::now_utc().date();
     let mut urls = vec![base_url.clone()];
     urls.extend(games.iter().map(|g| format!("{base_url}{g}/")));
-    let mut sitemap = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+    let mut sitemap = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+    );
     for url in &urls {
-        sitemap.push_str(&format!("  <url><loc>{url}</loc><lastmod>{today}</lastmod></url>\n"));
+        sitemap.push_str(&format!(
+            "  <url><loc>{url}</loc><lastmod>{today}</lastmod></url>\n"
+        ));
     }
     sitemap.push_str("</urlset>\n");
     std::fs::write(dist.join("sitemap.xml"), sitemap).unwrap();
 
-    println!("wrote dist/index.html and dist/sitemap.xml ({} game(s))", games.len());
+    println!(
+        "wrote dist/index.html and dist/sitemap.xml ({} game(s))",
+        games.len()
+    );
 }

@@ -1,7 +1,7 @@
+use crate::blocks::generate_blocks;
+use crate::{BLOCK_SENTINEL, COLS, DIRS, GRID, Pt, ROWS};
 use macroquad::prelude::*;
 use std::collections::{HashSet, VecDeque};
-use crate::{Pt, COLS, ROWS, GRID, DIRS, BLOCK_SENTINEL};
-use crate::blocks::generate_blocks;
 
 pub struct Game {
     pub body: VecDeque<Pt>,
@@ -19,12 +19,29 @@ impl Game {
     pub fn new(generation: u32) -> Self {
         let blocks = generate_blocks();
         let mut block_bg = [u16::MAX; GRID];
-        for i in 0..GRID { if blocks[i] { block_bg[i] = BLOCK_SENTINEL; } }
-        let head = Pt { x: COLS / 2, y: ROWS / 2 };
+        for i in 0..GRID {
+            if blocks[i] {
+                block_bg[i] = BLOCK_SENTINEL;
+            }
+        }
+        let head = Pt {
+            x: COLS / 2,
+            y: ROWS / 2,
+        };
         let body = VecDeque::from([head]);
         let body_set: HashSet<Pt> = [head].into_iter().collect();
         let food = spawn_food(&body_set, &blocks);
-        Self { body, body_set, dir: (1, 0), food, score: 0, generation, blocks, block_bg, ticks_hungry: 0 }
+        Self {
+            body,
+            body_set,
+            dir: (1, 0),
+            food,
+            score: 0,
+            generation,
+            blocks,
+            block_bg,
+            ticks_hungry: 0,
+        }
     }
 
     pub fn tick(&mut self) -> bool {
@@ -78,17 +95,24 @@ impl Game {
         let mut queue = [Pt { x: 0, y: 0 }; GRID];
         let (mut qh, mut qt) = (0, 0);
         dist[self.food.idx()] = 0;
-        queue[qt] = self.food; qt += 1;
+        queue[qt] = self.food;
+        qt += 1;
         while qh < qt {
-            let cur = queue[qh]; qh += 1;
+            let cur = queue[qh];
+            qh += 1;
             let d = dist[cur.idx()];
             for (dx, dy) in DIRS {
                 let nb = cur.shifted(dx, dy);
-                if !nb.in_bounds() { continue; }
+                if !nb.in_bounds() {
+                    continue;
+                }
                 let ni = nb.idx();
-                if dist[ni] != u16::MAX || bg[ni] == BLOCK_SENTINEL { continue; }
+                if dist[ni] != u16::MAX || bg[ni] == BLOCK_SENTINEL {
+                    continue;
+                }
                 dist[ni] = d + 1;
-                queue[qt] = nb; qt += 1;
+                queue[qt] = nb;
+                qt += 1;
             }
         }
         dist
@@ -115,16 +139,31 @@ impl Game {
             .unwrap_or(u16::MAX);
 
         for (dx, dy) in DIRS {
-            if n > 1 && (dx, dy) == (-self.dir.0, -self.dir.1) { continue; }
-            if tail_dir == Some((dx, dy)) { continue; }
+            if n > 1 && (dx, dy) == (-self.dir.0, -self.dir.1) {
+                continue;
+            }
+            if tail_dir == Some((dx, dy)) {
+                continue;
+            }
             let nb = head.shifted(dx, dy);
-            if !nb.in_bounds() { continue; }
-            if bg[nb.idx()] != u16::MAX { continue; }
-            if self.time_flood(nb, n.saturating_sub(1), bg) < n { continue; }
+            if !nb.in_bounds() {
+                continue;
+            }
+            if bg[nb.idx()] != u16::MAX {
+                continue;
+            }
+            if self.time_flood(nb, n.saturating_sub(1), bg) < n {
+                continue;
+            }
             // Reject moves that seal the tail off (e.g. filling the last cell of a row).
-            if self.bfs_to(nb, tail, bg).is_none() { continue; }
+            if self.bfs_to(nb, tail, bg).is_none() {
+                continue;
+            }
             let d = fdist[nb.idx()];
-            if d < best_dist { best_dist = d; best = Some((dx, dy)); }
+            if d < best_dist {
+                best_dist = d;
+                best = Some((dx, dy));
+            }
         }
 
         // Fall back to tail_dir even if flood is low, then max_space as last resort.
@@ -141,42 +180,60 @@ impl Game {
     }
 
     fn bfs_to(&self, from: Pt, to: Pt, bg: &[u16; GRID]) -> Option<(usize, (i32, i32))> {
-        if from == to { return None; }
+        if from == to {
+            return None;
+        }
         let n = self.body.len();
 
-        let mut dist   = [u16::MAX; GRID];
+        let mut dist = [u16::MAX; GRID];
         let mut parent = [u16::MAX; GRID];
-        let mut queue  = [Pt { x: 0, y: 0 }; GRID];
+        let mut queue = [Pt { x: 0, y: 0 }; GRID];
         let (mut qh, mut qt) = (0, 0);
 
         dist[from.idx()] = 0;
         parent[from.idx()] = from.idx() as u16;
-        queue[qt] = from; qt += 1;
+        queue[qt] = from;
+        qt += 1;
 
         while qh < qt {
-            let cur = queue[qh]; qh += 1;
+            let cur = queue[qh];
+            qh += 1;
             let t = dist[cur.idx()] as usize;
             for (dx, dy) in DIRS {
                 let nb = cur.shifted(dx, dy);
-                if !nb.in_bounds() { continue; }
+                if !nb.in_bounds() {
+                    continue;
+                }
                 let ni = nb.idx();
-                if dist[ni] != u16::MAX { continue; }
+                if dist[ni] != u16::MAX {
+                    continue;
+                }
                 let t1 = t + 1;
                 let bj = bg[ni];
-                if bj == BLOCK_SENTINEL { continue; }
-                if bj != u16::MAX && n.saturating_sub(bj as usize) >= t1 { continue; }
+                if bj == BLOCK_SENTINEL {
+                    continue;
+                }
+                if bj != u16::MAX && n.saturating_sub(bj as usize) >= t1 {
+                    continue;
+                }
                 dist[ni] = t1 as u16;
                 parent[ni] = cur.idx() as u16;
                 if nb == to {
                     let mut c = nb;
                     loop {
                         let pi = parent[c.idx()] as usize;
-                        let p = Pt { x: (pi % COLS as usize) as i32, y: (pi / COLS as usize) as i32 };
-                        if p == from { return Some((t1, (c.x - p.x, c.y - p.y))); }
+                        let p = Pt {
+                            x: (pi % COLS as usize) as i32,
+                            y: (pi / COLS as usize) as i32,
+                        };
+                        if p == from {
+                            return Some((t1, (c.x - p.x, c.y - p.y)));
+                        }
                         c = p;
                     }
                 }
-                queue[qt] = nb; qt += 1;
+                queue[qt] = nb;
+                qt += 1;
             }
         }
         None
@@ -184,24 +241,35 @@ impl Game {
 
     fn time_flood(&self, start: Pt, still_blocked: usize, bg: &[u16; GRID]) -> usize {
         let mut visited = [false; GRID];
-        let mut queue   = [Pt { x: 0, y: 0 }; GRID];
+        let mut queue = [Pt { x: 0, y: 0 }; GRID];
         let (mut qh, mut qt) = (0, 0);
         visited[start.idx()] = true;
-        queue[qt] = start; qt += 1;
+        queue[qt] = start;
+        qt += 1;
         let mut count = 1usize;
 
         while qh < qt {
-            let cur = queue[qh]; qh += 1;
+            let cur = queue[qh];
+            qh += 1;
             for (dx, dy) in DIRS {
                 let nb = cur.shifted(dx, dy);
-                if !nb.in_bounds() { continue; }
+                if !nb.in_bounds() {
+                    continue;
+                }
                 let ni = nb.idx();
-                if visited[ni] { continue; }
+                if visited[ni] {
+                    continue;
+                }
                 let bj = bg[ni];
-                if bj == BLOCK_SENTINEL { continue; }
-                if bj != u16::MAX && (bj as usize) < still_blocked { continue; }
+                if bj == BLOCK_SENTINEL {
+                    continue;
+                }
+                if bj != u16::MAX && (bj as usize) < still_blocked {
+                    continue;
+                }
                 visited[ni] = true;
-                queue[qt] = nb; qt += 1;
+                queue[qt] = nb;
+                qt += 1;
                 count += 1;
             }
         }
@@ -215,13 +283,22 @@ impl Game {
         let mut best_n = 0;
 
         for (dx, dy) in DIRS {
-            if n > 1 && (dx, dy) == (-self.dir.0, -self.dir.1) { continue; }
+            if n > 1 && (dx, dy) == (-self.dir.0, -self.dir.1) {
+                continue;
+            }
             let nb = head.shifted(dx, dy);
-            if !nb.in_bounds() { continue; }
+            if !nb.in_bounds() {
+                continue;
+            }
             let bj = bg[nb.idx()];
-            if bj != u16::MAX { continue; }
+            if bj != u16::MAX {
+                continue;
+            }
             let count = self.time_flood(nb, n.saturating_sub(1), bg);
-            if count > best_n { best_n = count; best = (dx, dy); }
+            if count > best_n {
+                best_n = count;
+                best = (dx, dy);
+            }
         }
         best
     }
@@ -229,7 +306,10 @@ impl Game {
 
 fn spawn_food(body_set: &HashSet<Pt>, blocks: &[bool; GRID]) -> Pt {
     loop {
-        let p = Pt { x: rand::gen_range(0, COLS), y: rand::gen_range(0, ROWS) };
+        let p = Pt {
+            x: rand::gen_range(0, COLS),
+            y: rand::gen_range(0, ROWS),
+        };
         if !body_set.contains(&p) && !blocks[p.idx()] {
             return p;
         }
