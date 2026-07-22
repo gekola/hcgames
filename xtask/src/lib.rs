@@ -177,7 +177,11 @@ pub fn description(name: &str) -> String {
     }
 }
 
-/// `<script>` tags loading + configuring Google Analytics, or empty markup when `GTAG_ID` is unset.
+/// Sets up the `dataLayer`/`gtag()` stub eagerly (so early `episode_complete` calls still
+/// queue), but defers actually fetching `gtag.js` itself until the first user interaction
+/// — it's ~67 KiB of mostly-unused-at-load JS that Lighthouse flags, and a self-playing
+/// game doesn't need analytics wired before first paint. Queued `dataLayer` entries are
+/// processed by `gtag.js` once it does load. A no-op when `GTAG_ID` is unset locally.
 pub fn gtag_head() -> Markup {
     let Ok(gtag_id) = std::env::var("GTAG_ID") else {
         return html! {};
@@ -186,13 +190,24 @@ pub fn gtag_head() -> Markup {
         return html! {};
     }
     html! {
-        script async src=(format!("https://www.googletagmanager.com/gtag/js?id={gtag_id}")) {}
         script {
             (PreEscaped(format!(
                 "window.dataLayer = window.dataLayer || [];\n\
                  function gtag(){{dataLayer.push(arguments);}}\n\
                  gtag('js', new Date());\n\
-                 gtag('config', '{gtag_id}');",
+                 gtag('config', '{gtag_id}');\n\
+                 function hcgLoadGtag() {{\n\
+                 \x20 var s = document.createElement('script');\n\
+                 \x20 s.async = true;\n\
+                 \x20 s.src = 'https://www.googletagmanager.com/gtag/js?id={gtag_id}';\n\
+                 \x20 document.head.appendChild(s);\n\
+                 \x20 ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(function(e) {{\n\
+                 \x20   document.removeEventListener(e, hcgLoadGtag);\n\
+                 \x20 }});\n\
+                 }}\n\
+                 ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(function(e) {{\n\
+                 \x20 document.addEventListener(e, hcgLoadGtag, {{ once: true, passive: true }});\n\
+                 }});",
             )))
         }
     }

@@ -19,7 +19,11 @@ set -euo pipefail
 name=$1
 RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin "$name"
 mkdir -p "dist/$name"
-cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
+if command -v wasm-opt >/dev/null; then
+  wasm-opt -Oz --all-features -o "dist/$name/$name.wasm" "target/$WASM_TARGET/release/$name.wasm"
+else
+  cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
+fi
 mise run screenshot "$name"
 cargo run --release --package xtask --bin generate_game_html -- "$name"
 # Shared across all games (dist/mq_js_bundle.js, not dist/<name>/) so it's fetched and

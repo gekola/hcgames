@@ -33,6 +33,7 @@ fn main() {
                 meta property="og:image" content=(og.url);
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
+                link rel="preload" href=(format!("{name}.wasm")) as="fetch" crossorigin="anonymous";
                 (gtag_head())
                 (native_size_style(&name))
             }
