@@ -56,7 +56,8 @@ pub fn native_size_style(name: &str) -> Markup {
                 "* {{ margin: 0; padding: 0; box-sizing: border-box; }}\n\
                  html, body {{ height: 100%; overflow: hidden; background: #000; }}\n\
                  body {{ display: flex; align-items: center; justify-content: center; }}\n\
-                 canvas {{ display: block; width: {w}px; height: {h}px; transform-origin: center; outline: none; }}"
+                 canvas {{ display: block; width: {w}px; height: {h}px; transform-origin: center; outline: none; }}\n\
+                 {POPUP_CSS}"
             )))
         }
         script {
@@ -67,6 +68,97 @@ pub fn native_size_style(name: &str) -> Markup {
                  }}\n\
                  window.addEventListener('resize', fitCanvas);\n\
                  document.addEventListener('DOMContentLoaded', fitCanvas);"
+            )))
+        }
+    }
+}
+
+const POPUP_CSS: &str = "\
+#hotkeys { display: none; position: fixed; inset: 0; z-index: 10; \
+background: rgba(0,0,0,0.75); align-items: center; justify-content: center; \
+font-family: system-ui, sans-serif; }\n\
+#hotkeys.open { display: flex; }\n\
+#hotkeys .panel { background: #1a1a1f; color: #eee; border-radius: 8px; \
+padding: 20px 28px; min-width: 220px; }\n\
+#hotkeys h2 { font-size: 16px; margin-bottom: 12px; }\n\
+#hotkeys dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; \
+font-size: 14px; margin: 0; }\n\
+#hotkeys dt { font-family: monospace; color: #8cf; }\n\
+#hotkeys dd { margin: 0; color: #ccc; }";
+
+/// The `?`-toggled, Esc-closed hotkey reference overlay. Pure HTML/CSS/JS — sits on top
+/// of the canvas rather than being drawn by the game itself. Hotkeys listed here must
+/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`).
+pub fn hotkey_popup() -> Markup {
+    html! {
+        div id="hotkeys" {
+            div class="panel" {
+                h2 { "Hotkeys" }
+                dl {
+                    dt { "=" } dd { "speed up" }
+                    dt { "-" } dd { "slow down" }
+                    dt { "0" } dd { "reset speed" }
+                    dt { "Space" } dd { "pause / resume" }
+                    dt { "S" } dd { "save screenshot" }
+                    dt { "?" } dd { "toggle this help" }
+                    dt { "Esc" } dd { "close" }
+                }
+            }
+        }
+        script {
+            (PreEscaped(
+                "document.addEventListener('keydown', function(e) {\n\
+                 \x20 if (e.key === '?') document.getElementById('hotkeys').classList.toggle('open');\n\
+                 \x20 else if (e.key === 'Escape') document.getElementById('hotkeys').classList.remove('open');\n\
+                 });"
+            ))
+        }
+    }
+}
+
+/// Registers a miniquad plugin exposing `env.hcg_ga_event` to the wasm module, so
+/// `control::Control::episode_complete` can fire `gtag('event', ...)` calls from Rust.
+/// Must run after `mq_js_bundle.js` (needs its global `miniquad_add_plugin`/`UTF8ToString`)
+/// but before `load(...)` (plugins register into the import object at instantiation time).
+/// A no-op when `window.gtag` isn't defined (GTAG_ID unset locally).
+pub fn analytics_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "miniquad_add_plugin({\n\
+                 \x20 register_plugin: function(importObject) {\n\
+                 \x20   importObject.env.hcg_ga_event = function(namePtr, nameLen, paramsPtr, paramsLen) {\n\
+                 \x20     var name = UTF8ToString(namePtr, nameLen);\n\
+                 \x20     var params = paramsLen > 0 ? JSON.parse(UTF8ToString(paramsPtr, paramsLen)) : {};\n\
+                 \x20     if (window.gtag) window.gtag('event', name, params);\n\
+                 \x20   };\n\
+                 \x20 },\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_analytics\"\n\
+                 });"
+            ))
+        }
+    }
+}
+
+/// `S` hotkey: grabs the current frame straight off the canvas (`toBlob`, no Rust
+/// involvement — WASM has no filesystem, so `screenshot::handle_hotkey` is a native-only
+/// no-op) and prompts the browser's own download flow for it.
+pub fn screenshot_bridge(name: &str) -> Markup {
+    html! {
+        script {
+            (PreEscaped(format!(
+                "document.addEventListener('keydown', function(e) {{\n\
+                 \x20 if (e.key !== 's' && e.key !== 'S') return;\n\
+                 \x20 document.querySelector('canvas').toBlob(function(blob) {{\n\
+                 \x20   var url = URL.createObjectURL(blob);\n\
+                 \x20   var a = document.createElement('a');\n\
+                 \x20   a.href = url;\n\
+                 \x20   a.download = '{name}-screenshot.png';\n\
+                 \x20   a.click();\n\
+                 \x20   URL.revokeObjectURL(url);\n\
+                 \x20 }});\n\
+                 }});"
             )))
         }
     }

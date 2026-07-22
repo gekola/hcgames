@@ -41,3 +41,17 @@ impl Capture {
         }
     }
 }
+
+/// `S` hotkey: save a screenshot of the current frame. Native only — writes a
+/// timestamped PNG to the working directory via `std::fs`, which doesn't exist on WASM.
+/// In the browser the page itself handles `S` (see `xtask::screenshot_bridge`) by reading
+/// pixels straight off the canvas with `toBlob()` and prompting a download, which needs no
+/// Rust involvement at all.
+pub fn handle_hotkey() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if is_key_pressed(KeyCode::S) {
+        let filename = format!("screenshot-{}.png", macroquad::miniquad::date::now() as u64);
+        get_screen_data().export_png(&filename);
+        println!("Saved screenshot to {filename}");
+    }
+}

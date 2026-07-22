@@ -293,10 +293,13 @@ async fn main() {
     let mut game = Game::new(0);
     let title_w = measure_text("2048", None, 72, 1.0).width;
     let mut shot = screenshot::Capture::from_env();
+    let mut control = control::Control::new();
 
     loop {
-        let dt = get_frame_time();
+        control.handle_keys();
+        let dt = control.scale(get_frame_time());
         if game.update(dt) {
+            control.episode_complete("game2048", game.score as i64);
             let best = game.best;
             game = Game::new(best);
         }
@@ -308,8 +311,12 @@ async fn main() {
             draw_equilateral(15.0 + title_w + 28.0, 54.0, 20.0, dir, rgb(143, 122, 102));
         }
 
-        score_box(300.0, 8.0, 90.0, 60.0, "SCORE", game.score);
-        score_box(400.0, 8.0, 90.0, 60.0, "BEST", game.best);
+        score_box(260.0, 8.0, 90.0, 60.0, "SCORE", game.score);
+        score_box(360.0, 8.0, 90.0, 60.0, "BEST", game.best);
+
+        let speed_label = control.label();
+        let sd = measure_text(&speed_label, None, 13, 1.0);
+        draw_text(&speed_label, WIN_W - 8.0 - sd.width, 26.0, 13.0, rgb(150, 140, 130));
 
         rrect(GRID_X, GRID_Y, GRID_W, GRID_W, 6.0, rgb(187, 173, 160));
 
@@ -382,6 +389,7 @@ async fn main() {
         }
 
         shot.tick();
+        screenshot::handle_hotkey();
         next_frame().await;
     }
 }

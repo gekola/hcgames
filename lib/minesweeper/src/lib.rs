@@ -13,9 +13,15 @@ pub async fn run(kind: GridKind) {
     let mut board = Board::new(kind);
     let mut accum = 0.0f32;
     let mut shot = screenshot::Capture::from_env();
+    let mut control = control::Control::new();
+    let game_name = match kind {
+        GridKind::Square => "minesweeper-square",
+        GridKind::Hex => "minesweeper-hex",
+    };
 
     loop {
-        accum += get_frame_time().min(0.1);
+        control.handle_keys();
+        accum += control.scale(get_frame_time().min(0.1));
 
         while accum >= TICK {
             accum -= TICK;
@@ -49,6 +55,9 @@ pub async fn run(kind: GridKind) {
                 }
                 Phase::GameOver(t) | Phase::Won(t) => {
                     if macroquad::miniquad::date::now() - t > RESTART_DELAY {
+                        let revealed =
+                            board.cells.iter().filter(|c| c.state == CellState::Revealed).count();
+                        control.episode_complete(game_name, revealed as i64);
                         board = Board::new(kind);
                         update_probs(&mut board);
                     }
@@ -57,8 +66,9 @@ pub async fn run(kind: GridKind) {
             }
         }
 
-        draw_board(&board);
+        draw_board(&board, &control.label());
         shot.tick();
+        screenshot::handle_hotkey();
         next_frame().await;
     }
 }
@@ -119,7 +129,7 @@ fn cell_bg(cell: &Cell, idx: usize, hit: Option<usize>, global_prob: Option<f32>
 
 // ── HUD ──────────────────────────────────────────────────────────────────────
 
-fn draw_hud(board: &Board, sw: f32) {
+fn draw_hud(board: &Board, sw: f32, speed_label: &str) {
     let hud_bg = match board.phase {
         Phase::GameOver(_) => Color { r: 0.28, g: 0.06, b: 0.06, a: 1.0 },
         Phase::Won(_) => Color { r: 0.06, g: 0.20, b: 0.10, a: 1.0 },
@@ -143,6 +153,9 @@ fn draw_hud(board: &Board, sw: f32) {
         Phase::Won(_) => format!("{}  SOLVED! Restarting in {:.0}s…", label, RESTART_DELAY as u32),
     };
     draw_text(&msg, 10.0, 24.0, 20.0, text_col);
+
+    let sd = measure_text(speed_label, None, 20, 1.0);
+    draw_text(speed_label, sw - 8.0 - sd.width, 24.0, 20.0, text_col);
 }
 
 // ── Flag glyph (small triangle) ───────────────────────────────────────────────
@@ -281,12 +294,12 @@ fn draw_hex_grid(board: &Board, ox: f32, oy: f32, avail_w: f32, avail_h: f32, gl
 
 // ── Top-level draw ────────────────────────────────────────────────────────────
 
-fn draw_board(board: &Board) {
+fn draw_board(board: &Board, speed_label: &str) {
     let sw = screen_width();
     let sh = screen_height();
 
     clear_background(Color { r: 0.07, g: 0.07, b: 0.12, a: 1.0 });
-    draw_hud(board, sw);
+    draw_hud(board, sw, speed_label);
 
     let total_hidden = board.cells.iter().filter(|c| c.state == CellState::Hidden).count() as i32;
     let remaining = board.remaining_mines();

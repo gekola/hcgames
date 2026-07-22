@@ -45,8 +45,11 @@ async fn main() {
     let mut game = Game::new(1);
     let mut accum = 0.0f32;
     let mut shot = screenshot::Capture::from_env();
+    let mut control = control::Control::new();
 
     loop {
+        control.handle_keys();
+
         let n = game.body.len().max(1) as f32;
         let hunger = if game.score >= 10 {
             ((game.ticks_hungry as f32 - n) / n).clamp(0.0, 1.0)
@@ -55,10 +58,11 @@ async fn main() {
         };
         let tick_interval = TICK * (1.0 - 0.5 * hunger);
 
-        accum += get_frame_time();
+        accum += control.scale(get_frame_time());
         while accum >= tick_interval {
             accum -= tick_interval;
             if !game.tick() {
+                control.episode_complete("snake", game.score as i64);
                 game = Game::new(game.generation + 1);
                 break;
             }
@@ -127,9 +131,15 @@ async fn main() {
 
         let font_size = (cell * 0.9).max(14.0);
         let hud = format!("Score: {:>4}   Gen: {}", game.score, game.generation);
-        draw_text(&hud, ox, oy - font_size * 0.35, font_size, Color { r: 0.65, g: 0.65, b: 0.82, a: 1.0 });
+        let hud_y = oy - font_size * 0.35;
+        draw_text(&hud, ox, hud_y, font_size, Color { r: 0.65, g: 0.65, b: 0.82, a: 1.0 });
+
+        let speed_label = control.label();
+        let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
+        draw_text(&speed_label, ox + ow - sd.width, hud_y, font_size, Color { r: 0.65, g: 0.65, b: 0.82, a: 1.0 });
 
         shot.tick();
+        screenshot::handle_hotkey();
         next_frame().await;
     }
 }

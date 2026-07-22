@@ -67,14 +67,17 @@ async fn main() {
     rand::srand(screenshot::seed());
     let mut game = game::Game::new(0);
     let mut shot = screenshot::Capture::from_env();
+    let mut control = control::Control::new();
     loop {
-        let dt = get_frame_time().min(0.05);
+        control.handle_keys();
+        let dt = control.scale(get_frame_time().min(0.05));
         let now = macroquad::miniquad::date::now();
 
         game.tick(dt, now);
 
         if let game::Phase::Done { since } = game.phase {
             if now - since > 0.4 {
+                control.episode_complete("arrow-blocks", game.blocks.len() as i64);
                 let next = (game.level + 1) % puzzle::NFIGURES;
                 game = game::Game::new(next);
             }
@@ -174,7 +177,12 @@ async fn main() {
         );
         draw_text(&hud, fx + 4.0, 20.0, font_size, Color { r: 0.6, g: 0.6, b: 0.7, a: 1.0 });
 
+        let speed_label = control.label();
+        let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
+        draw_text(&speed_label, sw - 8.0 - sd.width, 20.0, font_size, Color { r: 0.6, g: 0.6, b: 0.7, a: 1.0 });
+
         shot.tick();
+        screenshot::handle_hotkey();
         next_frame().await;
     }
 }

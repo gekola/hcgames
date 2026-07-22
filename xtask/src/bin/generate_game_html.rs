@@ -1,7 +1,10 @@
 //! Generates dist/<name>/index.html for a game.
 use maud::{DOCTYPE, html};
 use std::path::Path;
-use xtask::{base_url, description, favicon_links, gtag_head, native_size_style, social_image, title};
+use xtask::{
+    analytics_bridge, base_url, description, favicon_links, gtag_head, hotkey_popup,
+    native_size_style, screenshot_bridge, social_image, title,
+};
 
 fn main() {
     let name = std::env::args().nth(1).expect("usage: generate_game_html <name>");
@@ -36,7 +39,10 @@ fn main() {
             body {
                 canvas id="glcanvas" tabindex="1" {}
                 script src="mq_js_bundle.js" {}
+                (analytics_bridge())
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
+                (hotkey_popup())
+                (screenshot_bridge(&name))
             }
         }
     };

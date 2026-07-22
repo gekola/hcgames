@@ -18,6 +18,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "arrow-blocks"
 version = "0.1.0"
 dependencies = [
+ "control",
  "macroquad",
  "screenshot",
 ]
@@ -64,6 +65,13 @@ name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
+
+[[package]]
+name = "control"
+version = "0.1.0"
+dependencies = [
+ "macroquad",
+]
 
 [[package]]
 name = "crc32fast"
@@ -125,6 +133,7 @@ dependencies = [
 name = "game2048"
 version = "0.1.0"
 dependencies = [
+ "control",
  "macroquad",
  "screenshot",
 ]
@@ -170,6 +179,7 @@ name = "klondike"
 version = "0.1.0"
 dependencies = [
  "cards",
+ "control",
  "macroquad",
  "screenshot",
 ]
@@ -235,6 +245,7 @@ dependencies = [
 name = "minesweeper"
 version = "0.1.0"
 dependencies = [
+ "control",
  "macroquad",
  "screenshot",
 ]
@@ -399,6 +410,7 @@ checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 name = "snake"
 version = "0.1.0"
 dependencies = [
+ "control",
  "macroquad",
  "screenshot",
 ]

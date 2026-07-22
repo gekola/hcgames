@@ -186,10 +186,12 @@ async fn main() {
     let mut flying: Vec<FlyingCard> = Vec::new();
     let mut end_time: Option<f64> = None;
     let mut shot = screenshot::Capture::from_env();
+    let mut control = control::Control::new();
 
     loop {
+        control.handle_keys();
         let now = macroquad::miniquad::date::now();
-        let dt = get_frame_time().min(0.1);
+        let dt = control.scale(get_frame_time().min(0.1));
         let layout = Layout::from_screen();
 
         // Advance animation; when it settles, sync display_game to actual game.
@@ -220,6 +222,8 @@ async fn main() {
             Phase::Won | Phase::Stuck => {
                 let t = *end_time.get_or_insert(now);
                 if now - t > RESTART_DELAY {
+                    let score: i64 = game.foundations.iter().map(|f| f.len() as i64).sum();
+                    control.episode_complete("klondike", score);
                     game = Game::new(game.generation + 1);
                     display_game = game.clone();
                     solver = Solver::new();
@@ -234,7 +238,7 @@ async fn main() {
         let in_flight: HashSet<Card> = flying.iter().map(|fc| fc.card).collect();
 
         clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
-        draw_hud(&game);
+        draw_hud(&game, &control.label());
         draw_game(&display_game, &layout, &in_flight);
 
         // Overlay flying cards at their interpolated position.
@@ -246,13 +250,14 @@ async fn main() {
         }
 
         shot.tick();
+        screenshot::handle_hotkey();
         next_frame().await;
     }
 }
 
 // ── HUD ───────────────────────────────────────────────────────────────────────
 
-fn draw_hud(game: &Game) {
+fn draw_hud(game: &Game, speed_label: &str) {
     let sw = screen_width();
     let (hud_bg, txt_col) = match game.phase {
         Phase::Won => (
@@ -283,6 +288,9 @@ fn draw_hud(game: &Game) {
         status,
     );
     draw_text(&msg, 10.0, 24.0, 20.0, txt_col);
+
+    let sd = measure_text(speed_label, None, 20, 1.0);
+    draw_text(speed_label, sw - 8.0 - sd.width, 24.0, 20.0, txt_col);
 }
 
 // ── Game board ────────────────────────────────────────────────────────────────
