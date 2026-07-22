@@ -22,7 +22,9 @@ mkdir -p "dist/$name"
 cp "target/$WASM_TARGET/release/$name.wasm" "dist/$name/"
 mise run screenshot "$name"
 cargo run --release --package xtask --bin generate_game_html -- "$name"
-curl -sSfL "$MQ_JS" -o "dist/$name/mq_js_bundle.js"
+# Shared across all games (dist/mq_js_bundle.js, not dist/<name>/) so it's fetched and
+# stored once per deploy instead of once per game.
+[ -f dist/mq_js_bundle.js ] || curl -sSfL "$MQ_JS" -o dist/mq_js_bundle.js
 """
 
 # Capture a representative in-game screenshot: mise run screenshot snake

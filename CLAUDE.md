@@ -9,7 +9,7 @@ Cargo.toml          workspace root (resolver = "2", opt-level = "z" + lto for re
 mise.toml           task runner — primary interface for builds
 games/
   snake/            one crate per game
-lib/                shared crates (cards, minesweeper, screenshot)
+lib/                shared crates (cards, minesweeper, screenshot, control)
 xtask/              native-only site generator (see "Site generation" below)
 static/             assets copied verbatim into dist/ (favicon.svg, hotel-scene.svg, robots.txt)
 dist/               build output (git-ignored), served via python HTTP
@@ -35,6 +35,10 @@ Raw JS/CSS embedded in a page (the homepage's canvas art script, stylesheets) mu
 wrapped in `maud::PreEscaped(...)` — maud auto-escapes plain text nodes, which would mangle
 `<`/`&`/quotes inside a `<script>`/`<style>` block otherwise.
 
+There's no per-game dev HTML template or Trunk setup — `mise run build-wasm <name>` (which
+runs `xtask`) is the only way to get a browser-testable page, so there's a single source of
+truth for the page chrome (canvas sizing, hotkey popup, analytics bridge, screenshot hotkey).
+
 ## Task runner (mise)
 
 All tasks take the game name as `$1` unless noted.
@@ -42,7 +46,7 @@ All tasks take the game name as `$1` unless noted.
 | Command | What it does |
 |---------|-------------|
 | `mise run run snake` | Native debug build + launch |
-| `mise run build-wasm snake` | Release WASM → `dist/snake/` (fetches mq_js_bundle.js) |
+| `mise run build-wasm snake` | Release WASM → `dist/snake/` (fetches `dist/mq_js_bundle.js`, shared across games, if not already present) |
 | `mise run deploy` | Rebuilds all games into `dist/` |
 | `mise run serve` | `python3 -m http.server 8080 --directory dist` |
 
@@ -52,23 +56,46 @@ WASM target: `wasm32-unknown-unknown`. **Not** wasm-bindgen — macroquad uses m
 
 1. `cargo new --bin games/<name>`
 2. Add `"games/<name>"` to workspace `members` in root `Cargo.toml`
-3. Add `macroquad = "0.4"` to the game's `Cargo.toml`
-4. Copy `games/snake/index.html` and `games/snake/Trunk.toml` as templates; adjust binary name
-5. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM
+3. Add `macroquad = "0.4"` and `control = { path = "../../lib/control" }` to the game's `Cargo.toml`
+4. Wire `control::Control` into the main loop (see "In-game controls" below)
+5. If `window_width`/`window_height` in `Conf` isn't 900×720, add a case to `xtask::native_size`
+6. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM (also generates `dist/<name>/index.html` — there's no separate dev HTML template to maintain)
 
-## Trunk (per-game, for live-reload dev)
+## In-game controls (all games)
 
-Each game has its own `Trunk.toml`. Run from inside `games/<name>/`:
+Every game uses `lib/control` (`Control::new()`, call `handle_keys()` once per frame, feed
+frame time through `scale(dt)`) for hotkeys: `=`/`-` adjust simulation speed 10% per press,
+`0` resets to 1x, `Space` pauses (`scale` returns 0). Draw `control.label()` (`"x1.000"` /
+`"PAUSED"`) somewhere in the game's own header, near score/level — see any game's `main.rs`
+for the pattern (right-aligned, same baseline as the existing HUD text).
 
-```
-trunk serve   # live-reloads HTML; Rust changes need manual retrigger
-trunk build --release
-```
+Call `control.episode_complete(game_name, score)` at the point each game resets for a new
+round — fires a `gtag('event', 'episode_complete', {game, episode, score})` call. This goes
+through a tiny miniquad JS plugin (`xtask::analytics_bridge`, registers `env.hcg_ga_event`
+before the wasm module loads) rather than wasm-bindgen; see "WASM caveats" below.
 
-Trunk pre-build hook compiles via `cargo build --target wasm32-unknown-unknown` and caches `vendor/mq_js_bundle.js`.
+`?` toggles a hotkey-reference popup, `Esc` closes it, `S` saves a screenshot — both are
+pure page-level HTML/CSS/JS (`xtask::hotkey_popup`, `xtask::screenshot_bridge`), not drawn
+by the games themselves. If you add a new hotkey to `control::Control`, update the `dl` in
+`hotkey_popup()` to match, or the popup will lie.
+
+**Canvas sizing is load-bearing**: games draw at absolute pixel coordinates assuming the
+canvas is exactly their native `window_width`/`window_height` — none of them scale drawing
+calls by `screen_width()`/`screen_height()`. The generated page (`xtask::native_size_style`)
+pins the canvas to that native resolution and fits it to the viewport via CSS
+`transform: scale(...)`, not by stretching to `100vw`/`100vh` — stretching would make the
+canvas's actual backing resolution equal to the raw viewport and crop anything past the
+smaller of width/height. Don't reintroduce `width: 100vw; height: 100vh;` on `canvas`
+without also making every game's drawing code scale-aware.
 
 ## WASM caveats
 
 - `std::time::SystemTime::now()` **panics on WASM** — use `macroquad::miniquad::date::now() as u64` for timestamps/seeds.
-- No filesystem access in WASM — avoid `std::fs`.
+- No filesystem access in WASM — avoid `std::fs`. (`screenshot::handle_hotkey`'s `S` capture is native-only for this reason; the browser build handles `S` entirely in page JS instead, reading pixels off the canvas with `toBlob()`.)
 - `rand::srand(...)` must be called at startup to seed the RNG; quad-rand's default seed is fixed.
+- Calling arbitrary JS from Rust (no wasm-bindgen here) goes through miniquad's plugin
+  system: a page-level `<script>` calls the global `miniquad_add_plugin({register_plugin,
+  ...})` (provided by `mq_js_bundle.js`) to add a function onto `importObject.env` *before*
+  `load(...)` instantiates the module; Rust then declares a matching `unsafe extern "C"`
+  fn. `control::ga_event` / `xtask::analytics_bridge` is the reference example — strings
+  cross as `(ptr, len)` pairs, decoded JS-side with the bundle's own global `UTF8ToString`.
