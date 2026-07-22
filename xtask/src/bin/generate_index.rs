@@ -85,7 +85,7 @@ header h1 {
   margin-top: 0.4rem;
   font-style: normal;
   font-size: 0.72rem;
-  color: #4b5563;
+  color: #7d8590;
 }
 
 .games {
@@ -95,7 +95,7 @@ header h1 {
 .games h2 {
   font-size: 0.75rem;
   letter-spacing: 0.15em;
-  color: #4b5563;
+  color: #7d8590;
   text-transform: uppercase;
   margin-bottom: 1rem;
   font-weight: normal;
@@ -335,7 +335,7 @@ fn main() {
                 header {
                     h1 { "Hotel Chair Games" }
                 }
-                div class="main" {
+                main class="main" {
                     div class="scene-wrap" {
                         canvas id="hotel" width="480" height="360" {}
                         section class="games" {

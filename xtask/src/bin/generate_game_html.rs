@@ -37,7 +37,9 @@ fn main() {
                 (native_size_style(&name))
             }
             body {
-                canvas id="glcanvas" tabindex="1" {}
+                main {
+                    canvas id="glcanvas" tabindex="1" {}
+                }
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
