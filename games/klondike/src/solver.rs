@@ -1,45 +1,62 @@
-use std::collections::HashSet;
+use beam_solver::{BeamSearch, SearchState};
 use cards::card::Card;
-use crate::game::{Game, Move};
+use crate::game::{Game, Move, Phase, Variant};
+
+/// See [[beam_solver]] docs and `games/spider/src/solver.rs` for the shared search
+/// engine and its rationale; these constants and the move-scoring below are Klondike's
+/// own tuning.
+const BEAM_WIDTH: usize = 8;
+const BEAM_DEPTH: u32 = 5;
+
+impl SearchState for Game {
+    type Move = Move;
+
+    fn legal_moves(&self) -> Vec<Move> {
+        Game::legal_moves(self)
+    }
+
+    fn apply(&mut self, m: Move) {
+        Game::apply(self, m)
+    }
+
+    fn state_hash(&self) -> u64 {
+        Game::state_hash(self)
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.phase != Phase::Playing
+    }
+}
 
 pub struct Solver {
-    visited: HashSet<u64>,
+    beam: BeamSearch<Game>,
 }
 
 impl Solver {
     pub fn new() -> Self {
-        Self { visited: HashSet::new() }
+        Self {
+            beam: BeamSearch::new(BEAM_WIDTH, BEAM_DEPTH, |m| {
+                matches!(m, Move::DrawStock | Move::ResetStock)
+            }),
+        }
     }
 
     pub fn choose_move(&mut self, game: &Game) -> Option<Move> {
-        let moves: Vec<Move> = game.legal_moves()
-            .into_iter()
-            .filter(|m| !is_pointless_tableau_move(game, m))
-            .filter(|m| !is_pointless_foundation_return(game, m))
-            .collect();
-
-        if moves.is_empty() {
-            return None;
-        }
-
-        self.visited.insert(game.state_hash());
-
-        moves.into_iter().max_by_key(|&m| {
-            let is_draw = matches!(m, Move::DrawStock | Move::ResetStock);
-
-            let mut preview = game.clone();
-            preview.apply(m);
-            let next_hash = preview.state_hash();
-
-            let revisit_penalty = if !is_draw && self.visited.contains(&next_hash) {
-                -1000
-            } else {
-                0
-            };
-
-            score(game, &m) + revisit_penalty
-        })
+        self.beam.choose_move(game, is_pointless, score_root, score_core)
     }
+}
+
+/// is_pointless_tableau_move assumes a Klondike-style stock/waste fallback is always
+/// there to draw from while waiting for a genuinely useful move, so it vetoes anything
+/// that doesn't immediately uncover/foundation/empty a pile. Yukon has no stock at all —
+/// it routinely *requires* lateral tableau shuffles (combining partial runs) before any
+/// uncover becomes possible — so for Yukon that half is skipped and the beam search's own
+/// revisit exclusion is what keeps it from thrashing. is_pointless_foundation_return
+/// applies to both variants regardless: pulling a card off the foundation should always
+/// earn its keep.
+fn is_pointless(game: &Game, m: &Move) -> bool {
+    let tableau_pointless = game.variant != Variant::Yukon && is_pointless_tableau_move(game, m);
+    tableau_pointless || is_pointless_foundation_return(game, m)
 }
 
 /// TableauToTableau is only useful when it makes concrete immediate progress:
@@ -80,6 +97,9 @@ fn is_pointless_tableau_move(game: &Game, m: &Move) -> bool {
     true
 }
 
+/// A card only leaves the foundation when it immediately pays for itself: placing it onto
+/// `to` must let some other pile's face-up run land on top of it in a way that either
+/// flips a face-down card, or exposes a card that can go straight to a foundation.
 fn is_pointless_foundation_return(game: &Game, m: &Move) -> bool {
     let Move::FoundationToTableau { suit, to } = *m else {
         return false;
@@ -88,15 +108,24 @@ fn is_pointless_foundation_return(game: &Game, m: &Move) -> bool {
     if game.foundations[suit].last().map_or(true, |c| c.rank == 0) {
         return true;
     }
-    // Only worthwhile if placing this card onto `to` immediately enables a pile that has
-    // face-down cards to stack there (uncovering move becomes available).
     let mut preview = game.clone();
     preview.apply(*m);
-    let enables_uncover = preview.legal_moves().iter().any(|&mv| {
-        matches!(mv, Move::TableauToTableau { from, n, to: mv_to }
-            if mv_to == to && n == preview.n_up(from) && preview.n_down[from] > 0)
+    let unlocks_something = preview.legal_moves().iter().any(|&mv| {
+        let Move::TableauToTableau { from, n, to: mv_to } = mv else {
+            return false;
+        };
+        if mv_to != to {
+            return false;
+        }
+        // Fully clears the face-up run, flipping the face-down card beneath it.
+        if n == preview.n_up(from) && preview.n_down[from] > 0 {
+            return true;
+        }
+        // Exposes a card that can go straight to a foundation.
+        let from_len = preview.tableau[from].len();
+        from_len > n && preview.can_place_on_foundation(preview.tableau[from][from_len - n - 1])
     });
-    !enables_uncover
+    !unlocks_something
 }
 
 fn king_available(game: &Game) -> bool {
@@ -110,7 +139,28 @@ fn king_available(game: &Game) -> bool {
     })
 }
 
-fn score(game: &Game, m: &Move) -> i32 {
+/// Ply-0 evaluation for the real decision: `score_core` plus a mobility term (how many
+/// productive moves TableauToTableau leaves behind). Affordable here since, like Spider's
+/// `score`, it only runs once per real candidate rather than at every later ply.
+fn score_root(game: &Game, after: &Game, m: &Move) -> i32 {
+    let mut s = score_core(game, after, m);
+
+    if matches!(m, Move::TableauToTableau { .. }) {
+        let follow_ups = after.legal_moves().iter().filter(|mv| !is_pointless(after, mv)).count() as i32;
+        s += follow_ups;
+    }
+
+    s
+}
+
+/// Cheap per-move scorer used at every ply of the beam (including ply 0, via
+/// `score_root`). `after.phase == Won` always wins outright — finishing the game beats
+/// any other consideration, mirroring Spider's "banking a run always wins" rule.
+fn score_core(game: &Game, after: &Game, m: &Move) -> i32 {
+    if after.phase == Phase::Won {
+        return 100_000;
+    }
+
     match *m {
         Move::WasteToFoundation => 110,
 

@@ -18,6 +18,17 @@ pub enum Phase {
     Stuck,
 }
 
+/// Klondike deals 1..=7 face-up-topped piles with a stock/waste; Yukon deals the full deck
+/// into the tableau (no stock/waste) and — since `legal_moves`' tableau-to-tableau search
+/// only checks that the bottom card of the moved group fits the target, never that the
+/// group itself is an ordered run — already permits Yukon's signature move (dragging a
+/// face-up card plus everything stacked on it, in any order) with no extra logic.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Variant {
+    Klondike,
+    Yukon,
+}
+
 #[derive(Clone)]
 pub struct Game {
     pub stock: Vec<Card>,
@@ -32,25 +43,41 @@ pub struct Game {
     pub phase: Phase,
     /// increments on DrawStock/ResetStock, resets on any other move; detects stock cycle
     pub no_progress: u32,
+    pub variant: Variant,
 }
 
 impl Game {
-    pub fn new(generation: u32) -> Self {
-        let draw_count = if generation % 2 == 0 { 1 } else { 3 };
+    pub fn new(variant: Variant, generation: u32, draw_count: u8) -> Self {
         let mut deck = shuffled_deck();
 
         let mut tableau: [Vec<Card>; 7] = Default::default();
         let mut n_down = [0usize; 7];
 
-        // Pile i gets i+1 cards; bottom i are face-down, top 1 face-up.
-        for i in 0..7 {
-            for _ in 0..=i {
-                tableau[i].push(deck.pop().unwrap());
+        match variant {
+            Variant::Klondike => {
+                // Pile i gets i+1 cards; bottom i are face-down, top 1 face-up.
+                // Remaining 24 cards go face-down to stock (top = last element).
+                for i in 0..7 {
+                    for _ in 0..=i {
+                        tableau[i].push(deck.pop().unwrap());
+                    }
+                    n_down[i] = i;
+                }
             }
-            n_down[i] = i;
+            Variant::Yukon => {
+                // Pile i gets i face-down cards plus 1 face-up, then piles 1..7 (not pile
+                // 0) get 4 more face-up cards on top — consumes the full 52-card deck, so
+                // there's no stock/waste at all.
+                for i in 0..7 {
+                    n_down[i] = i;
+                    let up_extra = if i == 0 { 0 } else { 4 };
+                    for _ in 0..(i + 1 + up_extra) {
+                        tableau[i].push(deck.pop().unwrap());
+                    }
+                }
+            }
         }
 
-        // Remaining 24 cards go face-down to stock (top = last element).
         Self {
             stock: deck,
             waste: Vec::new(),
@@ -62,6 +89,7 @@ impl Game {
             moves: 0,
             phase: Phase::Playing,
             no_progress: 0,
+            variant,
         }
     }
 
@@ -232,15 +260,25 @@ impl Game {
             self.phase = Phase::Won;
             return;
         }
-        // Draw-1: give up after 3 full laps with no productive move, or 2000 total moves.
-        // Draw-3: allow more laps (harder to find cards) and far more total moves.
-        let (max_laps, max_moves) = if self.draw_count == 1 {
-            (3, 2000)
-        } else {
-            (6, 8000)
-        };
-        if self.no_progress > max_laps || self.moves > max_moves {
-            self.phase = Phase::Stuck;
+        match self.variant {
+            Variant::Klondike => {
+                // Draw-1: give up after 3 full laps with no productive move, or 2000 total
+                // moves. Draw-3: allow more laps (harder to find cards) and far more moves.
+                let (max_laps, max_moves) = if self.draw_count == 1 {
+                    (3, 2000)
+                } else {
+                    (6, 8000)
+                };
+                if self.no_progress > max_laps || self.moves > max_moves {
+                    self.phase = Phase::Stuck;
+                }
+            }
+            // No stock/waste to cycle, so no_progress never moves; cap on move count alone.
+            Variant::Yukon => {
+                if self.moves > 4000 {
+                    self.phase = Phase::Stuck;
+                }
+            }
         }
     }
 }

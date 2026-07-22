@@ -6,11 +6,11 @@ use cards::render::{draw_card_back, draw_card_face, draw_empty_slot, draw_suit_s
 mod game;
 mod solver;
 
-use game::{Game, Move, Phase};
+use game::{Game, Move, Phase, Variant};
 use solver::Solver;
 
 const TICK: f32 = 0.20;
-const ANIM_DURATION: f32 = 0.14;
+const ANIM_DURATION: f32 = 0.24;
 const RESTART_DELAY: f64 = 2.8;
 
 // ── Layout ────────────────────────────────────────────────────────────────────
@@ -163,6 +163,206 @@ fn ease_in_out(t: f32) -> f32 {
     }
 }
 
+// ── Variant mode ──────────────────────────────────────────────────────────────
+// `V` cycles Draw-1 → Draw-3 → Auto → Yukon → Draw-1 …; Auto rematches the
+// original alternate-every-round behaviour (derived from `generation`). Yukon
+// only ever starts from an explicit `V` press — the automatic Auto mode
+// alternates strictly between Draw-1/Draw-3 and never lands on it itself — but
+// it's still reachable through the same key rather than a dedicated hotkey.
+
+#[derive(Clone, Copy, PartialEq)]
+enum VariantMode {
+    Draw1,
+    Draw3,
+    Auto,
+    Yukon,
+}
+
+impl VariantMode {
+    fn next(self) -> Self {
+        match self {
+            VariantMode::Draw1 => VariantMode::Draw3,
+            VariantMode::Draw3 => VariantMode::Auto,
+            VariantMode::Auto => VariantMode::Yukon,
+            VariantMode::Yukon => VariantMode::Draw1,
+        }
+    }
+
+    fn variant(self) -> Variant {
+        match self {
+            VariantMode::Yukon => Variant::Yukon,
+            _ => Variant::Klondike,
+        }
+    }
+
+    fn draw_count(self, generation: u32) -> u8 {
+        match self {
+            VariantMode::Draw1 => 1,
+            VariantMode::Draw3 => 3,
+            VariantMode::Auto => if generation % 2 == 0 { 1 } else { 3 },
+            VariantMode::Yukon => 1, // unused: Yukon has no stock/waste
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            VariantMode::Auto => " (auto)",
+            _ => "",
+        }
+    }
+}
+
+fn new_game_for(mode: VariantMode, generation: u32) -> Game {
+    Game::new(mode.variant(), generation, mode.draw_count(generation))
+}
+
+// ── CLI args (native only — meaningless in a browser tab) ───────────────────────
+
+struct CliArgs {
+    /// `--debug`: print every move the solver makes to stderr.
+    debug: bool,
+    /// `--once`: play a single game to Won/Stuck, print a result line, then exit
+    /// instead of looping through new generations forever. Meant for scripted runs
+    /// (`klondike --variant yukon --once --debug`) rather than manual `timeout`/`kill`.
+    once: bool,
+    /// `--variant <1|3|auto|yukon>`: pin the starting variant instead of always
+    /// booting into Auto (which still rotates 1/3 across generations as before).
+    variant: Option<VariantMode>,
+    /// `--no-ui`: skip macroquad/window/GL setup entirely and drive the solver in a
+    /// plain loop, gated by nothing but CPU. The windowed loop paces moves at `TICK`
+    /// (0.2s each, for watchability) — fine interactively, but it means a 2000-move
+    /// Draw-1 game can take minutes of real time to reach Won/Stuck, which makes
+    /// scripted algorithm testing (`--once`, or repeated soak runs) unnecessarily
+    /// slow. `--no-ui` is for that: same solver, no window, no throttle.
+    no_ui: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_cli_args() -> CliArgs {
+    let mut debug = false;
+    let mut once = false;
+    let mut variant = None;
+    let mut no_ui = false;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--debug" => debug = true,
+            "--once" => once = true,
+            "--no-ui" => no_ui = true,
+            "--variant" => {
+                i += 1;
+                let v = args.get(i).unwrap_or_else(|| {
+                    eprintln!("--variant requires a value: 1, 3, auto, or yukon");
+                    std::process::exit(2);
+                });
+                variant = Some(match v.as_str() {
+                    "1" => VariantMode::Draw1,
+                    "3" => VariantMode::Draw3,
+                    "auto" => VariantMode::Auto,
+                    "yukon" => VariantMode::Yukon,
+                    other => {
+                        eprintln!("unknown --variant value '{other}': expected 1, 3, auto, or yukon");
+                        std::process::exit(2);
+                    }
+                });
+            }
+            other => {
+                eprintln!(
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <1|3|auto|yukon>)"
+                );
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+
+    CliArgs { debug, once, variant, no_ui }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn parse_cli_args() -> CliArgs {
+    CliArgs { debug: false, once: false, variant: None, no_ui: false }
+}
+
+fn variant_label(mode_variant: Variant, draw_count: u8) -> String {
+    match mode_variant {
+        Variant::Klondike => format!("draw-{draw_count}"),
+        Variant::Yukon => "yukon".to_owned(),
+    }
+}
+
+fn log_move(game: &Game, m: Move) {
+    eprintln!(
+        "move={:?} n_down={:?} foundation={}/52 stock={} waste={} moves={} gen={}",
+        m,
+        game.n_down,
+        game.foundations.iter().map(|f| f.len()).sum::<usize>(),
+        game.stock.len(),
+        game.waste.len(),
+        game.moves,
+        game.generation + 1,
+    );
+}
+
+fn log_stall(game: &Game) {
+    eprintln!(
+        "STALL at moves={} gen={}: raw legal_moves={:?}",
+        game.moves,
+        game.generation + 1,
+        game.legal_moves(),
+    );
+}
+
+fn print_result(game: &Game) {
+    println!(
+        "result={} variant={} moves={} foundation={}/52",
+        if game.phase == Phase::Won { "won" } else { "stuck" },
+        variant_label(game.variant, game.draw_count),
+        game.moves,
+        game.foundations.iter().map(|f| f.len()).sum::<usize>(),
+    );
+}
+
+/// `--no-ui`: no `Conf`/`Window::from_config`/GL context of any kind — just the solver
+/// looping against `Game` at full CPU speed. Prints one `result=...` line per game
+/// (unlike the windowed loop, which stays silent unless `--once`) since nothing else
+/// makes a headless run's progress visible.
+fn run_headless(cli: CliArgs) {
+    macroquad::rand::srand(screenshot::seed());
+
+    let mode = cli.variant.unwrap_or(VariantMode::Auto);
+    let mut game = new_game_for(mode, 0);
+    let mut solver = Solver::new();
+
+    loop {
+        match game.phase {
+            Phase::Playing => {
+                if let Some(m) = solver.choose_move(&game) {
+                    if cli.debug {
+                        log_move(&game, m);
+                    }
+                    game.apply(m);
+                } else {
+                    if cli.debug {
+                        log_stall(&game);
+                    }
+                    game.phase = Phase::Stuck;
+                }
+            }
+            Phase::Won | Phase::Stuck => {
+                print_result(&game);
+                if cli.once {
+                    return;
+                }
+                game = new_game_for(mode, game.generation + 1);
+                solver = Solver::new();
+            }
+        }
+    }
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn conf() -> Conf {
@@ -174,11 +374,24 @@ fn conf() -> Conf {
     }
 }
 
-#[macroquad::main(conf)]
-async fn main() {
+// Manual entry point instead of `#[macroquad::main(conf)]`: that attribute expands to
+// exactly this (see macroquad_macro), but unconditionally calls `Window::from_config`
+// before any of our code runs — too late to skip window/GL setup for `--no-ui`. Parsing
+// args first and branching ourselves is the only way to avoid creating a window at all.
+fn main() {
+    let cli = parse_cli_args();
+    if cli.no_ui {
+        run_headless(cli);
+        return;
+    }
+    macroquad::Window::from_config(conf(), run_ui(cli));
+}
+
+async fn run_ui(cli: CliArgs) {
     macroquad::rand::srand(screenshot::seed());
 
-    let mut game = Game::new(0);
+    let mut mode = cli.variant.unwrap_or(VariantMode::Auto);
+    let mut game = new_game_for(mode, 0);
     let mut display_game = game.clone();
     let mut solver = Solver::new();
     let mut accum = 0.0f32;
@@ -194,6 +407,17 @@ async fn main() {
         let dt = control.scale(get_frame_time().min(0.1));
         let layout = Layout::from_screen();
 
+        if is_key_pressed(KeyCode::V) {
+            mode = mode.next();
+            game = new_game_for(mode, game.generation + 1);
+            display_game = game.clone();
+            solver = Solver::new();
+            end_time = None;
+            accum = 0.0;
+            anim_t = 1.0;
+            flying.clear();
+        }
+
         // Advance animation; when it settles, sync display_game to actual game.
         anim_t = (anim_t + dt / ANIM_DURATION).min(1.0);
         if anim_t >= 1.0 {
@@ -207,6 +431,9 @@ async fn main() {
                 if anim_t >= 1.0 && accum >= TICK {
                     accum -= TICK;
                     if let Some(m) = solver.choose_move(&game) {
+                        if cli.debug {
+                            log_move(&game, m);
+                        }
                         flying = compute_flying_cards(&game, m, &layout);
                         game.apply(m);
                         if flying.is_empty() {
@@ -216,15 +443,28 @@ async fn main() {
                             anim_t = 0.0;
                             // display_game already holds the pre-move snapshot from above.
                         }
+                    } else {
+                        if cli.debug {
+                            log_stall(&game);
+                        }
+                        // True dead end (no stock cycle left to fall back on, common in
+                        // Yukon): the move-count/lap counters that normally flip Stuck
+                        // never advance here since nothing gets applied, so force it.
+                        game.phase = Phase::Stuck;
                     }
                 }
             }
             Phase::Won | Phase::Stuck => {
+                if cli.once {
+                    print_result(&game);
+                    std::process::exit(0);
+                }
+
                 let t = *end_time.get_or_insert(now);
                 if now - t > RESTART_DELAY {
                     let score: i64 = game.foundations.iter().map(|f| f.len() as i64).sum();
                     control.episode_complete("klondike", score);
-                    game = Game::new(game.generation + 1);
+                    game = new_game_for(mode, game.generation + 1);
                     display_game = game.clone();
                     solver = Solver::new();
                     end_time = None;
@@ -238,7 +478,7 @@ async fn main() {
         let in_flight: HashSet<Card> = flying.iter().map(|fc| fc.card).collect();
 
         clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
-        draw_hud(&game, &control.label());
+        draw_hud(&game, mode.label(), &control.label());
         draw_game(&display_game, &layout, &in_flight);
 
         // Overlay flying cards at their interpolated position.
@@ -257,7 +497,7 @@ async fn main() {
 
 // ── HUD ───────────────────────────────────────────────────────────────────────
 
-fn draw_hud(game: &Game, speed_label: &str) {
+fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
     let sw = screen_width();
     let (hud_bg, txt_col) = match game.phase {
         Phase::Won => (
@@ -280,9 +520,13 @@ fn draw_hud(game: &Game, speed_label: &str) {
         Phase::Won => "  - WON! Restarting...".to_owned(),
         Phase::Stuck => "  - STUCK. Restarting...".to_owned(),
     };
+    let variant_label = match game.variant {
+        Variant::Klondike => format!("Draw-{}{}", game.draw_count, mode_label),
+        Variant::Yukon => "Yukon".to_owned(),
+    };
     let msg = format!(
-        "Klondike  Draw-{}   Moves: {}   Gen: {}{}",
-        game.draw_count,
+        "Klondike  {}   Moves: {}   Gen: {}{}",
+        variant_label,
         game.moves,
         game.generation + 1,
         status,
