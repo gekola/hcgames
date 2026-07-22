@@ -1,0 +1,8 @@
+[package]
+name = "beam_solver"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "beam_solver"
+path = "src/lib.rs"

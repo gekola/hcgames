@@ -44,7 +44,7 @@ fn main() {
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
-                (hotkey_popup())
+                (hotkey_popup(&name))
                 (screenshot_bridge(&name))
             }
         }

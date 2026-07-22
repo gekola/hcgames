@@ -1,0 +1,11 @@
+[package]
+name = "spider"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+macroquad = "0.4"
+cards = { path = "../../lib/cards" }
+screenshot = { path = "../../lib/screenshot" }
+control = { path = "../../lib/control" }
+beam_solver = { path = "../../lib/beam_solver" }

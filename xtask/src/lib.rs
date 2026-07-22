@@ -88,8 +88,10 @@ font-size: 14px; margin: 0; }\n\
 
 /// The `?`-toggled, Esc-closed hotkey reference overlay. Pure HTML/CSS/JS — sits on top
 /// of the canvas rather than being drawn by the game itself. Hotkeys listed here must
-/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`).
-pub fn hotkey_popup() -> Markup {
+/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`), plus any
+/// per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
+pub fn hotkey_popup(name: &str) -> Markup {
+    let has_variant_switch = matches!(name, "klondike" | "spider");
     html! {
         div id="hotkeys" {
             div class="panel" {
@@ -99,6 +101,9 @@ pub fn hotkey_popup() -> Markup {
                     dt { "-" } dd { "slow down" }
                     dt { "0" } dd { "reset speed" }
                     dt { "Space" } dd { "pause / resume" }
+                    @if has_variant_switch {
+                        dt { "V" } dd { "switch game variant" }
+                    }
                     dt { "S" } dd { "save screenshot" }
                     dt { "?" } dd { "toggle this help" }
                     dt { "Esc" } dd { "close" }
@@ -170,6 +175,7 @@ pub fn description(name: &str) -> String {
         "snake" => "Watch an AI play Snake by itself. A pathfinding bot solves procedurally generated levels live in your browser.".into(),
         "game2048" => "A self-playing 2048 AI merges tiles with expectimax search, climbing toward the highest tile with no input from you.".into(),
         "klondike" => "Self-playing Klondike solitaire in your browser. Watch an AI deal, draw, and solve the classic card game automatically.".into(),
+        "spider" => "Self-playing Spider solitaire. An AI clears all 10 columns automatically, cycling through 1-, 2-, and 4-suit variants each round.".into(),
         "arrow-blocks" => "A browser puzzle game solved automatically by an AI, sliding arrow-marked blocks through procedurally generated levels.".into(),
         "minesweeper-hex" => "AI-solved Minesweeper on a hexagonal grid. Watch the bot flag mines and clear the board in your browser.".into(),
         "minesweeper-square" => "AI-solved classic square-grid Minesweeper, played automatically in your browser.".into(),
