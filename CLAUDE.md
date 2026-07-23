@@ -49,8 +49,15 @@ All tasks take the game name as `$1` unless noted.
 | `mise run build-wasm snake` | Release WASM → `dist/snake/` (fetches `dist/mq_js_bundle.js`, shared across games, if not already present) |
 | `mise run deploy` | Rebuilds all games into `dist/` |
 | `mise run serve` | `python3 -m http.server 8080 --directory dist` |
+| `mise run check` | `cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings` |
 
 WASM target: `wasm32-unknown-unknown`. **Not** wasm-bindgen — macroquad uses miniquad's own JS bundle.
+
+## Pre-commit checks
+
+`.githooks/pre-commit` runs `mise run check` before every commit. It's tracked, but
+`core.hooksPath` is local git config, not something a tracked file can set — run `git
+config core.hooksPath .githooks` once per clone/worktree to activate it.
 
 ## Adding a new game
 
