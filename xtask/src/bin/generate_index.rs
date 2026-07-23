@@ -306,13 +306,23 @@ fn main() {
     let dist = Path::new("dist");
     let base_url = base_url();
 
+    // A directory only counts as a game if it shipped a .wasm build — this excludes
+    // static redirect stubs (e.g. static/2048/index.html -> game2048/) that live
+    // alongside real games in dist/ but aren't ones themselves.
     let mut games: Vec<String> = std::fs::read_dir(dist)
         .unwrap()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().is_dir())
+        .filter(|entry| {
+            std::fs::read_dir(entry.path())
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f.ok())
+                .any(|f| f.path().extension().is_some_and(|ext| ext == "wasm"))
+        })
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
-    games.sort();
+    games.sort_by_key(|name| title(name));
 
     let og = social_image(&base_url, dist, None);
 

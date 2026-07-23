@@ -78,7 +78,7 @@ run = """
 set -euo pipefail
 rm -rf dist
 mkdir -p dist
-cp static/* dist/
+cp -r static/* dist/
 mise run rasterize
 for game in games/*/; do
     mise run build-wasm "$(basename "$game")"
