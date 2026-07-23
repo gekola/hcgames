@@ -3,7 +3,7 @@ use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, description, favicon_links, gtag_head, hotkey_popup,
-    native_size_style, screenshot_bridge, social_image, title,
+    loading_screen, native_size_style, screenshot_bridge, social_image, title,
 };
 
 fn main() {
@@ -41,6 +41,7 @@ fn main() {
             }
             body {
                 main {
+                    (loading_screen())
                     canvas id="glcanvas" tabindex="0" {}
                 }
                 script src="../mq_js_bundle.js" {}

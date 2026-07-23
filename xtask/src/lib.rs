@@ -56,7 +56,12 @@ pub fn native_size_style(name: &str) -> Markup {
                 "* {{ margin: 0; padding: 0; box-sizing: border-box; }}\n\
                  html, body {{ height: 100%; overflow: hidden; background: #000; }}\n\
                  body {{ display: flex; align-items: center; justify-content: center; }}\n\
-                 canvas {{ display: block; width: {w}px; height: {h}px; transform-origin: center; outline: none; }}\n\
+                 main {{ display: grid; }}\n\
+                 canvas, .loading {{ grid-area: 1 / 1; width: {w}px; height: {h}px; transform-origin: center; }}\n\
+                 canvas {{ display: block; outline: none; }}\n\
+                 .loading {{ display: flex; align-items: center; justify-content: center; text-align: center; \
+                 padding: 0 2rem; color: rgba(255, 255, 255, 0.35); font: italic 15px system-ui, sans-serif; \
+                 pointer-events: none; }}\n\
                  {POPUP_CSS}"
             )))
         }
@@ -64,12 +69,42 @@ pub fn native_size_style(name: &str) -> Markup {
             (PreEscaped(format!(
                 "function fitCanvas() {{\n\
                  \x20 const k = Math.min(window.innerWidth / {w}, window.innerHeight / {h});\n\
-                 \x20 document.querySelector('canvas').style.transform = `scale(${{k}})`;\n\
+                 \x20 document.querySelectorAll('canvas, .loading').forEach(function(el) {{\n\
+                 \x20   el.style.transform = `scale(${{k}})`;\n\
+                 \x20 }});\n\
                  }}\n\
                  window.addEventListener('resize', fitCanvas);\n\
                  document.addEventListener('DOMContentLoaded', fitCanvas);"
             )))
         }
+    }
+}
+
+/// Sarcastic one-liner shown behind the canvas while the WASM module fetches/inits.
+/// Same "watch, don't judge" tone as the homepage quotes. Sits in the same CSS grid
+/// cell as the canvas (see `native_size_style`) so once the game starts clearing the
+/// canvas each frame, it's painted over automatically — no JS needed to hide it. This
+/// also gives the page a real LCP-eligible text node: `<canvas>` itself isn't a valid
+/// Largest Contentful Paint candidate per spec, so a canvas-only body reports NO_LCP.
+const LOADING_LINES: &[&str] = &[
+    "Make yourself comfortable. We'll start soon.",
+    "The bot is warming up. You are not required to do anything.",
+    "Loading. Try not to backseat drive.",
+    "Spinning up the AI. It already knows how this ends.",
+    "Nothing to do here. That's the whole point.",
+    "I've already won. Now watch me beat the game.",
+    "I'm just better at this. Relax and watch.",
+    "Sit down. I've got this handled.",
+];
+
+pub fn loading_screen() -> Markup {
+    let idx = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0)
+        % LOADING_LINES.len();
+    html! {
+        div class="loading" { (LOADING_LINES[idx]) }
     }
 }
 
