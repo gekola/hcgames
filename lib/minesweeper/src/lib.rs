@@ -22,6 +22,10 @@ pub struct CliArgs {
     /// all (see `run_headless`).
     #[cfg(not(target_arch = "wasm32"))]
     pub no_ui: bool,
+    /// `--variant <square|hex>`: pin the starting grid kind instead of the default
+    /// (Square). In-window, `V` still cycles Square/Hex from there.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub variant: Option<GridKind>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,20 +33,43 @@ pub fn parse_cli_args() -> CliArgs {
     let mut debug = false;
     let mut once = false;
     let mut no_ui = false;
+    let mut variant = None;
+    let mut args = std::env::args().skip(1);
 
-    for arg in std::env::args().skip(1) {
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--debug" => debug = true,
             "--once" => once = true,
             "--no-ui" => no_ui = true,
+            "--variant" => {
+                let Some(v) = args.next() else {
+                    eprintln!("--variant requires a value: square or hex");
+                    std::process::exit(2);
+                };
+                variant = Some(match v.as_str() {
+                    "square" => GridKind::Square,
+                    "hex" => GridKind::Hex,
+                    other => {
+                        eprintln!("unknown --variant value '{other}': expected square or hex");
+                        std::process::exit(2);
+                    }
+                });
+            }
             other => {
-                eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
+                eprintln!(
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <square|hex>)"
+                );
                 std::process::exit(2);
             }
         }
     }
 
-    CliArgs { debug, once, no_ui }
+    CliArgs {
+        debug,
+        once,
+        no_ui,
+        variant,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -146,18 +173,23 @@ pub fn run_headless(kind: GridKind, cli: CliArgs) -> ! {
 
 pub async fn run(kind: GridKind, cli: CliArgs) {
     rand::srand(screenshot::seed());
+    let mut kind = kind;
     let mut board = Board::new(kind);
     let mut accum = 0.0f32;
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
-    let game_name = match kind {
-        GridKind::Square => "minesweeper-square",
-        GridKind::Hex => "minesweeper-hex",
-    };
+    const GAME_NAME: &str = "minesweeper";
 
     loop {
         control.handle_keys();
         accum += control.scale(get_frame_time().min(0.1));
+
+        if is_key_pressed(KeyCode::V) {
+            kind = kind.cycle();
+            board = Board::new(kind);
+            update_probs(&mut board);
+            accum = 0.0;
+        }
 
         while accum >= TICK {
             accum -= TICK;
@@ -172,7 +204,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
                             if won { "won" } else { "lost" }
                         );
                     }
-                    control.episode_complete(game_name, revealed as i64);
+                    control.episode_complete(GAME_NAME, revealed as i64);
                     if cli.once {
                         println!(
                             "result={} revealed={revealed}",

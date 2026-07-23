@@ -6,6 +6,15 @@ pub enum GridKind {
     Hex,
 }
 
+impl GridKind {
+    pub fn cycle(self) -> Self {
+        match self {
+            GridKind::Square => GridKind::Hex,
+            GridKind::Hex => GridKind::Square,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum CellState {
     Hidden,
