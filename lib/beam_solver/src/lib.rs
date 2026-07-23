@@ -30,6 +30,19 @@ pub trait SearchState: Clone {
 pub struct BeamSearch<S: SearchState> {
     width: usize,
     depth: u32,
+    /// Hard ceiling on total `legal_moves()` candidates expanded across an entire
+    /// `choose_move` call (all plies combined). `width`/`depth` bound the *typical* cost,
+    /// but a handful of pathological board states (e.g. Spider with several empty tableau
+    /// columns at once, before symmetric-destination filtering trims them) can blow the
+    /// per-ply candidate count up by 10-50x, which compounds across plies — measured
+    /// spikes past 1 second on states `width`/`depth` alone predicted would cost single-
+    /// digit milliseconds. This budget is a node count, not wall-clock time: no
+    /// `Instant`/`SystemTime` available cross-platform here, since this crate stays
+    /// dependency-free and callers include WASM builds where `std::time::Instant` isn't
+    /// reliably usable without wasm-bindgen (this workspace deliberately doesn't use it —
+    /// see the WASM caveats in the root CLAUDE.md). Node count correlates closely enough
+    /// with wall time in practice to serve the same purpose.
+    node_budget: usize,
     visited: HashSet<u64>,
     /// Moves exempt from the revisit hard-exclusion below — legitimately repeatable
     /// actions (Klondike's `DrawStock`/`ResetStock`, Spider's `Deal`) that consume stock
@@ -51,10 +64,16 @@ struct BeamNode<S: SearchState> {
 }
 
 impl<S: SearchState> BeamSearch<S> {
-    pub fn new(width: usize, depth: u32, is_revisit_exempt: fn(&S::Move) -> bool) -> Self {
+    pub fn new(
+        width: usize,
+        depth: u32,
+        node_budget: usize,
+        is_revisit_exempt: fn(&S::Move) -> bool,
+    ) -> Self {
         Self {
             width,
             depth,
+            node_budget,
             visited: HashSet::new(),
             is_revisit_exempt,
         }
@@ -123,10 +142,35 @@ impl<S: SearchState> BeamSearch<S> {
         beam.sort_unstable_by_key(|n| std::cmp::Reverse(n.score));
         beam.truncate(self.width);
 
+        let mut nodes_expanded = beam.len();
+        let mut budget_exhausted = false;
+
         for _ in 1..self.depth {
+            if budget_exhausted {
+                break;
+            }
+
             let mut next: Vec<BeamNode<S>> = Vec::with_capacity(beam.len() * 4);
 
             for node in &beam {
+                // Checked per-node, not just per-ply: a single pathological board state
+                // (several empty tableau columns colliding with a long consolidation
+                // opportunity) can make one node's own `legal_moves()` call return
+                // hundreds of candidates, blowing the budget mid-ply before a per-ply-only
+                // check would ever see it. Once exhausted, every remaining node in this
+                // ply — including the one that pushed us over — is carried forward
+                // unchanged rather than expanded, same treatment as a terminal/dead-end
+                // line, so no line is unfairly dropped just because of processing order.
+                if budget_exhausted || nodes_expanded >= self.node_budget {
+                    budget_exhausted = true;
+                    next.push(BeamNode {
+                        game: node.game.clone(),
+                        first_move: node.first_move,
+                        score: node.score,
+                    });
+                    continue;
+                }
+
                 let candidates: Vec<S::Move> = if node.game.is_terminal() {
                     Vec::new()
                 } else {
@@ -136,6 +180,7 @@ impl<S: SearchState> BeamSearch<S> {
                         .filter(|m| !is_pointless(&node.game, m))
                         .collect()
                 };
+                nodes_expanded += candidates.len();
 
                 if candidates.is_empty() {
                     // Nothing left down this line — won, stuck, or filtered to nothing.

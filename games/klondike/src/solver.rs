@@ -7,6 +7,10 @@ use cards::card::Card;
 /// own tuning.
 const BEAM_WIDTH: usize = 8;
 const BEAM_DEPTH: u32 = 5;
+/// Effectively unbounded — Klondike hasn't been profiled for pathological branching
+/// spikes the way Spider was, so this preserves its existing behavior exactly rather
+/// than silently capping it. See [[beam_solver]]'s `node_budget` docs.
+const NODE_BUDGET: usize = usize::MAX;
 
 impl SearchState for Game {
     type Move = Move;
@@ -35,7 +39,7 @@ pub struct Solver {
 impl Solver {
     pub fn new() -> Self {
         Self {
-            beam: BeamSearch::new(BEAM_WIDTH, BEAM_DEPTH, |m| {
+            beam: BeamSearch::new(BEAM_WIDTH, BEAM_DEPTH, NODE_BUDGET, |m| {
                 matches!(m, Move::DrawStock | Move::ResetStock)
             }),
         }
