@@ -23,7 +23,7 @@ fn main() {
         html lang="en" {
             head {
                 meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no";
+                meta name="viewport" content="width=device-width, initial-scale=1";
                 (favicon_links(&base_url, dist))
                 title { (title) " — Hotel Chair Games" }
                 meta name="description" content=(description);
@@ -41,7 +41,7 @@ fn main() {
             }
             body {
                 main {
-                    canvas id="glcanvas" tabindex="1" {}
+                    canvas id="glcanvas" tabindex="0" {}
                 }
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
