@@ -334,7 +334,7 @@ fn run_headless(cli: CliArgs) -> ! {
     loop {
         match game.phase {
             Phase::Playing => {
-                if let Some(m) = solver.choose_move(&game) {
+                if let Some(m) = solver.choose_move(&game, cli.debug) {
                     log_move(cli.debug, &game, m);
                     game.apply(m);
                 } else {
@@ -425,7 +425,7 @@ async fn amain(cli: CliArgs) {
                 // them — otherwise grinding toward the 4000-move safety cap can take
                 // several minutes of real wall-clock time for no reason.
                 if cli.once {
-                    if let Some(m) = solver.choose_move(&game) {
+                    if let Some(m) = solver.choose_move(&game, cli.debug) {
                         log_move(cli.debug, &game, m);
                         game.apply(m);
                     } else {
@@ -435,7 +435,7 @@ async fn amain(cli: CliArgs) {
                     accum += dt;
                     if anim_t >= 1.0 && accum >= TICK {
                         accum -= TICK;
-                        if let Some(m) = solver.choose_move(&game) {
+                        if let Some(m) = solver.choose_move(&game, cli.debug) {
                             log_move(cli.debug, &game, m);
                             flying = compute_flying_cards(&game, m, &layout);
                             game.apply(m);
