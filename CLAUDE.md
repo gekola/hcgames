@@ -83,6 +83,14 @@ score, truncate to width, carry terminal lines forward unchanged, hard-exclude m
 lead back to an already-visited state rather than merely penalizing them) shared by
 Klondike and Spider; see either's `solver.rs` for a reference implementation.
 
+`beam_solver` fits games where many moves are simultaneously legal and have to be scored
+against each other (Klondike/Spider). It doesn't fit a game whose "AI" is really a fixed
+technique-escalation order over a puzzle with one known-correct answer (Sudoku: try naked
+single, then hidden single, then locked-candidate elimination, then — only as a last
+resort — a "guess" that's actually just reading the pre-generated solution). For that
+shape, skip `beam_solver` and write the escalation directly in `solver.rs`; see
+`games/sudoku/src/solver.rs`.
+
 ## Native CLI flags (every game)
 
 Every game — not just this solver family — takes the same native-only CLI flags (see
@@ -146,7 +154,16 @@ pins the canvas to that native resolution and fits it to the viewport via CSS
 `transform: scale(...)`, not by stretching to `100vw`/`100vh` — stretching would make the
 canvas's actual backing resolution equal to the raw viewport and crop anything past the
 smaller of width/height. Don't reintroduce `width: 100vw; height: 100vh;` on `canvas`
-without also making every game's drawing code scale-aware.
+without also making every game's drawing code scale-aware. The fit-to-viewport scale is
+capped per-game (`xtask::max_fit_scale`, 1.5 for the 900×720 games, 1.0 — i.e. never
+upscaled past native resolution — for game2048) since a single cap that isn't quite low
+still leaves a portrait canvas filling ~85-90% of a typical desktop viewport's height
+(portrait height is close to what a landscape game's cap already produces on-screen).
+Every game's `Conf` also sets `high_dpi: true` so the canvas backing resolution matches
+`devicePixelRatio` — without it, an OS-scaled ("Retina"/2x) display renders at half the
+physical pixels the CSS box occupies, which reads as chunky/pixelated independent of the
+transform-scale magnification above. Both were needed together to fix a real report of
+game2048 looking oversized and pixelated on a 3200×2000 2x-scaled monitor.
 
 ## WASM caveats
 

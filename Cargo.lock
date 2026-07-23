@@ -256,15 +256,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "minesweeper-hex"
-version = "0.1.0"
-dependencies = [
- "macroquad",
- "minesweeper",
-]
-
-[[package]]
-name = "minesweeper-square"
+name = "minesweeper-game"
 version = "0.1.0"
 dependencies = [
  "macroquad",
@@ -426,6 +418,15 @@ version = "0.1.0"
 dependencies = [
  "beam_solver",
  "cards",
+ "control",
+ "macroquad",
+ "screenshot",
+]
+
+[[package]]
+name = "sudoku"
+version = "0.1.0"
+dependencies = [
  "control",
  "macroquad",
  "screenshot",

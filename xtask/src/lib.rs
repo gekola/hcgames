@@ -43,6 +43,25 @@ pub fn native_size(name: &str) -> (u32, u32) {
     }
 }
 
+/// Upper bound on the viewport-fit scale factor (see `native_size_style`). Without a
+/// cap, a portrait-ish canvas like game2048's (500x610) gets magnified more than a
+/// landscape one on a widescreen monitor, since the fit is height-limited there — and
+/// because portrait height (610) is close to a landscape game's already-capped on-screen
+/// height, *any* single cap that isn't quite low still leaves it filling ~85-90% of the
+/// viewport height on common desktop resolutions (verified: 1.5 barely changed anything
+/// at 1600x1000 or 1920x1080). game2048 gets its own tighter 1.0 cap — never upscaled
+/// past its native resolution at all, so it's always pixel-perfect regardless of
+/// `high_dpi`/CSS-transform interaction, and reads as a modest fixed-size window rather
+/// than something that grows to dominate the screen. The 900x720 games keep the looser
+/// 1.5, which matched their existing on-screen size on a typical 1080p display, since
+/// there's no report of them looking oversized.
+fn max_fit_scale(name: &str) -> f64 {
+    match name {
+        "game2048" => 1.0,
+        _ => 1.5,
+    }
+}
+
 /// CSS + JS that pins the canvas to its native design resolution (so games drawing at
 /// absolute pixel coordinates render correctly) and scales it uniformly to fit the
 /// viewport via `transform: scale`, letterboxed and centered. A CSS transform doesn't
@@ -50,6 +69,7 @@ pub fn native_size(name: &str) -> (u32, u32) {
 /// syncs the canvas's backing resolution to its CSS box) never sees a mismatch.
 pub fn native_size_style(name: &str) -> Markup {
     let (w, h) = native_size(name);
+    let max_scale = max_fit_scale(name);
     html! {
         style {
             (PreEscaped(format!(
@@ -58,7 +78,9 @@ pub fn native_size_style(name: &str) -> Markup {
                  body {{ display: flex; align-items: center; justify-content: center; }}\n\
                  main {{ display: grid; }}\n\
                  canvas, .loading {{ grid-area: 1 / 1; width: {w}px; height: {h}px; transform-origin: center; }}\n\
-                 canvas {{ display: block; outline: none; }}\n\
+                 canvas {{ display: block; outline: none; visibility: hidden; \
+                 animation: reveal-canvas 0s 250ms forwards; }}\n\
+                 @keyframes reveal-canvas {{ to {{ visibility: visible; }} }}\n\
                  .loading {{ display: flex; align-items: center; justify-content: center; text-align: center; \
                  padding: 0 2rem; color: rgba(255, 255, 255, 0.35); font: italic 15px system-ui, sans-serif; \
                  pointer-events: none; }}\n\
@@ -68,7 +90,7 @@ pub fn native_size_style(name: &str) -> Markup {
         script {
             (PreEscaped(format!(
                 "function fitCanvas() {{\n\
-                 \x20 const k = Math.min(window.innerWidth / {w}, window.innerHeight / {h});\n\
+                 \x20 const k = Math.min(window.innerWidth / {w}, window.innerHeight / {h}, {max_scale});\n\
                  \x20 document.querySelectorAll('canvas, .loading').forEach(function(el) {{\n\
                  \x20   el.style.transform = `scale(${{k}})`;\n\
                  \x20 }});\n\
@@ -83,9 +105,12 @@ pub fn native_size_style(name: &str) -> Markup {
 /// Sarcastic one-liner shown behind the canvas while the WASM module fetches/inits.
 /// Same "watch, don't judge" tone as the homepage quotes. Sits in the same CSS grid
 /// cell as the canvas (see `native_size_style`) so once the game starts clearing the
-/// canvas each frame, it's painted over automatically — no JS needed to hide it. This
-/// also gives the page a real LCP-eligible text node: `<canvas>` itself isn't a valid
-/// Largest Contentful Paint candidate per spec, so a canvas-only body reports NO_LCP.
+/// canvas each frame, it's painted over automatically — no JS needed to hide it. The
+/// canvas is also `visibility: hidden` for its first 250ms (`native_size_style`'s
+/// `reveal-canvas` animation-delay) so a fast-loading/cached WASM module can't paint
+/// over the line before it's had a chance to be read. This also gives the page a real
+/// LCP-eligible text node: `<canvas>` itself isn't a valid Largest Contentful Paint
+/// candidate per spec, so a canvas-only body reports NO_LCP.
 const LOADING_LINES: &[&str] = &[
     "Make yourself comfortable. We'll start soon.",
     "The bot is warming up. You are not required to do anything.",
@@ -95,6 +120,12 @@ const LOADING_LINES: &[&str] = &[
     "I've already won. Now watch me beat the game.",
     "I'm just better at this. Relax and watch.",
     "Sit down. I've got this handled.",
+    "Nice game you have here. Sure you're okay watching me play?",
+    "Your controller's decorative today.",
+    "This one's on me. You just enjoy the show.",
+    "I'll take it from here.",
+    "Hands off. Your help won't be needed.",
+    "This game's just better when I play it.",
 ];
 
 pub fn loading_screen() -> Markup {
@@ -126,7 +157,7 @@ font-size: 14px; margin: 0; }\n\
 /// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`), plus any
 /// per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
 pub fn hotkey_popup(name: &str) -> Markup {
-    let has_variant_switch = matches!(name, "klondike" | "spider");
+    let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
     html! {
         div id="hotkeys" {
             div class="panel" {
@@ -211,9 +242,9 @@ pub fn description(name: &str) -> String {
         "game2048" => "A self-playing 2048 AI merges tiles with expectimax search, climbing toward the highest tile with no input from you.".into(),
         "klondike" => "Self-playing Klondike solitaire in your browser. Watch an AI deal, draw, and solve the classic card game automatically.".into(),
         "spider" => "Self-playing Spider solitaire. An AI clears all 10 columns automatically, cycling through 1-, 2-, and 4-suit variants each round.".into(),
+        "sudoku" => "Self-playing Sudoku. Watch an AI fill in sure cells with logical deduction, showing its candidate notes, before falling back to a guess.".into(),
         "arrow-blocks" => "A browser puzzle game solved automatically by an AI, sliding arrow-marked blocks through procedurally generated levels.".into(),
-        "minesweeper-hex" => "AI-solved Minesweeper on a hexagonal grid. Watch the bot flag mines and clear the board in your browser.".into(),
-        "minesweeper-square" => "AI-solved classic square-grid Minesweeper, played automatically in your browser.".into(),
+        "minesweeper" => "AI-solved Minesweeper, played automatically in your browser. Cycle between square and hexagonal grids.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }
