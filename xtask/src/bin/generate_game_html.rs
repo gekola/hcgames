@@ -2,8 +2,8 @@
 use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
-    analytics_bridge, base_url, description, favicon_links, gtag_head, hotkey_popup,
-    loading_screen, native_size_style, screenshot_bridge, social_image, title,
+    analytics_bridge, base_url, description, favicon_links, fullscreen_bridge, gtag_head,
+    hotkey_popup, loading_screen, native_size_style, screenshot_bridge, social_image, title,
 };
 
 fn main() {
@@ -49,6 +49,7 @@ fn main() {
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
                 (hotkey_popup(&name))
                 (screenshot_bridge(&name))
+                (fullscreen_bridge())
             }
         }
     };

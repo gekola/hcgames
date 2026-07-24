@@ -154,7 +154,7 @@ font-size: 14px; margin: 0; }\n\
 
 /// The `?`-toggled, Esc-closed hotkey reference overlay. Pure HTML/CSS/JS — sits on top
 /// of the canvas rather than being drawn by the game itself. Hotkeys listed here must
-/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`), plus any
+/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus any
 /// per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
@@ -167,6 +167,7 @@ pub fn hotkey_popup(name: &str) -> Markup {
                     dt { "-" } dd { "slow down" }
                     dt { "0" } dd { "reset speed" }
                     dt { "Space" } dd { "pause / resume" }
+                    dt { "F" } dd { "toggle fullscreen (or double-click)" }
                     @if has_variant_switch {
                         dt { "V" } dd { "switch game variant" }
                     }
@@ -231,6 +232,41 @@ pub fn screenshot_bridge(name: &str) -> Markup {
                  \x20 }});\n\
                  }});"
             )))
+        }
+    }
+}
+
+/// `F` or double-click toggles fullscreen. Pure page-level JS rather than
+/// `macroquad::window::set_fullscreen` (which on WASM calls `canvas.requestFullscreen()`
+/// via `mq_js_bundle.js`) — browsers apply `:fullscreen { width: 100%; height: 100% }` as
+/// a `!important` UA style, which cannot be overridden from author CSS at any specificity,
+/// so fullscreening the canvas directly stomps the pinned native-resolution box
+/// `native_size_style` relies on and leaves the game drawing at fixed pixel coordinates
+/// into a canvas that's now some unrelated size — the visible symptom was drawing that
+/// read as "shrunk"/"downscaled" once fullscreen, and on some pages looked like nothing
+/// had happened at all. Fullscreening `<html>` instead leaves the canvas element itself
+/// completely unconstrained by the UA style, so its own pinned size and `fitCanvas()`
+/// scale-to-fit transform keep working unchanged — just re-evaluated against a bigger
+/// viewport, which is also why `fullscreenchange` re-runs `fitCanvas` (the transition
+/// doesn't reliably fire its own `resize` event). Native builds toggle fullscreen from
+/// `control::Control` instead, straight through `macroquad::window::set_fullscreen` — no
+/// DOM/canvas-target issue there since it's a real OS window, not a styled element.
+pub fn fullscreen_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "function hcgToggleFullscreen() {\n\
+                 \x20 if (document.fullscreenElement) document.exitFullscreen();\n\
+                 \x20 else document.documentElement.requestFullscreen();\n\
+                 }\n\
+                 document.addEventListener('keydown', function(e) {\n\
+                 \x20 if (e.key === 'f' || e.key === 'F') hcgToggleFullscreen();\n\
+                 });\n\
+                 document.querySelector('canvas').addEventListener('dblclick', hcgToggleFullscreen);\n\
+                 document.addEventListener('fullscreenchange', function() {\n\
+                 \x20 if (typeof fitCanvas === 'function') fitCanvas();\n\
+                 });"
+            ))
         }
     }
 }

@@ -125,19 +125,28 @@ never the macro, since it initializes the window before `main()`'s body runs at 
 
 Every game uses `lib/control` (`Control::new()`, call `handle_keys()` once per frame, feed
 frame time through `scale(dt)`) for hotkeys: `=`/`-` adjust simulation speed 10% per press,
-`0` resets to 1x, `Space` pauses (`scale` returns 0). Draw `control.label()` (`"x1.000"` /
-`"PAUSED"`) somewhere in the game's own header, near score/level — see any game's `main.rs`
-for the pattern (right-aligned, same baseline as the existing HUD text).
+`0` resets to 1x, `Space` pauses (`scale` returns 0). On native only, `Control` also reads
+`F`/double-click to toggle fullscreen via `macroquad::window::set_fullscreen`. Draw
+`control.label()` (`"x1.000"` / `"PAUSED"`) somewhere in the game's own header, near
+score/level — see any game's `main.rs` for the pattern (right-aligned, same baseline as
+the existing HUD text).
 
 Call `control.episode_complete(game_name, score)` at the point each game resets for a new
 round — fires a `gtag('event', 'episode_complete', {game, episode, score})` call. This goes
 through a tiny miniquad JS plugin (`xtask::analytics_bridge`, registers `env.hcg_ga_event`
 before the wasm module loads) rather than wasm-bindgen; see "WASM caveats" below.
 
-`?` toggles a hotkey-reference popup, `Esc` closes it, `S` saves a screenshot — both are
-pure page-level HTML/CSS/JS (`xtask::hotkey_popup`, `xtask::screenshot_bridge`), not drawn
-by the games themselves. If you add a new hotkey to `control::Control`, update the `dl` in
-`hotkey_popup()` to match, or the popup will lie.
+`?` toggles a hotkey-reference popup, `Esc` closes it, `S` saves a screenshot, `F`/double-click
+toggles fullscreen — all pure page-level HTML/CSS/JS (`xtask::hotkey_popup`,
+`xtask::screenshot_bridge`, `xtask::fullscreen_bridge`), not drawn by the games themselves.
+Fullscreen specifically **cannot** go through `macroquad::window::set_fullscreen` on WASM —
+that calls `canvas.requestFullscreen()`, and browsers force a fullscreened element to
+`width/height: 100%` via an `!important` UA style that no author CSS can override, which
+stomps the pinned native-resolution canvas box `native_size_style` depends on (see "Canvas
+sizing is load-bearing" below). `fullscreen_bridge` instead fullscreens `<html>`, leaving
+the canvas element — and its own pinned size / `fitCanvas()` scale-to-fit transform —
+untouched. If you add a new hotkey to `control::Control` (or a page-level one), update the
+`dl` in `hotkey_popup()` to match, or the popup will lie.
 
 When adding a new selectable mode/variant to an existing game, prefer folding it into an
 existing cycling hotkey (e.g. klondike/spider's `V` variant cycle) over adding a dedicated
