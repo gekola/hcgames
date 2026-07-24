@@ -1,7 +1,7 @@
 //! Generates dist/index.html (the game list) and dist/sitemap.xml.
 use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
-use xtask::{base_url, favicon_links, gtag_head, social_image, title};
+use xtask::{base_url, description, favicon_links, gtag_head, social_image, title};
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
@@ -88,7 +88,9 @@ header h1 {
 }
 
 .games {
-  margin-top: 1.5rem;
+  width: 95%;
+  max-width: 960px;
+  margin: 0 0 3rem;
 }
 
 .games h2 {
@@ -100,23 +102,55 @@ header h1 {
   font-weight: normal;
 }
 
-.game-link {
+.game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.game-card {
   display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0.75rem 1rem;
-  border-radius: 0.5rem;
+  flex-direction: column;
+  border-radius: 0.75rem;
   background: #1f2937;
-  color: #93c5fd;
-  text-decoration: none;
   border: 1px solid #374151;
-  transition: background 0.15s;
-  margin-bottom: 0.5rem;
+  text-decoration: none;
+  color: inherit;
+  overflow: hidden;
+  transition: border-color 0.15s, transform 0.15s;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-.game-link:hover, .game-link:active { background: #374151; color: #bfdbfe; }
+.game-card:hover, .game-card:active {
+  border-color: #60a5fa;
+  transform: translateY(-2px);
+}
+
+.game-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #111827;
+}
+
+.game-card .card-body {
+  padding: 0.75rem 1rem 1rem;
+}
+
+.game-card h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #93c5fd;
+  margin-bottom: 0.35rem;
+}
+
+.game-card p {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #9ca3af;
+}
 
 @media (max-width: 720px) {
   header { padding: 2rem 1rem 0.5rem; }
@@ -137,6 +171,8 @@ header h1 {
     padding-left: 0;
     padding-top: 1.25rem;
   }
+
+  .game-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
 "#;
 
@@ -353,18 +389,26 @@ fn main() {
                 main class="main" {
                     div class="scene-wrap" {
                         canvas id="hotel" width="480" height="360" {}
-                        section class="games" {
-                            h2 { "games" }
-                            @for game in &games {
-                                a class="game-link" href=(format!("{game}/")) { (title(game)) }
-                            }
-                        }
                     }
                     section class="quotes" {
                         @for (quote, speaker) in QUOTES {
                             blockquote {
                                 "\"" (quote) "\""
                                 cite class="speaker" { "— " (speaker) }
+                            }
+                        }
+                    }
+                }
+                section class="games" {
+                    h2 { "games" }
+                    div class="game-grid" {
+                        @for game in &games {
+                            a class="game-card" href=(format!("{game}/")) {
+                                img src=(format!("{game}/preview.png")) alt=(title(game)) loading="lazy";
+                                div class="card-body" {
+                                    h3 { (title(game)) }
+                                    p { (description(game)) }
+                                }
                             }
                         }
                     }
