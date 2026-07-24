@@ -1,0 +1,33 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-check-
+
+      - uses: jdx/mise-action@v2
+
+      # Same script `core.hooksPath` runs locally (see CLAUDE.md) — one source of
+      # truth for what "passes" means, in CI and on a contributor's machine.
+      - name: Run pre-commit checks
+        run: ./.githooks/pre-commit
