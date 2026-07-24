@@ -124,17 +124,36 @@ pub enum Difficulty {
     Easy,
     Medium,
     Hard,
+    Expert,
+    Master,
 }
 
 impl Difficulty {
     /// Carving stops once this many clues remain (or removal attempts run out first).
     /// Fewer clues -> more empty cells -> the solver leans harder on locked-candidate
-    /// eliminations and guesses instead of plain naked/hidden singles.
+    /// eliminations and guesses instead of plain naked/hidden singles. 17 is the lowest
+    /// clue count for which a uniquely-solvable grid can exist at all, so Master's floor
+    /// just asks `carve` to strip as far as uniqueness allows.
     fn min_clues(self) -> usize {
         match self {
             Difficulty::Easy => 40,
             Difficulty::Medium => 32,
             Difficulty::Hard => 26,
+            Difficulty::Expert => 22,
+            Difficulty::Master => 17,
+        }
+    }
+
+    /// A single multi-sweep dig plateaus at a per-grid local minimum (23-26 clues in
+    /// practice) well above every target below Hard, so Expert/Master would otherwise both
+    /// just land on that same plateau every time. Retrying the dig with a fresh shuffle order
+    /// and keeping the sparsest result pushes further below the plateau on some retries —
+    /// only Master pays for enough retries to make that reliably visible.
+    fn carve_attempts(self) -> usize {
+        match self {
+            Difficulty::Expert => 1,
+            Difficulty::Master => 4,
+            _ => 1,
         }
     }
 
@@ -143,30 +162,60 @@ impl Difficulty {
             Difficulty::Easy => "Easy",
             Difficulty::Medium => "Medium",
             Difficulty::Hard => "Hard",
+            Difficulty::Expert => "Expert",
+            Difficulty::Master => "Master",
         }
     }
 }
 
-/// Randomly removes clues from a fully solved grid one at a time, keeping a removal only
-/// when the puzzle still has a unique solution (checked via `solve_count` capped at 2).
-fn carve(solution: &[u8; CELLS], difficulty: Difficulty) -> [u8; CELLS] {
+/// Randomly removes clues from a fully solved grid, keeping a removal only when the puzzle
+/// still has a unique solution (checked via `solve_count` capped at 2). A single sweep over
+/// the cells plateaus in the low-to-mid 20s — removing cell A can unblock cell B that an
+/// earlier sweep already passed over — so this repeats sweeps over whatever's still filled
+/// until either `min_clues` is hit or a whole sweep removes nothing more.
+fn dig(solution: &[u8; CELLS], min_clues: usize) -> ([u8; CELLS], usize) {
     let mut grid = *solution;
     let mut clues = CELLS;
-    let min_clues = difficulty.min_clues();
-    for idx in shuffled((0..CELLS).collect()) {
+    loop {
         if clues <= min_clues {
             break;
         }
-        let saved = grid[idx];
-        grid[idx] = 0;
-        let mut test = grid;
-        if solve_count(&mut test, 2) == 1 {
-            clues -= 1;
-        } else {
-            grid[idx] = saved;
+        let filled: Vec<usize> = (0..CELLS).filter(|&i| grid[i] != 0).collect();
+        let mut removed_this_sweep = false;
+        for idx in shuffled(filled) {
+            if clues <= min_clues {
+                break;
+            }
+            let saved = grid[idx];
+            grid[idx] = 0;
+            let mut test = grid;
+            if solve_count(&mut test, 2) == 1 {
+                clues -= 1;
+                removed_this_sweep = true;
+            } else {
+                grid[idx] = saved;
+            }
+        }
+        if !removed_this_sweep {
+            break;
         }
     }
-    grid
+    (grid, clues)
+}
+
+/// Runs `dig` `difficulty.carve_attempts()` times (each with its own random removal order)
+/// and keeps the sparsest grid found — see `Difficulty::carve_attempts`.
+fn carve(solution: &[u8; CELLS], difficulty: Difficulty) -> [u8; CELLS] {
+    let min_clues = difficulty.min_clues();
+    let (mut best_grid, mut best_clues) = dig(solution, min_clues);
+    for _ in 1..difficulty.carve_attempts() {
+        let (grid, clues) = dig(solution, min_clues);
+        if clues < best_clues {
+            best_grid = grid;
+            best_clues = clues;
+        }
+    }
+    best_grid
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

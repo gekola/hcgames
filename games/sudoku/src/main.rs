@@ -15,14 +15,17 @@ const OX: f32 = (900.0 - CELL * 9.0) / 2.0;
 const OY: f32 = 80.0;
 
 // ── Variant mode ──────────────────────────────────────────────────────────────
-// `V` cycles Easy → Medium → Hard → Auto → Easy …; Auto rotates the three
-// difficulties by generation, same pattern as Klondike's Draw-1/Draw-3/Auto cycle.
+// `V` cycles Easy → Medium → Hard → Expert → Master → Auto → Easy …; Auto rotates
+// the five difficulties by generation, same pattern as Klondike's Draw-1/Draw-3/Auto
+// cycle.
 
 #[derive(Clone, Copy, PartialEq)]
 enum VariantMode {
     Easy,
     Medium,
     Hard,
+    Expert,
+    Master,
     Auto,
 }
 
@@ -31,7 +34,9 @@ impl VariantMode {
         match self {
             VariantMode::Easy => VariantMode::Medium,
             VariantMode::Medium => VariantMode::Hard,
-            VariantMode::Hard => VariantMode::Auto,
+            VariantMode::Hard => VariantMode::Expert,
+            VariantMode::Expert => VariantMode::Master,
+            VariantMode::Master => VariantMode::Auto,
             VariantMode::Auto => VariantMode::Easy,
         }
     }
@@ -41,10 +46,14 @@ impl VariantMode {
             VariantMode::Easy => Difficulty::Easy,
             VariantMode::Medium => Difficulty::Medium,
             VariantMode::Hard => Difficulty::Hard,
-            VariantMode::Auto => match generation % 3 {
+            VariantMode::Expert => Difficulty::Expert,
+            VariantMode::Master => Difficulty::Master,
+            VariantMode::Auto => match generation % 5 {
                 0 => Difficulty::Easy,
                 1 => Difficulty::Medium,
-                _ => Difficulty::Hard,
+                2 => Difficulty::Hard,
+                3 => Difficulty::Expert,
+                _ => Difficulty::Master,
             },
         }
     }
@@ -87,17 +96,21 @@ fn parse_cli_args() -> CliArgs {
             "--variant" => {
                 i += 1;
                 let v = args.get(i).unwrap_or_else(|| {
-                    eprintln!("--variant requires a value: easy, medium, hard, or auto");
+                    eprintln!(
+                        "--variant requires a value: easy, medium, hard, expert, master, or auto"
+                    );
                     std::process::exit(2);
                 });
                 variant = Some(match v.as_str() {
                     "easy" => VariantMode::Easy,
                     "medium" => VariantMode::Medium,
                     "hard" => VariantMode::Hard,
+                    "expert" => VariantMode::Expert,
+                    "master" => VariantMode::Master,
                     "auto" => VariantMode::Auto,
                     other => {
                         eprintln!(
-                            "unknown --variant value '{other}': expected easy, medium, hard, or auto"
+                            "unknown --variant value '{other}': expected easy, medium, hard, expert, master, or auto"
                         );
                         std::process::exit(2);
                     }
@@ -105,7 +118,7 @@ fn parse_cli_args() -> CliArgs {
             }
             other => {
                 eprintln!(
-                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <easy|medium|hard|auto>)"
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <easy|medium|hard|expert|master|auto>)"
                 );
                 std::process::exit(2);
             }
@@ -329,8 +342,21 @@ fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
     let sd = measure_text(speed_label, None, 20, 1.0);
     draw_text(speed_label, sw - 8.0 - sd.width, 24.0, 20.0, txt_col);
 
-    let legend = "green=naked single   blue=hidden single   red=locked   orange=guess";
-    draw_text(legend, 10.0, 56.0, 15.0, Color::new(0.5, 0.5, 0.6, 0.9));
+    let legend = [
+        ("only choice", technique_color(Technique::NakedSingle)),
+        ("only spot", technique_color(Technique::HiddenSingle)),
+        ("elimination", technique_color(Technique::LockedCandidate)),
+        ("guess", technique_color(Technique::Guess)),
+    ];
+    let mut x = 10.0;
+    for (i, (label, color)) in legend.iter().enumerate() {
+        draw_text(label, x, 56.0, 15.0, *color);
+        x += measure_text(label, None, 15, 1.0).width;
+        if i + 1 < legend.len() {
+            draw_text("  |  ", x, 56.0, 15.0, Color::new(0.5, 0.5, 0.6, 0.9));
+            x += measure_text("  |  ", None, 15, 1.0).width;
+        }
+    }
 }
 
 fn technique_color(t: Technique) -> Color {
@@ -364,20 +390,21 @@ fn draw_board(game: &Game, highlight: Option<(Move, f32)>) {
 
         let digit = game.grid[idx];
         if digit != 0 {
-            let color = if game.given[idx] {
-                Color::new(0.85, 0.85, 0.92, 1.0)
-            } else {
-                technique_color(game.filled_by[idx].unwrap_or(Technique::NakedSingle))
-            };
             let s = digit.to_string();
             let d = measure_text(&s, None, 34, 1.0);
-            draw_text(
-                &s,
-                x + CELL * 0.5 - d.width * 0.5,
-                y + CELL * 0.5 + d.height * 0.4,
-                34.0,
-                color,
-            );
+            let tx = x + CELL * 0.5 - d.width * 0.5;
+            let ty = y + CELL * 0.5 + d.height * 0.4;
+            if game.given[idx] {
+                // No bold weight in macroquad's default font — fake it by drawing the
+                // glyph a few times at sub-pixel offsets to thicken the strokes.
+                let color = Color::new(0.85, 0.85, 0.92, 1.0);
+                for (ox, oy) in [(0.0, 0.0), (0.7, 0.0), (0.0, 0.7), (0.7, 0.7)] {
+                    draw_text(&s, tx + ox, ty + oy, 34.0, color);
+                }
+            } else {
+                let color = technique_color(game.filled_by[idx].unwrap_or(Technique::NakedSingle));
+                draw_text(&s, tx, ty, 34.0, color);
+            }
         } else {
             draw_candidates(x, y, game.candidates[idx]);
         }
