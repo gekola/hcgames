@@ -606,7 +606,6 @@ fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<Card>) {
         ch,
         top_y,
         tab_y,
-        sh: _,
         ..
     } = *layout;
 

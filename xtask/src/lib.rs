@@ -113,19 +113,19 @@ pub fn native_size_style(name: &str) -> Markup {
 /// candidate per spec, so a canvas-only body reports NO_LCP.
 const LOADING_LINES: &[&str] = &[
     "Make yourself comfortable. We'll start soon.",
-    "The bot is warming up. You are not required to do anything.",
+    "The AI is warming up. You are not required to do anything.",
     "Loading. Try not to backseat drive.",
     "Spinning up the AI. It already knows how this ends.",
     "Nothing to do here. That's the whole point.",
-    "I've already won. Now watch me beat the game.",
-    "I'm just better at this. Relax and watch.",
-    "Sit down. I've got this handled.",
-    "Nice game you have here. Sure you're okay watching me play?",
+    "The AI's already won. Now watch the AI beat the game.",
+    "The AI's just better at this. Relax and watch.",
+    "Sit down. The AI's got this handled.",
+    "Nice game you have here. Sure you're okay watching the AI play?",
     "Your controller's decorative today.",
-    "This one's on me. You just enjoy the show.",
-    "I'll take it from here.",
+    "This one's on the AI. You just enjoy the show.",
+    "The AI will take over from here.",
     "Hands off. Your help won't be needed.",
-    "This game's just better when I play it.",
+    "This game's just better when the AI plays it.",
 ];
 
 pub fn loading_screen() -> Markup {
