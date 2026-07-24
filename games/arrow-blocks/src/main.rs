@@ -32,6 +32,7 @@ fn conf() -> Conf {
         window_title: "Arrow Blocks".to_owned(),
         window_width: 900,
         window_height: 720,
+        high_dpi: true,
         ..Default::default()
     }
 }

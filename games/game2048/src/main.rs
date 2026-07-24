@@ -419,6 +419,7 @@ fn window_conf() -> Conf {
         window_width: WIN_W as i32,
         window_height: WIN_H as i32,
         window_resizable: false,
+        high_dpi: true,
         ..Default::default()
     }
 }

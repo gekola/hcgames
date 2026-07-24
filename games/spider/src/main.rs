@@ -311,6 +311,7 @@ fn conf() -> Conf {
         window_title: "Spider Solitaire".to_owned(),
         window_width: 900,
         window_height: 720,
+        high_dpi: true,
         ..Default::default()
     }
 }
