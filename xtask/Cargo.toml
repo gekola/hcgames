@@ -11,6 +11,11 @@ path = "src/bin/generate_game_html.rs"
 name = "generate_index"
 path = "src/bin/generate_index.rs"
 
+[[bin]]
+name = "resize_preview"
+path = "src/bin/resize_preview.rs"
+
 [dependencies]
 maud = "0.27"
 time = { version = "0.3", features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

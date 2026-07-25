@@ -5,7 +5,11 @@ use xtask::{base_url, description, favicon_links, gtag_head, social_image, title
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
-const FONTS_HREF: &str = "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Fraunces:ital,wght@0,600;1,500&display=swap";
+// Archivo is only ever used at its default weight (400) — the STYLE block never sets
+// font-weight on anything in the Archivo family, only on Fraunces — so 500/600 aren't
+// requested here; trims one @font-face block (and its file) Google Fonts would otherwise
+// serve unused.
+const FONTS_HREF: &str = "https://fonts.googleapis.com/css2?family=Archivo:wght@400&family=Fraunces:ital,wght@0,600;1,500&display=swap";
 
 const STYLE: &str = r#"
 :root {
@@ -203,14 +207,14 @@ header .kicker {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 1.75rem;
+  height: 1.75rem;
   border-radius: 50%;
   border: 1px solid rgba(212, 163, 115, 0.4);
   background: transparent;
   color: var(--accent);
   font-family: 'Fraunces', serif;
-  font-size: 0.95rem;
+  font-size: 1.1rem;
   line-height: 1;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, transform 0.15s;
@@ -223,33 +227,24 @@ header .kicker {
 
 .postcard-arrow:active { transform: scale(0.92); }
 
+/* Purely decorative position indicator, not a click target: a same-sized dot pagination
+   row reads as clickable (and fails touch-target-size at a glance-worthy size), but the
+   prev/next arrows above are already the real, fully-sized manual control. */
 .postcard-dots {
   display: flex;
   align-items: center;
   gap: 0.4rem;
 }
 
-.postcard-dots button {
-  position: relative;
+.postcard-dots span {
   width: 6px;
   height: 6px;
-  padding: 0;
-  border: none;
   border-radius: 50%;
   background: rgba(212, 163, 115, 0.35);
-  cursor: pointer;
   transition: background 0.15s, transform 0.15s;
 }
 
-.postcard-dots button::before {
-  content: "";
-  position: absolute;
-  inset: -6px;
-}
-
-.postcard-dots button:hover { background: rgba(212, 163, 115, 0.6); }
-
-.postcard-dots button.active {
+.postcard-dots span.active {
   background: var(--accent);
   transform: scale(1.35);
 }
@@ -487,7 +482,7 @@ const POSTCARD_SCRIPT: &str = r#"
 (function () {
   const wrap = document.querySelector('.postcards');
   const cards = document.querySelectorAll('.postcards li');
-  const dots = document.querySelectorAll('.postcard-dots button');
+  const dots = document.querySelectorAll('.postcard-dots span');
   const prevBtn = document.querySelector('.postcard-prev');
   const nextBtn = document.querySelector('.postcard-next');
   if (!wrap || cards.length < 2) return;
@@ -501,12 +496,10 @@ const POSTCARD_SCRIPT: &str = r#"
     cards[i].classList.remove('active');
     cards[i].setAttribute('aria-hidden', 'true');
     dots[i].classList.remove('active');
-    dots[i].setAttribute('aria-current', 'false');
     i = (n + cards.length) % cards.length;
     cards[i].classList.add('active');
     cards[i].removeAttribute('aria-hidden');
     dots[i].classList.add('active');
-    dots[i].setAttribute('aria-current', 'true');
   }
 
   function stop() { clearInterval(timer); timer = null; }
@@ -516,7 +509,6 @@ const POSTCARD_SCRIPT: &str = r#"
 
   prevBtn.addEventListener('click', () => goTo(i - 1));
   nextBtn.addEventListener('click', () => goTo(i + 1));
-  dots.forEach((dot, idx) => dot.addEventListener('click', () => goTo(idx)));
 
   wrap.addEventListener('mouseenter', () => { paused = true; stop(); });
   wrap.addEventListener('mouseleave', () => { paused = false; start(); });
@@ -557,6 +549,22 @@ const QUOTES: &[(&str, &str)] = &[
         "a man who fired his financial advisor for a chatbot",
     ),
 ];
+
+/// `game-card img`'s responsive tier: `dist/<game>/preview-small.png` (produced by
+/// `mise run screenshot`, see xtask's `resize_preview` binary) is a downscaled variant for
+/// small/mobile cards — absent for games whose native preview is already small enough
+/// (game2048), in which case the plain `src` alone is used, no `srcset`.
+fn preview_srcset(dist: &Path, game: &str) -> Option<String> {
+    let small = dist.join(game).join("preview-small.png");
+    if !small.exists() {
+        return None;
+    }
+    let (small_w, _) = image::image_dimensions(&small).unwrap();
+    let (full_w, _) = image::image_dimensions(dist.join(game).join("preview.png")).unwrap();
+    Some(format!(
+        "{game}/preview-small.png {small_w}w, {game}/preview.png {full_w}w"
+    ))
+}
 
 fn main() {
     let dist = Path::new("dist");
@@ -606,7 +614,17 @@ fn main() {
                 (gtag_head())
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
-                link rel="stylesheet" href=(FONTS_HREF);
+                // Loaded async (classic loadCSS pattern): a plain `<link rel=stylesheet>`
+                // here blocks first paint on an extra cross-origin round trip (measured
+                // ~850ms in Lighthouse). `media="print"` makes the browser fetch it without
+                // treating it as render-blocking for the screen; the `onload` swap applies
+                // it the moment it arrives. `display=swap` (already in FONTS_HREF) then
+                // handles the brief system-font-to-webfont swap once it does.
+                link rel="preload" href=(FONTS_HREF) as="style";
+                link rel="stylesheet" href=(FONTS_HREF) media="print" onload="this.media='all'";
+                noscript {
+                    link rel="stylesheet" href=(FONTS_HREF);
+                }
                 style { (PreEscaped(STYLE)) }
             }
             body {
@@ -638,12 +656,9 @@ fn main() {
                             button type="button" class="postcard-arrow postcard-prev" aria-label="Previous quote" {
                                 "‹"
                             }
-                            div class="postcard-dots" {
+                            div class="postcard-dots" aria-hidden="true" {
                                 @for i in 0..QUOTES.len() {
-                                    button type="button"
-                                        class=(if i == 0 { "active" } else { "" })
-                                        aria-current=(if i == 0 { "true" } else { "false" })
-                                        aria-label=(format!("Show quote {} of {}", i + 1, QUOTES.len())) {}
+                                    span class=(if i == 0 { "active" } else { "" }) {}
                                 }
                             }
                             button type="button" class="postcard-arrow postcard-next" aria-label="Next quote" {
@@ -657,7 +672,11 @@ fn main() {
                     div class="game-grid" {
                         @for game in &games {
                             a class="game-card" href=(format!("{game}/")) {
-                                img src=(format!("{game}/preview.png")) alt=(title(game)) loading="lazy";
+                                @let srcset = preview_srcset(dist, game);
+                                img src=(format!("{game}/preview.png"))
+                                    srcset=[srcset.clone()]
+                                    sizes=[srcset.is_some().then_some("(max-width: 1010px) 48vw, 228px")]
+                                    alt=(title(game)) loading="lazy";
                                 div class="card-body" {
                                     h3 { (title(game)) }
                                     p { (description(game)) }

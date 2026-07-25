@@ -50,7 +50,7 @@ fi
 
 # Capture a representative in-game screenshot: mise run screenshot snake
 [tasks.screenshot]
-description = "Capture dist/<name>/preview.png by running the native build headless for a few seconds (needs xvfb-run; runs automatically in CI, skipped locally if unavailable)"
+description = "Capture dist/<name>/preview.png (+ a resized preview-small.png for the mobile srcset tier) by running the native build headless for a few seconds (needs xvfb-run; runs automatically in CI, skipped locally if unavailable)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -58,6 +58,10 @@ name=$1
 mkdir -p "dist/$name"
 if command -v xvfb-run >/dev/null 2>&1; then
     HCG_SEED=42 HCG_SCREENSHOT="dist/$name/preview.png" xvfb-run -a cargo run --release --bin "$name"
+    # Small tier for the game-grid card srcset (see generate_index.rs) — the full-size
+    # preview.png stays untouched so hidpi/desktop/TV displays still get a crisp image.
+    cargo run --release --package xtask --bin resize_preview -- \
+        "dist/$name/preview.png" "dist/$name/preview-small.png" 640
 else
     echo "xvfb-run not found — skipping screenshot for $name (runs automatically in CI)" >&2
 fi
