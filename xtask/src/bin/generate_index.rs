@@ -164,15 +164,21 @@ header .kicker {
   opacity: 0;
   visibility: hidden;
   transform-origin: 50% 100%;
-  transform: rotate(var(--r, 0deg)) rotateX(-18deg) translateY(16px) scale(0.94);
+  transform: translateX(var(--drag, 0px)) rotate(calc(var(--r, 0deg) + var(--drag-deg, 0deg))) rotateX(-18deg) translateY(16px) scale(0.94);
   transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.4s;
 }
 
 .postcards li.active {
   opacity: 1;
   visibility: visible;
-  transform: rotate(var(--r, 0deg)) rotateX(0deg) translateY(0) scale(1);
+  transform: translateX(var(--drag, 0px)) rotate(calc(var(--r, 0deg) + var(--drag-deg, 0deg))) rotateX(0deg) translateY(0) scale(1);
   transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear;
+}
+
+/* Live-drag state: the finger is in direct contact, so the card must track it with zero
+   transition lag — the cubic-bezier above is reserved for the released/settling motion. */
+.postcards li.dragging {
+  transition: none;
 }
 
 .postcards blockquote {
@@ -475,13 +481,22 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
 
 /// Cycles the `.postcards li` stack every 5s (top card fades out, next one in) and wires
 /// the prev/next arrows + dots + touch swipe for manual stepping. Autoplay pauses on
-/// hover/focus and never starts at all under reduced-motion, but manual navigation always
-/// works — only the automatic timer is motion-gated. Any manual step (arrow, dot, or
-/// swipe) restarts the autoplay clock so it doesn't immediately jump again right after a
-/// deliberate interaction. The swipe listener is `passive: true` (no `preventDefault`) and
-/// only fires `goTo` once a completed gesture is clearly more horizontal than vertical —
-/// this is a card carousel inside an otherwise vertically-scrolling page, so a swipe must
-/// never fight the page's own scroll.
+/// hover/focus/drag and never starts at all under reduced-motion, but manual navigation
+/// always works — only the automatic timer is motion-gated. Any completed manual step
+/// (arrow, dot, or swipe past the threshold) restarts the autoplay clock.
+///
+/// The swipe drag tracks the finger live (`--drag`/`--drag-deg` custom properties feed
+/// the card's `transform`, see the CSS above) rather than only reacting once the finger
+/// lifts — a card that only ever jumps on release doesn't read as something you're
+/// physically sliding. `.dragging` kills the transition during that live phase so it
+/// tracks with zero lag; releasing past `SWIPE_THRESHOLD` re-enables the transition and
+/// amplifies `--drag` so the card keeps sliding off in the same direction it was
+/// released in (rather than snapping back to center first) while `show()` cross-fades
+/// the next one in — releasing short of the threshold instead animates `--drag` back to
+/// 0 with that same transition, i.e. a spring-back. All touch listeners are
+/// `passive: true` (no `preventDefault`) and a move only counts once it's clearly more
+/// horizontal than vertical — this is a card carousel inside an otherwise
+/// vertically-scrolling page, so a swipe must never fight the page's own scroll.
 const POSTCARD_SCRIPT: &str = r#"
 (function () {
   const wrap = document.querySelector('.postcards');
@@ -498,13 +513,22 @@ const POSTCARD_SCRIPT: &str = r#"
   let paused = false;
 
   function show(n) {
-    cards[i].classList.remove('active');
-    cards[i].setAttribute('aria-hidden', 'true');
+    const outgoing = cards[i];
+    outgoing.classList.remove('active');
+    outgoing.setAttribute('aria-hidden', 'true');
     dots[i].classList.remove('active');
     i = (n + cards.length) % cards.length;
     cards[i].classList.add('active');
     cards[i].removeAttribute('aria-hidden');
     dots[i].classList.add('active');
+    // A flung card keeps its --drag offset through its exit transition (see
+    // touchend below) so it visibly continues off in the swipe direction instead
+    // of snapping back to center first; only clear it once that's finished, so
+    // it's centered again the next time this card cycles back into view.
+    setTimeout(() => {
+      outgoing.style.removeProperty('--drag');
+      outgoing.style.removeProperty('--drag-deg');
+    }, 500);
   }
 
   function stop() { clearInterval(timer); timer = null; }
@@ -520,18 +544,59 @@ const POSTCARD_SCRIPT: &str = r#"
   wrap.addEventListener('focusin', () => { paused = true; stop(); });
   wrap.addEventListener('focusout', () => { paused = false; start(); });
 
-  let touchStartX = 0;
-  let touchStartY = 0;
+  const SWIPE_THRESHOLD = 40;
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  function endDrag() {
+    dragging = false;
+    cards[i].classList.remove('dragging');
+  }
+
   stack.addEventListener('touchstart', (e) => {
     const t = e.changedTouches[0];
-    touchStartX = t.clientX;
-    touchStartY = t.clientY;
+    startX = t.clientX;
+    startY = t.clientY;
+    dragging = true;
+    stop();
+    cards[i].classList.add('dragging');
   }, { passive: true });
-  stack.addEventListener('touchend', (e) => {
+
+  stack.addEventListener('touchmove', (e) => {
+    if (!dragging) return;
     const t = e.changedTouches[0];
-    const dx = t.clientX - touchStartX;
-    const dy = t.clientY - touchStartY;
-    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy)) goTo(dx < 0 ? i + 1 : i - 1);
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    if (Math.abs(dx) <= Math.abs(dy)) return;
+    cards[i].style.setProperty('--drag', dx + 'px');
+    cards[i].style.setProperty('--drag-deg', (dx / 18) + 'deg');
+  }, { passive: true });
+
+  stack.addEventListener('touchend', (e) => {
+    if (!dragging) return;
+    const card = cards[i];
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    endDrag();
+    if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+      card.style.setProperty('--drag', (dx * 3) + 'px');
+      goTo(dx < 0 ? i + 1 : i - 1);
+    } else {
+      card.style.setProperty('--drag', '0px');
+      card.style.setProperty('--drag-deg', '0deg');
+      start();
+    }
+  }, { passive: true });
+
+  stack.addEventListener('touchcancel', () => {
+    if (!dragging) return;
+    const card = cards[i];
+    endDrag();
+    card.style.setProperty('--drag', '0px');
+    card.style.setProperty('--drag-deg', '0deg');
+    start();
   }, { passive: true });
 
   start();
