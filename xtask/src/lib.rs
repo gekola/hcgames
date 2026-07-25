@@ -284,7 +284,7 @@ pub fn screenshot_bridge(name: &str) -> Markup {
     }
 }
 
-/// `F` or double-click toggles fullscreen. Pure page-level JS rather than
+/// `F` or double-click/double-tap toggles fullscreen. Pure page-level JS rather than
 /// `macroquad::window::set_fullscreen` (which on WASM calls `canvas.requestFullscreen()`
 /// via `mq_js_bundle.js`) — browsers apply `:fullscreen { width: 100%; height: 100% }` as
 /// a `!important` UA style, which cannot be overridden from author CSS at any specificity,
@@ -299,20 +299,50 @@ pub fn screenshot_bridge(name: &str) -> Markup {
 /// doesn't reliably fire its own `resize` event). Native builds toggle fullscreen from
 /// `control::Control` instead, straight through `macroquad::window::set_fullscreen` — no
 /// DOM/canvas-target issue there since it's a real OS window, not a styled element.
+///
+/// The touch path is its own listener rather than relying on `dblclick` firing from a
+/// double-tap: iOS Safari treats a double-tap on a plain (non-form, non-link) element as
+/// its own double-tap-to-zoom gesture and consumes it before a `dblclick` event ever
+/// reaches JS, so double-tap silently did nothing there. Detecting two `touchend`s within
+/// 350ms ourselves and calling `preventDefault()` on the second suppresses that native
+/// zoom and fires the toggle instead — scoped to the canvas only, so pinch-zoom/
+/// double-tap-zoom elsewhere on the page (e.g. the hotkey popup text) is untouched, which
+/// matters since disabling zoom via the viewport meta tag site-wide would be an
+/// accessibility regression. `webkitRequestFullscreen`/`webkitExitFullscreen`/
+/// `webkitFullscreenElement` fall back for older WebKit that predates the unprefixed API.
 pub fn fullscreen_bridge() -> Markup {
     html! {
         script {
             (PreEscaped(
-                "function hcgToggleFullscreen() {\n\
-                 \x20 if (document.fullscreenElement) document.exitFullscreen();\n\
-                 \x20 else document.documentElement.requestFullscreen();\n\
+                "function hcgIsFullscreen() {\n\
+                 \x20 return !!(document.fullscreenElement || document.webkitFullscreenElement);\n\
+                 }\n\
+                 function hcgToggleFullscreen() {\n\
+                 \x20 if (hcgIsFullscreen()) {\n\
+                 \x20   (document.exitFullscreen || document.webkitExitFullscreen).call(document);\n\
+                 \x20 } else {\n\
+                 \x20   var el = document.documentElement;\n\
+                 \x20   (el.requestFullscreen || el.webkitRequestFullscreen).call(el);\n\
+                 \x20 }\n\
                  }\n\
                  document.addEventListener('keydown', function(e) {\n\
                  \x20 if (e.key === 'f' || e.key === 'F') hcgToggleFullscreen();\n\
                  });\n\
-                 document.querySelector('canvas').addEventListener('dblclick', hcgToggleFullscreen);\n\
-                 document.addEventListener('fullscreenchange', function() {\n\
-                 \x20 if (typeof fitCanvas === 'function') fitCanvas();\n\
+                 var hcgCanvas = document.querySelector('canvas');\n\
+                 hcgCanvas.addEventListener('dblclick', hcgToggleFullscreen);\n\
+                 var hcgLastTouchEnd = 0;\n\
+                 hcgCanvas.addEventListener('touchend', function(e) {\n\
+                 \x20 var now = Date.now();\n\
+                 \x20 if (now - hcgLastTouchEnd <= 350) {\n\
+                 \x20   e.preventDefault();\n\
+                 \x20   hcgToggleFullscreen();\n\
+                 \x20 }\n\
+                 \x20 hcgLastTouchEnd = now;\n\
+                 }, { passive: false });\n\
+                 ['fullscreenchange', 'webkitfullscreenchange'].forEach(function(ev) {\n\
+                 \x20 document.addEventListener(ev, function() {\n\
+                 \x20   if (typeof fitCanvas === 'function') fitCanvas();\n\
+                 \x20 });\n\
                  });"
             ))
         }
