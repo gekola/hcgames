@@ -81,21 +81,16 @@ struct CliArgs {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_cli_args() -> CliArgs {
-    let mut debug = false;
-    let mut once = false;
-    let mut variant = None;
-    let mut no_ui = false;
-
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let (base, rest) = game_common::parse_base_args(&args);
+
+    let mut variant = None;
     let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--debug" => debug = true,
-            "--once" => once = true,
-            "--no-ui" => no_ui = true,
+    while i < rest.len() {
+        match rest[i].as_str() {
             "--variant" => {
                 i += 1;
-                let v = args.get(i).unwrap_or_else(|| {
+                let v = rest.get(i).unwrap_or_else(|| {
                     eprintln!(
                         "--variant requires a value: easy, medium, hard, expert, master, or auto"
                     );
@@ -127,10 +122,10 @@ fn parse_cli_args() -> CliArgs {
     }
 
     CliArgs {
-        debug,
-        once,
+        debug: base.debug,
+        once: base.once,
         variant,
-        no_ui,
+        no_ui: base.no_ui,
     }
 }
 

@@ -59,23 +59,17 @@ struct CliArgs {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_cli_args() -> CliArgs {
-    let mut debug = false;
-    let mut once = false;
-    let mut no_ui = false;
-
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--debug" => debug = true,
-            "--once" => once = true,
-            "--no-ui" => no_ui = true,
-            other => {
-                eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
-                std::process::exit(2);
-            }
-        }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (base, rest) = game_common::parse_base_args(&args);
+    if let Some(other) = rest.first() {
+        eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
+        std::process::exit(2);
     }
-
-    CliArgs { debug, once, no_ui }
+    CliArgs {
+        debug: base.debug,
+        once: base.once,
+        no_ui: base.no_ui,
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

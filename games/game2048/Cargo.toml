@@ -7,3 +7,4 @@ edition = "2024"
 macroquad = "0.4"
 screenshot = { path = "../../lib/screenshot" }
 control = { path = "../../lib/control" }
+game_common = { path = "../../lib/game_common" }

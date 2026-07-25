@@ -9,7 +9,8 @@ Cargo.toml          workspace root (resolver = "2", opt-level = "z" + lto for re
 mise.toml           task runner — primary interface for builds
 games/
   snake/            one crate per game
-lib/                shared crates (cards, minesweeper, screenshot, control, beam_solver)
+lib/                shared crates (cards, minesweeper, screenshot, control, beam_solver,
+                    game_common)
 xtask/              native-only site generator (see "Site generation" below)
 static/             assets copied verbatim into dist/ (favicon.svg, hotel-scene.svg, robots.txt)
 dist/               build output (git-ignored), served via python HTTP
@@ -95,13 +96,17 @@ shape, skip `beam_solver` and write the escalation directly in `solver.rs`; see
 
 Every game — not just this solver family — takes the same native-only CLI flags (see
 any game's `main.rs` `parse_cli_args`/`run_headless`, or `lib/minesweeper/src/lib.rs`
-for a game sharing one `run`/`run_headless` pair across two thin binaries):
+for a game sharing one `run`/`run_headless` pair across two thin binaries).
+`--debug`/`--once`/`--no-ui` parsing is identical across every game, so `parse_cli_args`
+should call `game_common::parse_base_args(&args)` and only handle its own extra flags
+(if any) from the returned leftover tokens — see `games/snake/src/main.rs` for a game
+with no extra flags, or `games/sudoku/src/main.rs` for one parsing `--variant` on top:
 
 | Flag | Behavior |
 |------|----------|
 | `--debug` | Print every move/tick/action to stderr (a raw-candidates dump on stall too, for the beam-search games) |
 | `--once` | Play one episode to its natural end (Won/Stuck, game-over, level-solved, …), print a `result=...` line, exit |
-| `--variant <...>` | Klondike/Spider only — pin the starting variant/mode instead of the default rotation. Games without a selectable mode don't have this flag |
+| `--variant <...>` | Klondike/Spider/Sudoku/Minesweeper — pin the starting variant/mode instead of the default rotation. Games without a selectable mode don't have this flag |
 | `--no-ui` | Skip macroquad/window/GL setup entirely (manual `fn main()` branching *before* calling `macroquad::Window::from_config` — `#[macroquad::main]` initializes the window unconditionally, too late to skip it) |
 
 `--no-ui` plus `--once` plus `HCG_SEED=<n>` (env var, already read by `screenshot::seed()`)

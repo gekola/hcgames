@@ -19,6 +19,7 @@ name = "arrow-blocks"
 version = "0.1.0"
 dependencies = [
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
@@ -138,9 +139,14 @@ name = "game2048"
 version = "0.1.0"
 dependencies = [
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
+
+[[package]]
+name = "game_common"
+version = "0.1.0"
 
 [[package]]
 name = "glam"
@@ -185,6 +191,7 @@ dependencies = [
  "beam_solver",
  "cards",
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
@@ -251,6 +258,7 @@ name = "minesweeper"
 version = "0.1.0"
 dependencies = [
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
@@ -408,6 +416,7 @@ name = "snake"
 version = "0.1.0"
 dependencies = [
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
@@ -419,6 +428,7 @@ dependencies = [
  "beam_solver",
  "cards",
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
@@ -428,6 +438,7 @@ name = "sudoku"
 version = "0.1.0"
 dependencies = [
  "control",
+ "game_common",
  "macroquad",
  "screenshot",
 ]
