@@ -5,17 +5,31 @@ use xtask::{base_url, description, favicon_links, gtag_head, social_image, title
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
+const FONTS_HREF: &str = "https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Fraunces:ital,wght@0,600;1,500&display=swap";
+
 const STYLE: &str = r#"
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  --bg: #171310;
+  --cream: #f0ece2;
+  --cream-dim: #ede6d4;
+  --ink: #2c2015;
+  --ink-soft: #5b4b36;
+  --ink-faint: #786451;
+  --text: #e7ddcd;
+  --text-dim: #a89a86;
+  --accent: #d4a373;
+  --border: rgba(212, 163, 115, 0.18);
+}
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html { overflow-x: hidden; }
 
 body {
-  background: #111827;
-  color: #e5e7eb;
-  font-family: system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Archivo', system-ui, sans-serif;
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
@@ -25,30 +39,68 @@ body {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.fade-up { animation: fadeUp 0.6s ease both; }
+header.fade-up { animation-delay: 0s; }
+.scene-card.fade-up { animation-delay: 0.12s; }
+.postcards.fade-up { animation-delay: 0.24s; }
+.games.fade-up { animation-delay: 0.36s; }
+
 header {
   padding: 3rem 1rem 1rem;
   text-align: center;
 }
 
 header h1 {
-  font-size: clamp(1.5rem, 7vw, 2rem);
-  font-weight: 700;
-  color: #f9fafb;
+  font-family: 'Fraunces', serif;
+  font-weight: 600;
+  font-size: clamp(1.7rem, 7vw, 2.5rem);
+  color: var(--cream);
+}
+
+header .kicker {
+  margin-top: 0.6rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.85;
 }
 
 .main {
   display: flex;
-  gap: 3rem;
-  align-items: flex-start;
-  max-width: 960px;
+  flex-wrap: nowrap;
+  gap: 2.5rem;
+  align-items: flex-end;
+  justify-content: center;
+  max-width: 900px;
   width: 95%;
-  margin: 1.5rem 0 3rem;
+  margin: 2rem 0 3rem;
 }
 
-.scene-wrap {
+.scene-card {
+  position: relative;
   flex-shrink: 0;
   width: 100%;
-  max-width: 480px;
+  max-width: 504px;
+  padding: 12px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(212, 163, 115, 0.09), rgba(0, 0, 0, 0) 60%);
+  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, 0.65);
+}
+
+.scene-card::before {
+  content: "";
+  position: absolute;
+  inset: -40px;
+  z-index: -1;
+  background: radial-gradient(circle at 50% 40%, rgba(212, 163, 115, 0.16), transparent 70%);
+  filter: blur(20px);
+  pointer-events: none;
 }
 
 #hotel {
@@ -57,34 +109,149 @@ header h1 {
   max-width: 480px;
   height: auto;
   aspect-ratio: 4 / 3;
+  border-radius: 6px;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
 
-.quotes {
-  flex: 1;
-  min-width: 0;
-  border-left: 2px solid #374151;
-  padding-left: 1.5rem;
-  padding-top: 0.5rem;
+.postcards {
+  flex: 0 1 240px;
+  min-width: 170px;
+  max-width: 260px;
+  margin-bottom: 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 1.8rem;
+  align-items: center;
 }
 
-.quotes blockquote {
-  font-size: 0.9rem;
-  line-height: 1.7;
-  color: #9ca3af;
+.postcard-stack {
+  position: relative;
+  width: 100%;
+}
+
+.postcard-stack::before, .postcard-stack::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--cream-dim);
+  border-radius: 4px;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
+.postcard-stack::before { transform: rotate(-4deg) translate(-5px, 4px); }
+.postcard-stack::after { transform: rotate(3deg) translate(5px, 3px); opacity: 0.85; }
+
+.postcards ul {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  list-style: none;
+  perspective: 900px;
+}
+
+.postcards li {
+  grid-area: 1 / 1;
+  background: var(--cream);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 1.1rem 1.2rem;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  visibility: hidden;
+  transform-origin: 50% 100%;
+  transform: rotate(var(--r, 0deg)) rotateX(-18deg) translateY(16px) scale(0.94);
+  transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.4s;
+}
+
+.postcards li.active {
+  opacity: 1;
+  visibility: visible;
+  transform: rotate(var(--r, 0deg)) rotateX(0deg) translateY(0) scale(1);
+  transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear;
+}
+
+.postcards blockquote {
+  font-family: 'Fraunces', serif;
   font-style: italic;
+  font-weight: 500;
+  font-size: 0.88rem;
+  line-height: 1.5;
 }
 
-.quotes blockquote .speaker {
+.postcards cite {
   display: block;
-  margin-top: 0.4rem;
+  margin-top: 0.6rem;
   font-style: normal;
-  font-size: 0.72rem;
-  color: #7d8590;
+  font-size: 0.6rem;
+  letter-spacing: 0.01em;
+  color: var(--ink-faint);
+}
+
+.postcard-nav {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+
+.postcard-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  border: 1px solid rgba(212, 163, 115, 0.4);
+  background: transparent;
+  color: var(--accent);
+  font-family: 'Fraunces', serif;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.postcard-arrow:hover, .postcard-arrow:focus-visible {
+  background: rgba(212, 163, 115, 0.15);
+  border-color: var(--accent);
+}
+
+.postcard-arrow:active { transform: scale(0.92); }
+
+.postcard-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.postcard-dots button {
+  position: relative;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(212, 163, 115, 0.35);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+
+.postcard-dots button::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.postcard-dots button:hover { background: rgba(212, 163, 115, 0.6); }
+
+.postcard-dots button.active {
+  background: var(--accent);
+  transform: scale(1.35);
 }
 
 .games {
@@ -96,7 +263,7 @@ header h1 {
 .games h2 {
   font-size: 0.75rem;
   letter-spacing: 0.15em;
-  color: #7d8590;
+  color: var(--text-dim);
   text-transform: uppercase;
   margin-bottom: 1rem;
   font-weight: normal;
@@ -112,8 +279,8 @@ header h1 {
   display: flex;
   flex-direction: column;
   border-radius: 0.75rem;
-  background: #1f2937;
-  border: 1px solid #374151;
+  background: #1c1712;
+  border: 1px solid var(--border);
   text-decoration: none;
   color: inherit;
   overflow: hidden;
@@ -123,7 +290,7 @@ header h1 {
 }
 
 .game-card:hover, .game-card:active {
-  border-color: #60a5fa;
+  border-color: var(--accent);
   transform: translateY(-2px);
 }
 
@@ -132,7 +299,7 @@ header h1 {
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  background: #111827;
+  background: var(--bg);
 }
 
 .game-card .card-body {
@@ -140,16 +307,22 @@ header h1 {
 }
 
 .game-card h3 {
-  font-size: 1rem;
+  font-family: 'Fraunces', serif;
+  font-size: 1.05rem;
   font-weight: 600;
-  color: #93c5fd;
+  color: #e7c98f;
   margin-bottom: 0.35rem;
 }
 
 .game-card p {
   font-size: 0.8rem;
   line-height: 1.4;
-  color: #9ca3af;
+  color: var(--text-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-up { animation: none; opacity: 1; transform: none; }
+  .postcards li, .postcards li.active { transition: none; }
 }
 
 @media (max-width: 720px) {
@@ -158,19 +331,13 @@ header h1 {
   .main {
     flex-direction: column;
     align-items: center;
-    gap: 2rem;
+    gap: 1.75rem;
     margin: 1rem 0 2rem;
   }
 
-  .scene-wrap { max-width: 420px; margin: 0 auto; }
+  .scene-card { max-width: 444px; margin: 0 auto; }
 
-  .quotes {
-    width: 100%;
-    border-left: none;
-    border-top: 2px solid #374151;
-    padding-left: 0;
-    padding-top: 1.25rem;
-  }
+  .postcards { margin-bottom: 0; }
 
   .game-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
@@ -311,6 +478,55 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
 })();
 "#;
 
+/// Cycles the `.postcards li` stack every 5s (top card fades out, next one in) and wires
+/// the prev/next arrows + dots for manual stepping. Autoplay pauses on hover/focus and
+/// never starts at all under reduced-motion, but manual navigation always works — only
+/// the automatic timer is motion-gated. Any manual step (arrow or dot) restarts the
+/// autoplay clock so it doesn't immediately jump again right after a deliberate click.
+const POSTCARD_SCRIPT: &str = r#"
+(function () {
+  const wrap = document.querySelector('.postcards');
+  const cards = document.querySelectorAll('.postcards li');
+  const dots = document.querySelectorAll('.postcard-dots button');
+  const prevBtn = document.querySelector('.postcard-prev');
+  const nextBtn = document.querySelector('.postcard-next');
+  if (!wrap || cards.length < 2) return;
+
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let i = 0;
+  let timer = null;
+  let paused = false;
+
+  function show(n) {
+    cards[i].classList.remove('active');
+    cards[i].setAttribute('aria-hidden', 'true');
+    dots[i].classList.remove('active');
+    dots[i].setAttribute('aria-current', 'false');
+    i = (n + cards.length) % cards.length;
+    cards[i].classList.add('active');
+    cards[i].removeAttribute('aria-hidden');
+    dots[i].classList.add('active');
+    dots[i].setAttribute('aria-current', 'true');
+  }
+
+  function stop() { clearInterval(timer); timer = null; }
+  function start() { if (!reduced && !paused) timer = setInterval(() => show(i + 1), 5000); }
+  function restart() { stop(); start(); }
+  function goTo(n) { show(n); restart(); }
+
+  prevBtn.addEventListener('click', () => goTo(i - 1));
+  nextBtn.addEventListener('click', () => goTo(i + 1));
+  dots.forEach((dot, idx) => dot.addEventListener('click', () => goTo(idx)));
+
+  wrap.addEventListener('mouseenter', () => { paused = true; stop(); });
+  wrap.addEventListener('mouseleave', () => { paused = false; start(); });
+  wrap.addEventListener('focusin', () => { paused = true; stop(); });
+  wrap.addEventListener('focusout', () => { paused = false; start(); });
+
+  start();
+})();
+"#;
+
 const QUOTES: &[(&str, &str)] = &[
     (
         "Gaming is solved.",
@@ -336,6 +552,10 @@ const QUOTES: &[(&str, &str)] = &[
         "No one will need gamers in 6 months.",
         "someone who has never finished a game in their life",
     ),
+    (
+        "There's a whole popup of controls behind the ? key. I've never opened it, but I appreciate that it's there.",
+        "a man who fired his financial advisor for a chatbot",
+    ),
 ];
 
 fn main() {
@@ -360,7 +580,11 @@ fn main() {
         .collect();
     games.sort_by_key(|name| title(name));
 
-    let og = social_image(&base_url, dist, None);
+    let og = social_image(&base_url, dist, Some("og-image.png"));
+
+    // Small fixed alternating tilt per postcard so the stack doesn't look perfectly
+    // squared-off — deterministic (not `Math.random()`) so there's no first-paint jump.
+    let tilts = [-1.4, 1.6, -0.8];
 
     let page = html! {
         (DOCTYPE)
@@ -380,26 +604,55 @@ fn main() {
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
                 (gtag_head())
+                link rel="preconnect" href="https://fonts.googleapis.com";
+                link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
+                link rel="stylesheet" href=(FONTS_HREF);
                 style { (PreEscaped(STYLE)) }
             }
             body {
-                header {
+                header class="fade-up" {
                     h1 { "Hotel Chair Games" }
+                    p class="kicker" { "The bed is taken. Sit anyway." }
                 }
                 main class="main" {
-                    div class="scene-wrap" {
+                    div class="scene-card fade-up" {
                         canvas id="hotel" width="480" height="360" {}
                     }
-                    section class="quotes" {
-                        @for (quote, speaker) in QUOTES {
-                            blockquote {
-                                "\"" (quote) "\""
-                                cite class="speaker" { "— " (speaker) }
+                    div class="postcards fade-up" role="region" aria-roledescription="carousel"
+                        aria-label="Overheard AI-hype quotes" {
+                        div class="postcard-stack" {
+                            ul {
+                                @for (i, (quote, speaker)) in QUOTES.iter().enumerate() {
+                                    li class=(if i == 0 { "active" } else { "" })
+                                        aria-hidden=[if i != 0 { Some("true") } else { None }]
+                                        style=(format!("--r: {}deg", tilts[i % tilts.len()])) {
+                                        blockquote {
+                                            "\"" (quote) "\""
+                                        }
+                                        cite { "— " (speaker) }
+                                    }
+                                }
+                            }
+                        }
+                        div class="postcard-nav" {
+                            button type="button" class="postcard-arrow postcard-prev" aria-label="Previous quote" {
+                                "‹"
+                            }
+                            div class="postcard-dots" {
+                                @for i in 0..QUOTES.len() {
+                                    button type="button"
+                                        class=(if i == 0 { "active" } else { "" })
+                                        aria-current=(if i == 0 { "true" } else { "false" })
+                                        aria-label=(format!("Show quote {} of {}", i + 1, QUOTES.len())) {}
+                                }
+                            }
+                            button type="button" class="postcard-arrow postcard-next" aria-label="Next quote" {
+                                "›"
                             }
                         }
                     }
                 }
-                section class="games" {
+                section class="games fade-up" {
                     h2 { "games" }
                     div class="game-grid" {
                         @for game in &games {
@@ -414,6 +667,7 @@ fn main() {
                     }
                 }
                 script { (PreEscaped(HOTEL_SCENE_SCRIPT)) }
+                script { (PreEscaped(POSTCARD_SCRIPT)) }
             }
         }
     };
