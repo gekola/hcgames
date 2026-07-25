@@ -2,3 +2,4 @@
 /dist
 games/*/vendor/
 tmp/
+/.notes/
