@@ -140,7 +140,12 @@ pub fn loading_screen() -> Markup {
 }
 
 const POPUP_CSS: &str = "\
-#hotkeys { display: none; position: fixed; inset: 0; z-index: 10; \
+#hotkeys-btn { display: block; position: fixed; bottom: 14px; right: 14px; z-index: 10; \
+width: 48px; height: 48px; border-radius: 50%; border: none; \
+background: rgba(255,255,255,0.15); color: #fff; font: 20px system-ui, sans-serif; \
+line-height: 48px; text-align: center; padding: 0; cursor: pointer; }\n\
+#hotkeys-btn:hover { background: rgba(255,255,255,0.28); }\n\
+#hotkeys { display: none; position: fixed; inset: 0; z-index: 11; \
 background: rgba(0,0,0,0.75); align-items: center; justify-content: center; \
 font-family: system-ui, sans-serif; }\n\
 #hotkeys.open { display: flex; }\n\
@@ -152,13 +157,17 @@ font-size: 14px; margin: 0; }\n\
 #hotkeys dt { font-family: monospace; color: #8cf; }\n\
 #hotkeys dd { margin: 0; color: #ccc; }";
 
-/// The `?`-toggled, Esc-closed hotkey reference overlay. Pure HTML/CSS/JS — sits on top
-/// of the canvas rather than being drawn by the game itself. Hotkeys listed here must
-/// match what `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus any
-/// per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
+/// The `?`-toggled, Esc-closed hotkey reference overlay, plus an always-visible on-canvas
+/// `#hotkeys-btn` tap target that does the same toggle — `?` isn't reachable without a
+/// physical keyboard, so touch visitors had no way to discover this at all. 48px (the
+/// standard min. touch-target size) so it's tappable without zooming. Pure HTML/CSS/JS —
+/// sits on top of the canvas rather than being drawn by the game itself. Hotkeys listed
+/// here must match what `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus
+/// any per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
     html! {
+        button id="hotkeys-btn" aria-label="Show hotkeys" { "?" }
         div id="hotkeys" {
             div class="panel" {
                 h2 { "Hotkeys" }
@@ -176,7 +185,7 @@ pub fn hotkey_popup(name: &str) -> Markup {
                     @if has_variant_switch {
                         dt { "swipe" } dd { "switch game variant (touch)" }
                     }
-                    dt { "?" } dd { "toggle this help" }
+                    dt { "?" } dd { "toggle this help (or tap the button)" }
                     dt { "Esc" } dd { "close" }
                 }
             }
@@ -186,6 +195,9 @@ pub fn hotkey_popup(name: &str) -> Markup {
                 "document.addEventListener('keydown', function(e) {\n\
                  \x20 if (e.key === '?') document.getElementById('hotkeys').classList.toggle('open');\n\
                  \x20 else if (e.key === 'Escape') document.getElementById('hotkeys').classList.remove('open');\n\
+                 });\n\
+                 document.getElementById('hotkeys-btn').addEventListener('click', function() {\n\
+                 \x20 document.getElementById('hotkeys').classList.toggle('open');\n\
                  });"
             ))
         }
