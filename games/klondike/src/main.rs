@@ -488,7 +488,7 @@ async fn run_ui(cli: CliArgs) {
             cached_size = cur_size;
         }
 
-        if is_key_pressed(KeyCode::V) {
+        if is_key_pressed(KeyCode::V) || control.variant_swipe() {
             mode = mode.next();
             game = new_game_for(mode, game.generation + 1);
             display_game = game.clone();

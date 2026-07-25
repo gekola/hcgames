@@ -214,7 +214,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
             cached_size = cur_size;
         }
 
-        if is_key_pressed(KeyCode::V) {
+        if is_key_pressed(KeyCode::V) || control.variant_swipe() {
             kind = kind.cycle();
             board = Board::new(kind);
             update_probs(&mut board);

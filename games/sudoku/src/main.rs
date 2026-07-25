@@ -295,7 +295,7 @@ async fn run_ui(cli: CliArgs) {
         let now = macroquad::miniquad::date::now();
         let dt = control.scale(get_frame_time().min(0.1));
 
-        if is_key_pressed(KeyCode::V) {
+        if is_key_pressed(KeyCode::V) || control.variant_swipe() {
             mode = mode.next();
             game = new_game_for(mode, game.generation + 1);
             solver = Solver::new();

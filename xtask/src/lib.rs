@@ -172,6 +172,10 @@ pub fn hotkey_popup(name: &str) -> Markup {
                         dt { "V" } dd { "switch game variant" }
                     }
                     dt { "S" } dd { "save screenshot" }
+                    dt { "2-finger slide" } dd { "adjust speed (touch)" }
+                    @if has_variant_switch {
+                        dt { "swipe" } dd { "switch game variant (touch)" }
+                    }
                     dt { "?" } dd { "toggle this help" }
                     dt { "Esc" } dd { "close" }
                 }

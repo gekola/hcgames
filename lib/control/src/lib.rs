@@ -5,6 +5,12 @@ const MIN_MULT: f32 = 0.1;
 const MAX_MULT: f32 = 10.0;
 #[cfg(not(target_arch = "wasm32"))]
 const DOUBLE_CLICK_SECS: f64 = 0.4;
+/// Horizontal drag distance (px) per `STEP` multiplier change during a two-finger slide.
+const TWO_FINGER_PX_PER_STEP: f32 = 80.0;
+/// Minimum straight-line distance (px) for a one-finger touch to count as a swipe.
+const SWIPE_MIN_DIST: f32 = 60.0;
+/// Swipes slower than this (start to release) are treated as a drag/tap, not a swipe.
+const SWIPE_MAX_SECS: f64 = 0.6;
 
 #[cfg(target_arch = "wasm32")]
 unsafe extern "C" {
@@ -35,7 +41,9 @@ fn ga_event(name: &str, params_json: &str) {
 /// to 1x, `Space` pauses; on native, `F`/double-click also toggles fullscreen — on WASM
 /// that's `xtask::fullscreen_bridge` instead, see its doc comment for why), plus
 /// episode-progress tracking that reports a `episode_complete` GA event each time a game
-/// round ends.
+/// round ends. Touch equivalents for the two hotkeys that matter on a spectator page with
+/// no keyboard: a two-finger slide scrubs speed the same way `=`/`-` do, and a one-finger
+/// swipe (`variant_swipe()`) stands in for `V`'s variant cycle on the games that have one.
 pub struct Control {
     mult: f32,
     paused: bool,
@@ -44,6 +52,11 @@ pub struct Control {
     fullscreen: bool,
     #[cfg(not(target_arch = "wasm32"))]
     last_click: f64,
+    /// (avg x of the two touches, `mult` at gesture start) while a two-finger drag is live.
+    two_finger_anchor: Option<(f32, f32)>,
+    /// (x, y, start time) of an in-progress single-finger touch.
+    one_finger_start: Option<(f32, f32, f64)>,
+    variant_swipe: bool,
 }
 
 impl Control {
@@ -56,6 +69,9 @@ impl Control {
             fullscreen: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_click: f64::NEG_INFINITY,
+            two_finger_anchor: None,
+            one_finger_start: None,
+            variant_swipe: false,
         }
     }
 
@@ -96,6 +112,63 @@ impl Control {
                 set_fullscreen(self.fullscreen);
             }
         }
+
+        self.handle_touch();
+    }
+
+    /// Two-finger horizontal slide scrubs `mult` (anchored to the multiplier at gesture
+    /// start, so re-crossing the same drag distance always lands on the same speed); a
+    /// quick one-finger swipe sets the one-frame `variant_swipe()` flag. Touch phases with
+    /// a finger count other than 1 or 2 (none, or someone's third finger) reset both
+    /// gestures so a new drag/swipe starts clean.
+    fn handle_touch(&mut self) {
+        self.variant_swipe = false;
+        let touches = touches();
+
+        match touches.len() {
+            2 => {
+                self.one_finger_start = None;
+                let avg_x = (touches[0].position.x + touches[1].position.x) / 2.0;
+                match self.two_finger_anchor {
+                    Some((start_x, start_mult)) => {
+                        let steps = (avg_x - start_x) / TWO_FINGER_PX_PER_STEP;
+                        self.mult = (start_mult * STEP.powf(steps)).clamp(MIN_MULT, MAX_MULT);
+                    }
+                    None => self.two_finger_anchor = Some((avg_x, self.mult)),
+                }
+            }
+            1 => {
+                self.two_finger_anchor = None;
+                let touch = &touches[0];
+                match touch.phase {
+                    TouchPhase::Started => {
+                        self.one_finger_start =
+                            Some((touch.position.x, touch.position.y, get_time()));
+                    }
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        if let Some((sx, sy, start_time)) = self.one_finger_start.take() {
+                            let dx = touch.position.x - sx;
+                            let dy = touch.position.y - sy;
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            if dist >= SWIPE_MIN_DIST && get_time() - start_time <= SWIPE_MAX_SECS {
+                                self.variant_swipe = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                self.two_finger_anchor = None;
+                self.one_finger_start = None;
+            }
+        }
+    }
+
+    /// True for one frame when a one-finger swipe just completed — the touch equivalent
+    /// of the `V` variant-cycle hotkey. Games without a variant cycle can ignore it.
+    pub fn variant_swipe(&self) -> bool {
+        self.variant_swipe
     }
 
     /// Zero while paused, otherwise `dt` scaled by the speed multiplier.

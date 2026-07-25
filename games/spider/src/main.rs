@@ -421,7 +421,7 @@ async fn amain(cli: CliArgs) {
             cached_size = cur_size;
         }
 
-        if is_key_pressed(KeyCode::V) {
+        if is_key_pressed(KeyCode::V) || control.variant_swipe() {
             mode = mode.next();
             let next_gen = game.generation + 1;
             game = Game::new(next_gen, mode.n_suits(next_gen));
