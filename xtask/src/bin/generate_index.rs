@@ -474,13 +474,18 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
 "#;
 
 /// Cycles the `.postcards li` stack every 5s (top card fades out, next one in) and wires
-/// the prev/next arrows + dots for manual stepping. Autoplay pauses on hover/focus and
-/// never starts at all under reduced-motion, but manual navigation always works — only
-/// the automatic timer is motion-gated. Any manual step (arrow or dot) restarts the
-/// autoplay clock so it doesn't immediately jump again right after a deliberate click.
+/// the prev/next arrows + dots + touch swipe for manual stepping. Autoplay pauses on
+/// hover/focus and never starts at all under reduced-motion, but manual navigation always
+/// works — only the automatic timer is motion-gated. Any manual step (arrow, dot, or
+/// swipe) restarts the autoplay clock so it doesn't immediately jump again right after a
+/// deliberate interaction. The swipe listener is `passive: true` (no `preventDefault`) and
+/// only fires `goTo` once a completed gesture is clearly more horizontal than vertical —
+/// this is a card carousel inside an otherwise vertically-scrolling page, so a swipe must
+/// never fight the page's own scroll.
 const POSTCARD_SCRIPT: &str = r#"
 (function () {
   const wrap = document.querySelector('.postcards');
+  const stack = document.querySelector('.postcard-stack');
   const cards = document.querySelectorAll('.postcards li');
   const dots = document.querySelectorAll('.postcard-dots span');
   const prevBtn = document.querySelector('.postcard-prev');
@@ -514,6 +519,20 @@ const POSTCARD_SCRIPT: &str = r#"
   wrap.addEventListener('mouseleave', () => { paused = false; start(); });
   wrap.addEventListener('focusin', () => { paused = true; stop(); });
   wrap.addEventListener('focusout', () => { paused = false; start(); });
+
+  let touchStartX = 0;
+  let touchStartY = 0;
+  stack.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches[0];
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+  }, { passive: true });
+  stack.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy)) goTo(dx < 0 ? i + 1 : i - 1);
+  }, { passive: true });
 
   start();
 })();
