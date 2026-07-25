@@ -149,27 +149,33 @@ line-height: 48px; text-align: center; padding: 0; cursor: pointer; }\n\
 background: rgba(0,0,0,0.75); align-items: center; justify-content: center; \
 font-family: system-ui, sans-serif; }\n\
 #hotkeys.open { display: flex; }\n\
-#hotkeys .panel { background: #1a1a1f; color: #eee; border-radius: 8px; \
-padding: 20px 28px; min-width: 220px; }\n\
+#hotkeys .panel { position: relative; background: #1a1a1f; color: #eee; \
+border-radius: 8px; padding: 20px 28px; min-width: 220px; }\n\
 #hotkeys h2 { font-size: 16px; margin-bottom: 12px; }\n\
 #hotkeys dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; \
 font-size: 14px; margin: 0; }\n\
 #hotkeys dt { font-family: monospace; color: #8cf; }\n\
-#hotkeys dd { margin: 0; color: #ccc; }";
+#hotkeys dd { margin: 0; color: #ccc; }\n\
+#hotkeys-close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; \
+border-radius: 50%; border: none; background: rgba(255,255,255,0.1); color: #eee; \
+font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: pointer; }\n\
+#hotkeys-close:hover { background: rgba(255,255,255,0.2); }";
 
-/// The `?`-toggled, Esc-closed hotkey reference overlay, plus an always-visible on-canvas
-/// `#hotkeys-btn` tap target that does the same toggle — `?` isn't reachable without a
-/// physical keyboard, so touch visitors had no way to discover this at all. 48px (the
-/// standard min. touch-target size) so it's tappable without zooming. Pure HTML/CSS/JS —
-/// sits on top of the canvas rather than being drawn by the game itself. Hotkeys listed
-/// here must match what `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus
-/// any per-game hotkey the game's own `main.rs` reads directly (e.g. `V`).
+/// The `?`-toggled, Esc-closed hotkey reference overlay, plus two touch-reachable
+/// controls for it — an always-visible on-canvas `#hotkeys-btn` that opens it, and an
+/// `#hotkeys-close` `×` in the panel's corner that closes it, since neither `?` nor Esc
+/// is reachable without a physical keyboard. Both 32-48px (min. touch-target size) so
+/// they're tappable without zooming. Pure HTML/CSS/JS — sits on top of the canvas rather
+/// than being drawn by the game itself. Hotkeys listed here must match what
+/// `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus any per-game hotkey
+/// the game's own `main.rs` reads directly (e.g. `V`).
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
     html! {
         button id="hotkeys-btn" aria-label="Show hotkeys" { "?" }
         div id="hotkeys" {
             div class="panel" {
+                button id="hotkeys-close" aria-label="Close hotkeys" { "×" }
                 h2 { "Hotkeys" }
                 dl {
                     dt { "=" } dd { "speed up" }
@@ -186,7 +192,7 @@ pub fn hotkey_popup(name: &str) -> Markup {
                         dt { "swipe" } dd { "switch game variant (touch)" }
                     }
                     dt { "?" } dd { "toggle this help (or tap the button)" }
-                    dt { "Esc" } dd { "close" }
+                    dt { "Esc" } dd { "close (or tap ×)" }
                 }
             }
         }
@@ -198,6 +204,9 @@ pub fn hotkey_popup(name: &str) -> Markup {
                  });\n\
                  document.getElementById('hotkeys-btn').addEventListener('click', function() {\n\
                  \x20 document.getElementById('hotkeys').classList.toggle('open');\n\
+                 });\n\
+                 document.getElementById('hotkeys-close').addEventListener('click', function() {\n\
+                 \x20 document.getElementById('hotkeys').classList.remove('open');\n\
                  });"
             ))
         }
