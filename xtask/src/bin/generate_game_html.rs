@@ -3,8 +3,8 @@ use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, description, favicon_links, fullscreen_bridge, gtag_head,
-    hotkey_popup, loading_screen, manifest_json, native_size_style, pwa_head, screenshot_bridge,
-    social_image, sw_register_bridge, title, variant_query_bridge,
+    hotkey_popup, loading_screen, manifest_json, native_size_style, orientation_hint, pwa_head,
+    screenshot_bridge, social_image, sw_register_bridge, title, variant_query_bridge,
 };
 
 fn main() {
@@ -56,6 +56,7 @@ fn main() {
                 (hotkey_popup(&name))
                 (screenshot_bridge(&name))
                 (fullscreen_bridge())
+                (orientation_hint(&name))
             }
         }
     };

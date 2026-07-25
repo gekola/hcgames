@@ -213,6 +213,59 @@ pub fn hotkey_popup(name: &str) -> Markup {
     }
 }
 
+/// A dismissible banner nudging a visitor to rotate their device when the viewport's
+/// orientation doesn't match this game's native one (e.g. a 900x720 landscape game
+/// opened on a portrait phone) — the `fitCanvas` scale-to-fit in `native_size_style`
+/// already handles this case technically (it just shrinks the canvas further to fit),
+/// but on a badly-mismatched orientation that can leave the game a small fraction of the
+/// screen. Pure page-level HTML/CSS/JS, same pattern as `hotkey_popup`/`screenshot_bridge`.
+/// Dismissal is per-`sessionStorage` (not persisted across visits) so it can nudge again
+/// next session rather than being silenced forever after one tap.
+pub fn orientation_hint(name: &str) -> Markup {
+    let (w, h) = native_size(name);
+    let game_is_landscape = w > h;
+    let dismiss_key = format!("hcg-rotate-dismissed-{name}");
+    html! {
+        style {
+            (PreEscaped(
+                "#rotate-hint { display: none; position: fixed; top: 0; left: 0; right: 0; \
+                 z-index: 12; background: rgba(20,20,24,0.92); color: #fff; \
+                 font: 14px system-ui, sans-serif; padding: 10px 16px; \
+                 align-items: center; justify-content: center; gap: 12px; text-align: center; }\n\
+                 #rotate-hint.show { display: flex; }\n\
+                 #rotate-hint button { background: rgba(255,255,255,0.15); color: #fff; \
+                 border: none; border-radius: 50%; width: 28px; height: 28px; \
+                 font-size: 16px; line-height: 28px; padding: 0; cursor: pointer; flex: none; }"
+            ))
+        }
+        div id="rotate-hint" {
+            span { "🔄 Rotate your device for a bigger screen" }
+            button id="rotate-hint-close" aria-label="Dismiss" { "×" }
+        }
+        script {
+            (PreEscaped(format!(
+                "(function() {{\n\
+                 \x20 var key = '{dismiss_key}';\n\
+                 \x20 var gameIsLandscape = {game_is_landscape};\n\
+                 \x20 var el = document.getElementById('rotate-hint');\n\
+                 \x20 function check() {{\n\
+                 \x20   if (sessionStorage.getItem(key)) {{ el.classList.remove('show'); return; }}\n\
+                 \x20   var viewportIsPortrait = window.innerHeight > window.innerWidth;\n\
+                 \x20   el.classList.toggle('show', viewportIsPortrait === gameIsLandscape);\n\
+                 \x20 }}\n\
+                 \x20 window.addEventListener('resize', check);\n\
+                 \x20 window.addEventListener('orientationchange', check);\n\
+                 \x20 document.getElementById('rotate-hint-close').addEventListener('click', function() {{\n\
+                 \x20   sessionStorage.setItem(key, '1');\n\
+                 \x20   el.classList.remove('show');\n\
+                 \x20 }});\n\
+                 \x20 check();\n\
+                 }})();"
+            )))
+        }
+    }
+}
+
 /// Registers a miniquad plugin exposing `env.hcg_ga_event` to the wasm module, so
 /// `control::Control::episode_complete` can fire `gtag('event', ...)` calls from Rust.
 /// Must run after `mq_js_bundle.js` (needs its global `miniquad_add_plugin`/`UTF8ToString`)
