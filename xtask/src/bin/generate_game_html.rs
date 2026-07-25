@@ -4,6 +4,7 @@ use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, description, favicon_links, fullscreen_bridge, gtag_head,
     hotkey_popup, loading_screen, native_size_style, screenshot_bridge, social_image, title,
+    variant_query_bridge,
 };
 
 fn main() {
@@ -46,6 +47,9 @@ fn main() {
                 }
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
+                @if name == "minesweeper" {
+                    (variant_query_bridge())
+                }
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
                 (hotkey_popup(&name))
                 (screenshot_bridge(&name))

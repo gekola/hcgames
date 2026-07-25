@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use minesweeper::board::GridKind;
 
 fn conf() -> Conf {
@@ -26,6 +27,9 @@ fn main() {
 fn main() {
     macroquad::Window::from_config(
         conf(),
-        minesweeper::run(GridKind::Square, minesweeper::parse_cli_args()),
+        minesweeper::run(
+            minesweeper::initial_wasm_variant(),
+            minesweeper::parse_cli_args(),
+        ),
     );
 }

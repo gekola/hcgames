@@ -11,8 +11,7 @@ const RESTART_DELAY: f64 = 3.5;
 const HUD_H: f32 = 34.0;
 
 // ── CLI args (native only — meaningless in a browser tab) ───────────────────────
-// Shared by both `minesweeper-square` and `minesweeper-hex`, which are thin binaries
-// wrapping this crate's `run`/`run_headless`.
+// Read by games/minesweeper's single binary, which wraps this crate's `run`/`run_headless`.
 
 pub struct CliArgs {
     /// `--debug`: print every action (flag/open/guess) plus episode results to stderr.
@@ -28,6 +27,23 @@ pub struct CliArgs {
     /// (Square). In-window, `V` still cycles Square/Hex from there.
     #[cfg(not(target_arch = "wasm32"))]
     pub variant: Option<GridKind>,
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    fn hcg_initial_variant_is_hex() -> i32;
+}
+
+/// Reads the `?variant=hex` URL query param (see `xtask::variant_query_bridge`) so the
+/// `/minesweeper-hex` redirect stub lands directly in Hex mode instead of the Square
+/// default — `V` still cycles Square/Hex from there like any other session.
+#[cfg(target_arch = "wasm32")]
+pub fn initial_wasm_variant() -> GridKind {
+    if unsafe { hcg_initial_variant_is_hex() } != 0 {
+        GridKind::Hex
+    } else {
+        GridKind::Square
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

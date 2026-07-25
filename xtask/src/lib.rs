@@ -213,6 +213,29 @@ pub fn analytics_bridge() -> Markup {
     }
 }
 
+/// Registers a miniquad plugin exposing `env.hcg_initial_variant_is_hex`, letting the
+/// wasm module read the page's `?variant=hex` query param at startup — used by the
+/// `/minesweeper-hex` redirect stub (`static/minesweeper-hex/index.html`) so it lands
+/// directly in Hex mode instead of the Square default. Must run before `load(...)`, same
+/// ordering constraint as `analytics_bridge`.
+pub fn variant_query_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "miniquad_add_plugin({\n\
+                 \x20 register_plugin: function(importObject) {\n\
+                 \x20   importObject.env.hcg_initial_variant_is_hex = function() {\n\
+                 \x20     return new URLSearchParams(location.search).get('variant') === 'hex' ? 1 : 0;\n\
+                 \x20   };\n\
+                 \x20 },\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_variant_query\"\n\
+                 });"
+            ))
+        }
+    }
+}
+
 /// `S` hotkey: grabs the current frame straight off the canvas (`toBlob`, no Rust
 /// involvement — WASM has no filesystem, so `screenshot::handle_hotkey` is a native-only
 /// no-op) and prompts the browser's own download flow for it.
