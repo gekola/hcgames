@@ -75,19 +75,36 @@ fi
 
 # Rasterize SVG art to PNG: mise run rasterize
 [tasks.rasterize]
-description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG (needs resvg; runs automatically in CI, skipped locally if unavailable; skips per-file if already up to date)"
+description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG (needs resvg or rsvg-convert; runs automatically in CI, skipped locally if neither is available; skips per-file if already up to date)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
+
+# resvg preferred (matches CI); rsvg-convert (librsvg, often already present on Linux
+# desktops/distros without a separate resvg install) as a fallback with the same effect —
+# without one of these, dist/favicon.png and dist/icon-512.png never exist locally, which
+# silently drops the PWA manifest down to its SVG-only icon and fails Chrome's
+# installability check (it wants a numeric-sized icon >=192px, and manifest_json's
+# "sizes":"any" SVG entry doesn't count) — so no install prompt locally even though the
+# manifest itself is otherwise valid.
 if command -v resvg >/dev/null 2>&1; then
-    if [ ! -f dist/og-image.png ] || [ static/hotel-scene.svg -nt dist/og-image.png ]; then
-        resvg static/hotel-scene.svg dist/og-image.png --width 1200 --height 900
-    fi
-    if [ ! -f dist/favicon.png ] || [ static/favicon.svg -nt dist/favicon.png ]; then
-        resvg static/favicon.svg dist/favicon.png --width 192 --height 192
-    fi
+    svg_to_png() { resvg "$1" "$2" --width "$3" --height "$4"; }
+elif command -v rsvg-convert >/dev/null 2>&1; then
+    svg_to_png() { rsvg-convert -w "$3" -h "$4" "$1" -o "$2"; }
 else
-    echo "resvg not found — skipping SVG rasterization (runs automatically in CI)" >&2
+    echo "neither resvg nor rsvg-convert found — skipping SVG rasterization (runs automatically in CI)" >&2
+    exit 0
+fi
+
+if [ ! -f dist/og-image.png ] || [ static/hotel-scene.svg -nt dist/og-image.png ]; then
+    svg_to_png static/hotel-scene.svg dist/og-image.png 1200 900
+fi
+if [ ! -f dist/favicon.png ] || [ static/favicon.svg -nt dist/favicon.png ]; then
+    svg_to_png static/favicon.svg dist/favicon.png 192 192
+fi
+# PWA manifest large icon (see xtask::manifest_json) — same source art, just bigger.
+if [ ! -f dist/icon-512.png ] || [ static/favicon.svg -nt dist/icon-512.png ]; then
+    svg_to_png static/favicon.svg dist/icon-512.png 512 512
 fi
 """
 

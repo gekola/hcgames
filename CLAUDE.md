@@ -40,6 +40,20 @@ There's no per-game dev HTML template or Trunk setup — `mise run build-wasm <n
 runs `xtask`) is the only way to get a browser-testable page, so there's a single source of
 truth for the page chrome (canvas sizing, hotkey popup, analytics bridge, screenshot hotkey).
 
+### PWA / installable
+
+Every generated page — the homepage and each game — is independently installable as its
+own home-screen app: `xtask::pwa_head` emits the `<link rel="manifest">`/theme-color tag
+pair, `xtask::manifest_json` writes that page's own `manifest.webmanifest` alongside its
+`index.html` (scoped to `./`, so a game installs separately from the homepage), and
+`xtask::sw_register_bridge` registers the single shared `static/sw.js` (copied verbatim to
+`dist/sw.js` by `mise run deploy`) for offline static-asset caching — a plain
+stale-while-revalidate cache-on-fetch worker, no precache list to maintain per game. New
+games get all three automatically through `generate_game_html`; nothing to wire up by hand.
+Manifest icons follow the same `dist/favicon.png` / `dist/icon-512.png` exists-or-skip
+fallback pattern as `favicon_links`/`social_image` (both rasterized from `static/favicon.svg`
+by `mise run rasterize`, skipped locally without resvg).
+
 ## Task runner (mise)
 
 All tasks take the game name as `$1` unless noted.

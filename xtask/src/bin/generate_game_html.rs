@@ -3,8 +3,8 @@ use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, description, favicon_links, fullscreen_bridge, gtag_head,
-    hotkey_popup, loading_screen, native_size_style, screenshot_bridge, social_image, title,
-    variant_query_bridge,
+    hotkey_popup, loading_screen, manifest_json, native_size_style, pwa_head, screenshot_bridge,
+    social_image, sw_register_bridge, title, variant_query_bridge,
 };
 
 fn main() {
@@ -38,6 +38,7 @@ fn main() {
                 meta name="twitter:image" content=(og.url);
                 link rel="preload" href=(format!("{name}.wasm")) as="fetch" crossorigin="anonymous";
                 (gtag_head())
+                (pwa_head("#000000"))
                 (native_size_style(&name))
             }
             body {
@@ -47,6 +48,7 @@ fn main() {
                 }
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
+                (sw_register_bridge("../sw.js"))
                 @if name == "minesweeper" {
                     (variant_query_bridge())
                 }
@@ -61,4 +63,9 @@ fn main() {
     let dir = dist.join(&name);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("index.html"), page.into_string()).unwrap();
+    std::fs::write(
+        dir.join("manifest.webmanifest"),
+        manifest_json(dist, &title, &description, "#000000", "../"),
+    )
+    .unwrap();
 }

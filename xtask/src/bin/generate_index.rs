@@ -1,7 +1,10 @@
 //! Generates dist/index.html (the game list) and dist/sitemap.xml.
 use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
-use xtask::{base_url, description, favicon_links, gtag_head, social_image, title};
+use xtask::{
+    base_url, description, favicon_links, gtag_head, manifest_json, pwa_head, social_image,
+    sw_register_bridge, title,
+};
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
 
@@ -696,6 +699,7 @@ fn main() {
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
                 (gtag_head())
+                (pwa_head("#171310"))
                 link rel="preconnect" href="https://fonts.googleapis.com";
                 link rel="preconnect" href="https://fonts.gstatic.com" crossorigin;
                 // Loaded async (classic loadCSS pattern): a plain `<link rel=stylesheet>`
@@ -771,11 +775,17 @@ fn main() {
                 }
                 script { (PreEscaped(HOTEL_SCENE_SCRIPT)) }
                 script { (PreEscaped(POSTCARD_SCRIPT)) }
+                (sw_register_bridge("./sw.js"))
             }
         }
     };
 
     std::fs::write(dist.join("index.html"), page.into_string()).unwrap();
+    std::fs::write(
+        dist.join("manifest.webmanifest"),
+        manifest_json(dist, "Hotel Chair Games", SITE_DESCRIPTION, "#171310", ""),
+    )
+    .unwrap();
 
     let today = time::OffsetDateTime::now_utc().date();
     let mut urls = vec![base_url.clone()];

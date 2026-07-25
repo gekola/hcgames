@@ -383,6 +383,82 @@ pub fn favicon_links(base_url: &str, dist: &Path) -> Markup {
     }
 }
 
+/// `<link rel="manifest">` + `<meta name="theme-color">`, shared by every generated page
+/// (homepage and each game). Each page writes its own `manifest.webmanifest` alongside
+/// its `index.html` (see `manifest_json`) — a game installs as its own home-screen app,
+/// separate from the homepage's, matching aiideas.md's "PWA / installable" idea.
+pub fn pwa_head(theme_color: &str) -> Markup {
+    html! {
+        link rel="manifest" href="manifest.webmanifest";
+        meta name="theme-color" content=(theme_color);
+    }
+}
+
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Builds a page's `manifest.webmanifest` contents. `start_url`/`scope` are both "./" —
+/// each generated page (homepage, or a game's own `dist/<name>/`) is installed as an
+/// independent app scoped to just that directory. `icon_dir` is the relative path back to
+/// wherever `favicon.svg`/`favicon.png`/`icon-512.png` live (`dist/`'s root) — "" from the
+/// homepage itself, "../" from a game one level down. The two raster sizes are included
+/// only when present, same fallback pattern as `favicon_links`/`social_image` (skipped
+/// locally without resvg).
+pub fn manifest_json(
+    dist: &Path,
+    title: &str,
+    description: &str,
+    theme_color: &str,
+    icon_dir: &str,
+) -> String {
+    let mut icons = vec![format!(
+        r#"{{"src":"{icon_dir}favicon.svg","sizes":"any","type":"image/svg+xml"}}"#
+    )];
+    if dist.join("favicon.png").exists() {
+        icons.push(format!(
+            r#"{{"src":"{icon_dir}favicon.png","sizes":"192x192","type":"image/png"}}"#
+        ));
+    }
+    if dist.join("icon-512.png").exists() {
+        icons.push(format!(
+            r#"{{"src":"{icon_dir}icon-512.png","sizes":"512x512","type":"image/png"}}"#
+        ));
+    }
+    format!(
+        r##"{{"name":"{}","short_name":"{}","description":"{}","start_url":"./","scope":"./","display":"standalone","background_color":"#000000","theme_color":"{theme_color}","orientation":"any","icons":[{}]}}"##,
+        json_escape(title),
+        json_escape(title),
+        json_escape(description),
+        icons.join(",")
+    )
+}
+
+/// Registers the shared `dist/sw.js` (see `static/sw.js`) for offline static-asset
+/// caching. Deferred to `load` so it doesn't compete with the game's own WASM fetch for
+/// bandwidth/priority on first visit. `sw_path` is relative to the page doing the
+/// registering — "./sw.js" from the homepage, "../sw.js" from a game page. A service
+/// worker's default scope (when not passed explicitly) is resolved from *its own* script
+/// location, not the registering page's — since `sw.js` always lives at `dist/`'s root,
+/// every page ends up registering the same single worker at the same site-wide scope,
+/// regardless of which relative path reached it. That's fine here: caching is per-URL
+/// inside the worker's fetch handler (see `static/sw.js`), so each app's own assets still
+/// get cached and served offline independently even though one worker controls the whole
+/// site.
+pub fn sw_register_bridge(sw_path: &str) -> Markup {
+    html! {
+        script {
+            (PreEscaped(format!(
+                "if ('serviceWorker' in navigator) {{\n\
+                 \x20 window.addEventListener('load', function() {{\n\
+                 \x20   navigator.serviceWorker.register('{sw_path}');\n\
+                 \x20 }});\n\
+                 }}"
+            )))
+        }
+    }
+}
+
 pub struct SocialImage {
     pub url: String,
     pub twitter_card: &'static str,
