@@ -12,7 +12,7 @@ cargo run --bin "$1"
 
 # Build one game to WASM: mise run build-wasm snake
 [tasks.build-wasm]
-description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/, skipping wasm-opt/screenshot/HTML when the built wasm hasn't changed"
+description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/, skipping wasm-opt/screenshot/HTML when neither the built wasm nor xtask's HTML generator have changed"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -20,14 +20,20 @@ name=$1
 RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin "$name"
 mkdir -p "dist/$name"
 
+# Same no-op-build-leaves-mtime-untouched trick as the wasm check below, applied to
+# xtask itself — so editing xtask/src/lib.rs (the HTML templates) forces regeneration
+# even for a game whose own wasm didn't change, without needing `mise run clean`.
+cargo build --release --package xtask --bin generate_game_html
+xtask_bin="target/release/generate_game_html"
+
 # Cargo only rewrites this file's mtime when it actually rebuilt the binary (a no-op
 # build leaves it untouched), so comparing it against the previous dist/ copy is a
 # reliable, dependency-graph-aware "did anything this game depends on actually change"
 # check — covers edits to the game itself as well as any shared lib/ crate it uses.
 src="target/$WASM_TARGET/release/$name.wasm"
 out="dist/$name/$name.wasm"
-if [ -f "$out" ] && [ ! "$src" -nt "$out" ]; then
-  echo "$name: wasm unchanged, skipping wasm-opt/screenshot/HTML" >&2
+if [ -f "$out" ] && [ ! "$src" -nt "$out" ] && [ ! "$xtask_bin" -nt "$out" ]; then
+  echo "$name: wasm + xtask templates unchanged, skipping wasm-opt/screenshot/HTML" >&2
 else
   # --all-features made wasm-opt enable engine features (reference-types, multivalue,
   # ...) beyond what rustc's wasm32-unknown-unknown target actually emits, and combining
@@ -92,7 +98,7 @@ run = "cargo run --release --package xtask --bin generate_index"
 
 # Build all games and generate dist/: mise run deploy
 [tasks.deploy]
-description = "Build all games and prepare dist/ for deployment (incremental — dist/ persists between runs so unchanged games/assets are skipped; `rm -rf dist` first to force a full rebuild, e.g. after editing xtask's HTML templates)"
+description = "Build all games and prepare dist/ for deployment (incremental — dist/ persists between runs so unchanged games/assets are skipped, including detecting xtask template edits; run `mise run clean` first to force a full rebuild for any other reason, e.g. fresh screenshots)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -112,6 +118,11 @@ for game in games/*/; do
 done
 mise run generate-index
 """
+
+# Force a full rebuild on the next deploy/build-wasm: mise run clean
+[tasks.clean]
+description = "Remove dist/ so the next build-wasm/deploy fully regenerates everything (screenshots included) instead of skipping games whose wasm and xtask templates are both unchanged"
+run = "rm -rf dist"
 
 # Serve dist/ locally (WASM requires HTTP — can't open via file://)
 [tasks.serve]

@@ -48,7 +48,8 @@ All tasks take the game name as `$1` unless noted.
 |---------|-------------|
 | `mise run run snake` | Native debug build + launch |
 | `mise run build-wasm snake` | Release WASM → `dist/snake/` (fetches `dist/mq_js_bundle.js`, shared across games, if not already present) |
-| `mise run deploy` | Rebuilds all games into `dist/` |
+| `mise run deploy` | Rebuilds all games into `dist/` (incremental — skips a game whose wasm *and* xtask's HTML generator are both unchanged since the last run) |
+| `mise run clean` | `rm -rf dist` — force a full rebuild next time for any other reason, e.g. fresh screenshots |
 | `mise run serve` | `python3 -m http.server 8080 --directory dist` |
 | `mise run check` | `cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings` |
 
