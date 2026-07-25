@@ -10,7 +10,7 @@ mise.toml           task runner — primary interface for builds
 games/
   snake/            one crate per game
 lib/                shared crates (cards, minesweeper, screenshot, control, beam_solver,
-                    game_common)
+                    render_cache, game_common)
 xtask/              native-only site generator (see "Site generation" below)
 static/             assets copied verbatim into dist/ (favicon.svg, hotel-scene.svg, robots.txt)
 dist/               build output (git-ignored), served via python HTTP
@@ -125,6 +125,35 @@ Add these flags to any new game in the same shape, even one-off scripts: a plain
 (non-`#[macroquad::main]`) `fn main()` that parses args first, then either calls
 `run_headless(cli)` directly or `macroquad::Window::from_config(conf(), amain(cli))` —
 never the macro, since it initializes the window before `main()`'s body runs at all.
+
+## Rendering perf: cache static content, don't redraw every frame
+
+Every game ticks its game state on a fixed interval (a few times a second) but renders
+at ~60fps — drawing the *entire* board fresh every render frame regardless of whether
+anything changed was costing real main-thread time (mobile Lighthouse Total Blocking
+Time in the seconds-to-minutes range before this fix; klondike/spider's bezier-heavy
+card rendering hit 97s/159s). Use `lib/render_cache::RenderCache`: split a game's draw
+code into a "static, only changes once per tick" part and a "genuinely animates every
+frame" part (a flying card, a sliding tile, a fading highlight). Cache the static part
+— construct one `RenderCache` per screen region that needs it, call `.mark_dirty()`
+at every point the game state it reads actually changes (a tick fires, a variant
+switches, a new episode starts — not every frame), and call `.draw(|| ...)` every frame
+regardless; it only re-runs the closure when dirty, then blits the cached texture (one
+draw call) either way. Draw the live/animated part directly, every frame, on top.
+
+If the region's on-screen position/size depends on `screen_width()`/`screen_height()`
+(most games do; game2048 draws at a fixed absolute size and doesn't need this), rebuild
+the `RenderCache` when those change — see any of klondike/spider/snake/minesweeper/
+arrow-blocks' `main.rs` for the resize-tracking pattern. Sudoku's board doesn't depend
+on screen size, so its `RenderCache` is constructed once and never rebuilt.
+
+**Font atlas gotcha**: rasterizing a text glyph for the first time (growing macroquad's
+shared font atlas) while a `RenderCache`'s render-target camera is active corrupts all
+subsequently-drawn screen text for the rest of the run (garbled/near-black, positions
+still correct) — a real macroquad quirk, not a bug in this code. Call
+`render_cache::prewarm_glyphs(texts, sizes)` with every text/size combination the game
+will ever draw, on the default camera, before constructing any `RenderCache` — see
+klondike/spider's `run_ui`/`amain` for the reference call.
 
 ## In-game controls (all games)
 

@@ -9,4 +9,5 @@ cards = { path = "../../lib/cards" }
 screenshot = { path = "../../lib/screenshot" }
 control = { path = "../../lib/control" }
 beam_solver = { path = "../../lib/beam_solver" }
+render_cache = { path = "../../lib/render_cache" }
 game_common = { path = "../../lib/game_common" }

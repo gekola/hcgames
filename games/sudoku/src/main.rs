@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 
 mod game;
 mod solver;
@@ -13,6 +14,35 @@ const RESTART_DELAY: f64 = 2.8;
 const CELL: f32 = 62.0;
 const OX: f32 = (900.0 - CELL * 9.0) / 2.0;
 const OY: f32 = 80.0;
+const GRID_W: f32 = CELL * 9.0;
+
+/// Digit label + measured width/height for '1'..'9' at both sizes the board draws
+/// (filled cells at 34px, candidate pencil-marks at 15px), computed once instead of
+/// calling `measure_text` from inside `draw_board`/`draw_candidates` every frame — with
+/// up to 81 cells x 9 candidates, that was up to ~700 redundant layout calls/frame,
+/// showing up as recurring 100+ms main-thread tasks in Lighthouse traces of this page.
+struct DigitMetrics {
+    text: [&'static str; 9],
+    filled: [TextDimensions; 9],
+    candidate: [TextDimensions; 9],
+}
+
+impl DigitMetrics {
+    fn compute() -> Self {
+        let text = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+        let mut filled = [TextDimensions::default(); 9];
+        let mut candidate = [TextDimensions::default(); 9];
+        for (i, s) in text.iter().enumerate() {
+            filled[i] = measure_text(s, None, 34, 1.0);
+            candidate[i] = measure_text(s, None, 15, 1.0);
+        }
+        Self {
+            text,
+            filled,
+            candidate,
+        }
+    }
+}
 
 // ── Variant mode ──────────────────────────────────────────────────────────────
 // `V` cycles Easy → Medium → Hard → Expert → Master → Auto → Easy …; Auto rotates
@@ -251,6 +281,14 @@ async fn run_ui(cli: CliArgs) {
     let mut end_time: Option<f64> = None;
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
+    let metrics = DigitMetrics::compute();
+
+    // The board (cell backgrounds, digits/candidates, grid lines) only actually
+    // changes once per solver tick (`TICK`, ~7/sec), but was being fully re-drawn
+    // every render frame (~60/sec) — up to ~700 draw_text calls apiece. See
+    // `render_cache::RenderCache` for why/impact; the move highlight fades
+    // continuously so it's drawn fresh every frame on top instead, via `draw_highlight`.
+    let mut board_cache = RenderCache::new(Rect::new(OX, OY, GRID_W, GRID_W));
 
     loop {
         control.handle_keys();
@@ -264,6 +302,7 @@ async fn run_ui(cli: CliArgs) {
             accum = 0.0;
             highlight = None;
             end_time = None;
+            board_cache.mark_dirty();
         }
 
         if let Some((_, t)) = &mut highlight {
@@ -281,6 +320,7 @@ async fn run_ui(cli: CliArgs) {
                         }
                         game.apply(m);
                         highlight = Some((m, 0.0));
+                        board_cache.mark_dirty();
                     }
                 }
             }
@@ -297,13 +337,15 @@ async fn run_ui(cli: CliArgs) {
                     accum = 0.0;
                     highlight = None;
                     end_time = None;
+                    board_cache.mark_dirty();
                 }
             }
         }
 
         clear_background(Color::new(0.09, 0.09, 0.13, 1.0));
         draw_hud(&game, mode.label(), &control.label());
-        draw_board(&game, highlight);
+        board_cache.draw(|| draw_board_static(&game, &metrics));
+        draw_highlight(highlight);
 
         shot.tick();
         screenshot::handle_hotkey();
@@ -369,9 +411,12 @@ fn cell_pos(idx: usize) -> (f32, f32) {
     (OX + col(idx) as f32 * CELL, OY + row(idx) as f32 * CELL)
 }
 
-fn draw_board(game: &Game, highlight: Option<(Move, f32)>) {
-    let grid_w = CELL * 9.0;
-
+/// Cell backgrounds, digits/candidates, and grid lines — everything about the board
+/// that only changes once per solver tick (`TICK`, ~7/sec). Cached into a render
+/// target by the caller instead of being re-run every render frame (~60/sec); see
+/// `board_dirty` in `run_ui`. Does NOT draw the move highlight, which fades
+/// continuously and must stay a per-frame draw — see `draw_highlight`.
+fn draw_board_static(game: &Game, metrics: &DigitMetrics) {
     // Cell backgrounds + digits/candidates.
     for idx in 0..game::CELLS {
         let (x, y) = cell_pos(idx);
@@ -385,8 +430,9 @@ fn draw_board(game: &Game, highlight: Option<(Move, f32)>) {
 
         let digit = game.grid[idx];
         if digit != 0 {
-            let s = digit.to_string();
-            let d = measure_text(&s, None, 34, 1.0);
+            let i = (digit - 1) as usize;
+            let s = metrics.text[i];
+            let d = metrics.filled[i];
             let tx = x + CELL * 0.5 - d.width * 0.5;
             let ty = y + CELL * 0.5 + d.height * 0.4;
             if game.given[idx] {
@@ -394,18 +440,46 @@ fn draw_board(game: &Game, highlight: Option<(Move, f32)>) {
                 // glyph a few times at sub-pixel offsets to thicken the strokes.
                 let color = Color::new(0.85, 0.85, 0.92, 1.0);
                 for (ox, oy) in [(0.0, 0.0), (0.7, 0.0), (0.0, 0.7), (0.7, 0.7)] {
-                    draw_text(&s, tx + ox, ty + oy, 34.0, color);
+                    draw_text(s, tx + ox, ty + oy, 34.0, color);
                 }
             } else {
                 let color = technique_color(game.filled_by[idx].unwrap_or(Technique::NakedSingle));
-                draw_text(&s, tx, ty, 34.0, color);
+                draw_text(s, tx, ty, 34.0, color);
             }
         } else {
-            draw_candidates(x, y, game.candidates[idx]);
+            draw_candidates(x, y, game.candidates[idx], metrics);
         }
     }
 
-    // Highlight the cell the current move touched (fades over HIGHLIGHT_FADE).
+    // Grid lines: thin every cell, thick every box boundary.
+    for i in 0..=9 {
+        let thick = i % 3 == 0;
+        let w = if thick { 3.0 } else { 1.0 };
+        let col_gray = if thick { 0.75 } else { 0.35 };
+        let c = Color::new(col_gray, col_gray, col_gray, 1.0);
+        draw_line(
+            OX + i as f32 * CELL,
+            OY,
+            OX + i as f32 * CELL,
+            OY + GRID_W,
+            w,
+            c,
+        );
+        draw_line(
+            OX,
+            OY + i as f32 * CELL,
+            OX + GRID_W,
+            OY + i as f32 * CELL,
+            w,
+            c,
+        );
+    }
+}
+
+/// Highlight the cell the current move touched (fades over `HIGHLIGHT_FADE`). Drawn
+/// fresh every frame directly to screen — unlike `draw_board_static`, its alpha
+/// changes continuously so it can't be baked into the cached board texture.
+fn draw_highlight(highlight: Option<(Move, f32)>) {
     if let Some((m, t)) = highlight
         && t < HIGHLIGHT_FADE
     {
@@ -419,49 +493,26 @@ fn draw_board(game: &Game, highlight: Option<(Move, f32)>) {
         c.a = alpha * 0.85;
         draw_rectangle_lines(x + 1.0, y + 1.0, CELL - 2.0, CELL - 2.0, 4.0, c);
     }
-
-    // Grid lines: thin every cell, thick every box boundary.
-    for i in 0..=9 {
-        let thick = i % 3 == 0;
-        let w = if thick { 3.0 } else { 1.0 };
-        let col_gray = if thick { 0.75 } else { 0.35 };
-        let c = Color::new(col_gray, col_gray, col_gray, 1.0);
-        draw_line(
-            OX + i as f32 * CELL,
-            OY,
-            OX + i as f32 * CELL,
-            OY + grid_w,
-            w,
-            c,
-        );
-        draw_line(
-            OX,
-            OY + i as f32 * CELL,
-            OX + grid_w,
-            OY + i as f32 * CELL,
-            w,
-            c,
-        );
-    }
 }
 
 /// Pencil marks: a 3x3 mini-grid of the digits still possible in this cell, always kept
 /// current (the solver's naked/hidden-single and locked-candidate deductions all read
 /// straight off this same bitmask), so what's drawn is exactly what the algorithm is
 /// weighing for its next move — not a separate display-only computation.
-fn draw_candidates(x: f32, y: f32, mask: u16) {
+fn draw_candidates(x: f32, y: f32, mask: u16, metrics: &DigitMetrics) {
     let sub = CELL / 3.0;
     for d in 1..=9u8 {
         if mask & game::bit(d) == 0 {
             continue;
         }
-        let i = (d - 1) as f32;
-        let cx = x + (i % 3.0) * sub + sub * 0.5;
-        let cy = y + (i / 3.0).floor() * sub + sub * 0.5;
-        let s = d.to_string();
-        let dm = measure_text(&s, None, 15, 1.0);
+        let i = (d - 1) as usize;
+        let fi = i as f32;
+        let cx = x + (fi % 3.0) * sub + sub * 0.5;
+        let cy = y + (fi / 3.0).floor() * sub + sub * 0.5;
+        let s = metrics.text[i];
+        let dm = metrics.candidate[i];
         draw_text(
-            &s,
+            s,
             cx - dm.width * 0.5,
             cy + dm.height * 0.4,
             15.0,

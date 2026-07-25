@@ -1,5 +1,6 @@
 use game2048::{N, can_move, choose_dir, prep, unprep};
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 
 const WIN_W: f32 = 500.0;
 const WIN_H: f32 = 610.0;
@@ -550,6 +551,13 @@ async fn amain(cli: CliArgs) {
     let mut control = control::Control::new();
     let mut prev_anim_t = 1.0f32;
 
+    // The settled grid (16 tiles, each a rounded rect + measure_text/draw_text) only
+    // actually needs redrawing when a move's slide animation finishes or a spawn/merge
+    // "pop" bounce is playing — not every render frame while sitting idle between
+    // moves. See `render_cache::RenderCache`. Fixed rect: this game draws at an
+    // absolute, non-resizing canvas size (`WIN_W`/`WIN_H`), unlike the other games.
+    let mut board_cache = RenderCache::new(Rect::new(GRID_X, GRID_Y, GRID_W, GRID_W));
+
     loop {
         control.handle_keys();
         let dt = control.scale(get_frame_time());
@@ -587,6 +595,7 @@ async fn amain(cli: CliArgs) {
             let best = game.best;
             game = Game::new(best);
             prev_anim_t = 1.0;
+            board_cache.mark_dirty();
         }
 
         clear_background(rgb(250, 248, 239));
@@ -612,6 +621,28 @@ async fn amain(cli: CliArgs) {
         rrect(GRID_X, GRID_Y, GRID_W, GRID_W, 6.0, rgb(187, 173, 160));
 
         let animating = game.anim_t < 1.0;
+        let draw_settled = |game: &Game| {
+            for r in 0..N {
+                for c in 0..N {
+                    let (tx, ty) = grid_xy(r as f32, c as f32);
+                    let val = game.board[r][c];
+                    let scale = game
+                        .pops
+                        .iter()
+                        .find(|p| p.row == r && p.col == c)
+                        .map(|p| {
+                            let t = p.t.clamp(0., 1.);
+                            if p.spawn {
+                                (t * std::f32::consts::PI / 2.0).sin()
+                            } else {
+                                1.0 + 0.2 * (t * std::f32::consts::PI).sin()
+                            }
+                        })
+                        .unwrap_or(1.0);
+                    tile_cell(tx, ty, val, scale, 1.0);
+                }
+            }
+        };
         if animating {
             let mut from_grid = [[false; N]; N];
             for t in &game.anim_tiles {
@@ -639,27 +670,14 @@ async fn amain(cli: CliArgs) {
                 };
                 tile_cell(tx, ty, tile.val, 1.0, alpha);
             }
+            board_cache.mark_dirty();
+        } else if !game.pops.is_empty() {
+            // A spawn/merge "pop" bounce is still animating even though tile *sliding*
+            // (anim_t) has settled — still a live per-frame draw, can't cache yet.
+            draw_settled(&game);
+            board_cache.mark_dirty();
         } else {
-            for r in 0..N {
-                for c in 0..N {
-                    let (tx, ty) = grid_xy(r as f32, c as f32);
-                    let val = game.board[r][c];
-                    let scale = game
-                        .pops
-                        .iter()
-                        .find(|p| p.row == r && p.col == c)
-                        .map(|p| {
-                            let t = p.t.clamp(0., 1.);
-                            if p.spawn {
-                                (t * std::f32::consts::PI / 2.0).sin()
-                            } else {
-                                1.0 + 0.2 * (t * std::f32::consts::PI).sin()
-                            }
-                        })
-                        .unwrap_or(1.0);
-                    tile_cell(tx, ty, val, scale, 1.0);
-                }
-            }
+            board_cache.draw(|| draw_settled(&game));
         }
 
         if game.phase == Phase::WinPause {

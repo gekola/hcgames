@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 
 mod blocks;
 mod game;
@@ -41,6 +42,26 @@ fn conf() -> Conf {
         high_dpi: true,
         ..Default::default()
     }
+}
+
+/// `(cell, ow, oh, ox, oy)` for a given canvas size — shared by the main draw loop and
+/// `board_render_cache` so the cache's rect and the actual drawn geometry can never
+/// drift apart.
+fn board_geometry(sw: f32, sh: f32) -> (f32, f32, f32, f32, f32) {
+    let cell = (sw / COLS as f32)
+        .min((sh - 40.0) / ROWS as f32)
+        .floor()
+        .max(1.0);
+    let ow = COLS as f32 * cell;
+    let oh = ROWS as f32 * cell;
+    let ox = ((sw - ow) * 0.5).floor();
+    let oy = ((sh - oh - 30.0) * 0.5 + 30.0).floor();
+    (cell, ow, oh, ox, oy)
+}
+
+fn board_render_cache(size: (f32, f32)) -> RenderCache {
+    let (_, ow, oh, ox, oy) = board_geometry(size.0, size.1);
+    RenderCache::new(Rect::new(ox - 1.0, oy - 1.0, ow + 2.0, oh + 2.0))
 }
 
 // ── CLI args (native only — meaningless in a browser tab) ───────────────────────
@@ -149,6 +170,14 @@ async fn amain(cli: CliArgs) {
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
 
+    // The board (border, static blocks, food, body) only actually changes once per
+    // tick (`TICK`, ~12/sec) but was being fully re-drawn every render frame (~60/sec)
+    // regardless. See `render_cache::RenderCache` for why this matters — measured
+    // impact stripping snake's drawing entirely showed ~5s of its ~6.3s mobile
+    // Lighthouse Total Blocking Time was this redundant redraw.
+    let mut cached_size = (screen_width(), screen_height());
+    let mut board_cache = board_render_cache(cached_size);
+
     loop {
         control.handle_keys();
 
@@ -165,6 +194,7 @@ async fn amain(cli: CliArgs) {
             accum -= tick_interval;
             if game.tick() {
                 log_tick(cli.debug, &game);
+                board_cache.mark_dirty();
             } else {
                 if cli.debug {
                     eprintln!(
@@ -181,6 +211,7 @@ async fn amain(cli: CliArgs) {
                     std::process::exit(0);
                 }
                 game = Game::new(game.generation + 1);
+                board_cache.mark_dirty();
                 break;
             }
         }
@@ -192,90 +223,89 @@ async fn amain(cli: CliArgs) {
             a: 1.0,
         });
 
-        let sw = screen_width();
-        let sh = screen_height();
-        let cell = (sw / COLS as f32)
-            .min((sh - 40.0) / ROWS as f32)
-            .floor()
-            .max(1.0);
-        let ow = COLS as f32 * cell;
-        let oh = ROWS as f32 * cell;
-        let ox = ((sw - ow) * 0.5).floor();
-        let oy = ((sh - oh - 30.0) * 0.5 + 30.0).floor();
+        let cur_size = (screen_width(), screen_height());
+        if cur_size != cached_size {
+            board_cache = board_render_cache(cur_size);
+            cached_size = cur_size;
+        }
 
-        draw_rectangle(
-            ox - 1.0,
-            oy - 1.0,
-            ow + 2.0,
-            oh + 2.0,
-            Color {
-                r: 0.15,
-                g: 0.17,
-                b: 0.25,
-                a: 1.0,
-            },
-        );
+        let (cell, ow, oh, ox, oy) = board_geometry(screen_width(), screen_height());
 
-        for i in 0..GRID {
-            if game.blocks[i] {
-                let x = (i % COLS as usize) as f32;
-                let y = (i / COLS as usize) as f32;
-                draw_rectangle(
-                    ox + x * cell + 1.0,
-                    oy + y * cell + 1.0,
-                    cell - 2.0,
-                    cell - 2.0,
+        board_cache.draw(|| {
+            draw_rectangle(
+                ox - 1.0,
+                oy - 1.0,
+                ow + 2.0,
+                oh + 2.0,
+                Color {
+                    r: 0.15,
+                    g: 0.17,
+                    b: 0.25,
+                    a: 1.0,
+                },
+            );
+
+            for i in 0..GRID {
+                if game.blocks[i] {
+                    let x = (i % COLS as usize) as f32;
+                    let y = (i / COLS as usize) as f32;
+                    draw_rectangle(
+                        ox + x * cell + 1.0,
+                        oy + y * cell + 1.0,
+                        cell - 2.0,
+                        cell - 2.0,
+                        Color {
+                            r: 0.3,
+                            g: 0.3,
+                            b: 0.35,
+                            a: 1.0,
+                        },
+                    );
+                }
+            }
+
+            let f = game.food;
+            let pad = (cell * 0.12).max(2.0);
+            draw_rectangle(
+                ox + f.x as f32 * cell + pad,
+                oy + f.y as f32 * cell + pad,
+                cell - 2.0 * pad,
+                cell - 2.0 * pad,
+                Color {
+                    r: 0.95,
+                    g: 0.25,
+                    b: 0.25,
+                    a: 1.0,
+                },
+            );
+
+            for (i, &seg) in game.body.iter().enumerate() {
+                let color = if i == 0 {
+                    // blue → white/gray as hunger rises
                     Color {
-                        r: 0.3,
-                        g: 0.3,
-                        b: 0.35,
+                        r: 0.08 + 0.92 * hunger,
+                        g: 0.6 + 0.4 * hunger,
+                        b: 0.95 + 0.05 * hunger,
                         a: 1.0,
-                    },
+                    }
+                } else {
+                    let t = 1.0 - (i as f32 / n) * 0.65;
+                    Color {
+                        r: 0.08,
+                        g: 0.6 * t,
+                        b: 0.95 * t,
+                        a: 1.0,
+                    }
+                };
+                draw_rectangle(
+                    ox + seg.x as f32 * cell + 1.0,
+                    oy + seg.y as f32 * cell + 1.0,
+                    cell - 2.0,
+                    cell - 2.0,
+                    color,
                 );
             }
-        }
-
-        let f = game.food;
-        let pad = (cell * 0.12).max(2.0);
-        draw_rectangle(
-            ox + f.x as f32 * cell + pad,
-            oy + f.y as f32 * cell + pad,
-            cell - 2.0 * pad,
-            cell - 2.0 * pad,
-            Color {
-                r: 0.95,
-                g: 0.25,
-                b: 0.25,
-                a: 1.0,
-            },
-        );
-
-        for (i, &seg) in game.body.iter().enumerate() {
-            let color = if i == 0 {
-                // blue → white/gray as hunger rises
-                Color {
-                    r: 0.08 + 0.92 * hunger,
-                    g: 0.6 + 0.4 * hunger,
-                    b: 0.95 + 0.05 * hunger,
-                    a: 1.0,
-                }
-            } else {
-                let t = 1.0 - (i as f32 / n) * 0.65;
-                Color {
-                    r: 0.08,
-                    g: 0.6 * t,
-                    b: 0.95 * t,
-                    a: 1.0,
-                }
-            };
-            draw_rectangle(
-                ox + seg.x as f32 * cell + 1.0,
-                oy + seg.y as f32 * cell + 1.0,
-                cell - 2.0,
-                cell - 2.0,
-                color,
-            );
-        }
+        });
 
         let font_size = (cell * 0.9).max(14.0);
         let hud = format!("Score: {:>4}   Gen: {}", game.score, game.generation);

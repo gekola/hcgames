@@ -1,0 +1,128 @@
+use macroquad::prelude::*;
+
+/// Caches a region of the canvas into an offscreen texture, redrawn only when the
+/// caller marks it dirty instead of on every render frame.
+///
+/// Every self-playing game in this workspace ticks its game state on a fixed interval
+/// (`TICK`, a few times a second) but was redrawing that state's *entire* visual
+/// footprint every render frame (~60/sec) regardless — a 900x720 board with a few
+/// hundred `draw_text`/`draw_rectangle`/bezier-curve calls costs real main-thread time
+/// even under macroquad's immediate-mode API, and browsers never get to skip it since
+/// nothing marks the canvas "unchanged". Measured impact fixing sudoku this way: mobile
+/// Lighthouse Performance 70→95, Total Blocking Time 5.9s→130ms, Time to Interactive
+/// 12.2s→3.0s (see the sudoku game's git history). Klondike/Spider's card rendering
+/// (bezier-heavy suit symbols) is expensive enough that this pattern is not optional —
+/// their previous unbounded per-frame redraw pushed Lighthouse's mobile trace to
+/// 100+ seconds of blocking time.
+///
+/// Only cache content that's actually static between ticks. Genuinely continuous
+/// animation (a card flying between piles, a tile sliding, a fading highlight) must
+/// stay a live per-frame draw on top of the cached texture — see each game's `main.rs`
+/// for the static/animated split.
+pub struct RenderCache {
+    target: RenderTarget,
+    camera: Camera2D,
+    rect: Rect,
+    dirty: bool,
+}
+
+impl RenderCache {
+    /// `rect` is the screen-space region this cache covers, in the same absolute pixel
+    /// coordinates the game already draws in — the texture is sized 1:1 to it, and the
+    /// `draw` closure passed to `draw()` should keep using those same absolute
+    /// coordinates unchanged (no need to offset by `rect`'s origin).
+    pub fn new(rect: Rect) -> Self {
+        // `render_target()` defaults to `sample_count: 1`, but macroquad's
+        // `render_target_ex` branches on `sample_count != 0` (not `> 1`) to decide
+        // whether to build an MSAA resolve pass — so the "no multisampling" default
+        // still takes that path and asserts `glCheckFramebufferStatus(...) != 0` on an
+        // extra resolve framebuffer we don't need. On browsers/GPUs whose WebGL glue
+        // only wires that GL function up for WebGL2 contexts, the call returns 0, the
+        // assert fails, and `panic = "abort"` turns it into a wasm `unreachable` trap
+        // (`Uncaught RuntimeError: unreachable executed` in the browser console).
+        // `sample_count: 0` skips the resolve path entirely — this cache only ever
+        // blits a static texture, so there's nothing to resolve anyway.
+        let target = render_target_ex(
+            rect.w.round().max(1.0) as u32,
+            rect.h.round().max(1.0) as u32,
+            RenderTargetParams {
+                sample_count: 0,
+                ..Default::default()
+            },
+        );
+        target.texture.set_filter(FilterMode::Nearest);
+        let mut camera = Camera2D::from_display_rect(rect);
+        camera.render_target = Some(target.clone());
+        Self {
+            target,
+            camera,
+            rect,
+            dirty: true,
+        }
+    }
+
+    /// Forces the next `draw()` call to actually re-run its closure instead of reusing
+    /// the cached texture. Call this whenever the state `draw`'s closure reads has
+    /// changed — typically once per solver tick, not once per frame.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// If dirty, re-renders `draw` into the cached texture (switching to this cache's
+    /// render-target camera and back — `draw` should use ordinary absolute screen
+    /// coordinates, same as drawing directly). Every call, dirty or not, then blits the
+    /// texture back at `rect`'s position — a single draw call standing in for whatever
+    /// `draw` costs.
+    ///
+    /// Handles the render-target-vs-screen Y-flip macroquad's `Camera2D` needs
+    /// internally (`flip_y: true` on the blit) — get this wrong and cached content
+    /// renders upside down; callers never need to think about it.
+    ///
+    /// Clears the texture to fully transparent before each re-render, so `draw`'s
+    /// output is exactly this frame's content rather than accumulating on top of
+    /// whatever the last dirty pass left behind. Without this, content that doesn't
+    /// draw over the exact same pixels every time it's marked dirty (e.g. a board
+    /// whose cell layout/footprint changes shape) leaves stale pixels ghosting behind
+    /// the new content — see minesweeper's Square/Hex variant switch.
+    pub fn draw(&mut self, mut draw: impl FnMut()) {
+        if self.dirty {
+            set_camera(&self.camera);
+            clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+            draw();
+            set_default_camera();
+            self.dirty = false;
+        }
+        self.blit();
+    }
+
+    fn blit(&self) {
+        draw_texture_ex(
+            &self.target.texture,
+            self.rect.x,
+            self.rect.y,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(self.rect.w, self.rect.h)),
+                flip_y: true,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Rasterizes every combination of `texts` x `font_sizes` into macroquad's shared font
+/// atlas up front. Call this once, on the default camera, before constructing any
+/// `RenderCache` that will draw text — growing the atlas (rasterizing a glyph/size
+/// combination for the first time) while a `RenderCache`'s render-target camera is
+/// active corrupts subsequently-drawn screen text (garbled, near-black) for the rest
+/// of the run. Confirmed by bisection on Klondike: neither the card table nor the HUD
+/// alone triggered it at any content size, only the combination, once enough distinct
+/// rank glyphs were needed to grow the atlas past its initial size — pre-warming here
+/// forces that growth to happen safely while still on the default camera.
+pub fn prewarm_glyphs(texts: &[&str], font_sizes: &[u16]) {
+    for &size in font_sizes {
+        for &text in texts {
+            measure_text(text, None, size, 1.0);
+        }
+    }
+}

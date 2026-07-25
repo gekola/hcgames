@@ -1,6 +1,7 @@
 use cards::card::Card;
 use cards::render::{draw_card_back, draw_card_face, draw_empty_slot, draw_suit_symbol};
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 use std::collections::HashSet;
 
 mod game;
@@ -12,6 +13,7 @@ use solver::Solver;
 const TICK: f32 = 0.20;
 const ANIM_DURATION: f32 = 0.24;
 const RESTART_DELAY: f64 = 2.8;
+const HUD_H: f32 = 34.0;
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -457,11 +459,34 @@ async fn run_ui(cli: CliArgs) {
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
 
+    // See `render_cache::prewarm_glyphs` — must run before `board_cache` (or any
+    // RenderCache) exists. 16.0 is the stock-pile count label's fixed font size.
+    let init_fs = (Layout::from_screen().ch * 0.175).max(9.0) as u16;
+    render_cache::prewarm_glyphs(&cards::render::RANK_STRS, &[init_fs, 16]);
+
+    // `draw_game` (cell backgrounds, card faces/backs, empty-slot outlines — up to 52
+    // bezier-heavy suit symbols) only actually changes when `display_game`/`in_flight`
+    // change, which happens at exactly two discrete moments (a move starts or an
+    // animation settles), not every render frame. See `render_cache::RenderCache` for
+    // why this matters — unbounded per-frame redraw of card art was pushing this page's
+    // Lighthouse mobile Total Blocking Time past 90 seconds. Sized to everything below
+    // the HUD strip; rebuilt if the canvas itself resizes (native window resize only —
+    // the deployed WASM canvas is pinned to a fixed backing resolution).
+    let mut cached_size = (screen_width(), screen_height());
+    let mut board_cache =
+        RenderCache::new(Rect::new(0.0, HUD_H, cached_size.0, cached_size.1 - HUD_H));
+
     loop {
         control.handle_keys();
         let now = macroquad::miniquad::date::now();
         let dt = control.scale(get_frame_time().min(0.1));
         let layout = Layout::from_screen();
+
+        let cur_size = (screen_width(), screen_height());
+        if cur_size != cached_size {
+            board_cache = RenderCache::new(Rect::new(0.0, HUD_H, cur_size.0, cur_size.1 - HUD_H));
+            cached_size = cur_size;
+        }
 
         if is_key_pressed(KeyCode::V) {
             mode = mode.next();
@@ -472,13 +497,17 @@ async fn run_ui(cli: CliArgs) {
             accum = 0.0;
             anim_t = 1.0;
             flying.clear();
+            board_cache.mark_dirty();
         }
 
-        // Advance animation; when it settles, sync display_game to actual game.
+        // Advance animation; when it settles (not every frame it stays settled), sync
+        // display_game to actual game.
+        let was_animating = anim_t < 1.0;
         anim_t = (anim_t + dt / ANIM_DURATION).min(1.0);
-        if anim_t >= 1.0 {
+        if was_animating && anim_t >= 1.0 {
             display_game = game.clone();
             flying.clear();
+            board_cache.mark_dirty();
         }
 
         match game.phase {
@@ -492,6 +521,7 @@ async fn run_ui(cli: CliArgs) {
                         }
                         flying = compute_flying_cards(&game, m, &layout);
                         game.apply(m);
+                        board_cache.mark_dirty();
                         if flying.is_empty() {
                             // No animation needed (draw/reset); snap display immediately.
                             display_game = game.clone();
@@ -527,6 +557,7 @@ async fn run_ui(cli: CliArgs) {
                     accum = 0.0;
                     anim_t = 1.0;
                     flying.clear();
+                    board_cache.mark_dirty();
                 }
             }
         }
@@ -535,7 +566,7 @@ async fn run_ui(cli: CliArgs) {
 
         clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
         draw_hud(&game, mode.label(), &control.label());
-        draw_game(&display_game, &layout, &in_flight);
+        board_cache.draw(|| draw_game(&display_game, &layout, &in_flight));
 
         // Overlay flying cards at their interpolated position.
         let t = ease_in_out(anim_t);

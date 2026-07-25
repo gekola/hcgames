@@ -11,4 +11,5 @@ path = "src/lib.rs"
 macroquad = "0.4"
 screenshot = { path = "../screenshot" }
 control = { path = "../control" }
+render_cache = { path = "../render_cache" }
 game_common = { path = "../game_common" }

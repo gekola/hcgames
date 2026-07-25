@@ -2,6 +2,7 @@ mod game;
 mod puzzle;
 
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 
 pub const FIELD_W: i32 = 120;
 pub const FIELD_H: i32 = 90;
@@ -178,6 +179,17 @@ async fn amain(cli: CliArgs) {
     let mut shot = screenshot::Capture::from_env();
     let mut control = control::Control::new();
     let mut last_remaining = game.remaining();
+
+    // The field border + blocks only need redrawing while the camera is still
+    // panning toward its target or a block is mid-animation (exiting/returning) —
+    // once both settle, the view is static until the next AI action, but was being
+    // redrawn every render frame regardless. See `render_cache::RenderCache`. Covers
+    // the whole canvas (blocks can pan anywhere in view); rebuilt if the canvas
+    // itself resizes (native window resize only — the deployed WASM canvas is
+    // pinned to a fixed backing resolution).
+    let mut cached_size = (screen_width(), screen_height());
+    let mut board_cache = RenderCache::new(Rect::new(0.0, 0.0, cached_size.0, cached_size.1));
+
     loop {
         control.handle_keys();
         let dt = control.scale(get_frame_time().min(0.05));
@@ -213,6 +225,7 @@ async fn amain(cli: CliArgs) {
             let next = (game.level + 1) % puzzle::NFIGURES;
             game = game::Game::new(next);
             last_remaining = game.remaining();
+            board_cache.mark_dirty();
         }
 
         // --- render ---
@@ -234,68 +247,95 @@ async fn amain(cli: CliArgs) {
             a: 1.0,
         });
 
+        let cur_size = (sw, sh);
+        if cur_size != cached_size {
+            board_cache = RenderCache::new(Rect::new(0.0, 0.0, cur_size.0, cur_size.1));
+            cached_size = cur_size;
+        }
+
         // Field border
         let fx = sw * 0.5 - cam_px;
         let fy = sh * 0.5 - cam_py + 15.0;
-        draw_rectangle_lines(
-            fx,
-            fy,
-            FIELD_W as f32 * cell,
-            FIELD_H as f32 * cell,
-            2.0,
-            Color {
-                r: 0.25,
-                g: 0.25,
-                b: 0.35,
-                a: 1.0,
-            },
-        );
 
-        for block in &game.blocks {
-            if block.state == game::BlockState::Gone {
-                continue;
-            }
-
-            let (ox, oy) = block.vis_offset(cell);
-            let sx = sw * 0.5 + block.col as f32 * cell - cam_px + ox;
-            let sy = sh * 0.5 + block.row as f32 * cell - cam_py + oy + 15.0;
-
-            // Skip if fully off-screen
-            if sx + cell < 0.0 || sx > sw || sy + cell < 0.0 || sy > sh {
-                continue;
-            }
-
-            let block_color = if block.state == game::BlockState::Considered {
+        let draw_field = |game: &game::Game| {
+            draw_rectangle_lines(
+                fx,
+                fy,
+                FIELD_W as f32 * cell,
+                FIELD_H as f32 * cell,
+                2.0,
                 Color {
-                    r: 0.7,
-                    g: 0.7,
-                    b: 0.25,
-                    a: 0.5,
-                }
-            } else {
-                Color {
-                    r: 0.2,
-                    g: 0.75,
-                    b: 0.65,
+                    r: 0.25,
+                    g: 0.25,
+                    b: 0.35,
                     a: 1.0,
-                }
-            };
-
-            draw_rectangle(sx + 1.0, sy + 1.0, cell - 2.0, cell - 2.0, block_color);
-
-            let arrow_color = Color {
-                r: 0.04,
-                g: 0.08,
-                b: 0.1,
-                a: 0.85,
-            };
-            draw_arrow(
-                sx + cell * 0.5,
-                sy + cell * 0.5,
-                block.dir,
-                cell * 0.28,
-                arrow_color,
+                },
             );
+
+            for block in &game.blocks {
+                if block.state == game::BlockState::Gone {
+                    continue;
+                }
+
+                let (ox, oy) = block.vis_offset(cell);
+                let sx = sw * 0.5 + block.col as f32 * cell - cam_px + ox;
+                let sy = sh * 0.5 + block.row as f32 * cell - cam_py + oy + 15.0;
+
+                // Skip if fully off-screen
+                if sx + cell < 0.0 || sx > sw || sy + cell < 0.0 || sy > sh {
+                    continue;
+                }
+
+                let block_color = if block.state == game::BlockState::Considered {
+                    Color {
+                        r: 0.7,
+                        g: 0.7,
+                        b: 0.25,
+                        a: 0.5,
+                    }
+                } else {
+                    Color {
+                        r: 0.2,
+                        g: 0.75,
+                        b: 0.65,
+                        a: 1.0,
+                    }
+                };
+
+                draw_rectangle(sx + 1.0, sy + 1.0, cell - 2.0, cell - 2.0, block_color);
+
+                let arrow_color = Color {
+                    r: 0.04,
+                    g: 0.08,
+                    b: 0.1,
+                    a: 0.85,
+                };
+                draw_arrow(
+                    sx + cell * 0.5,
+                    sy + cell * 0.5,
+                    block.dir,
+                    cell * 0.28,
+                    arrow_color,
+                );
+            }
+        };
+
+        // Cache-eligible only once the camera has stopped easing toward its target
+        // and no block is mid-animation — otherwise every block's screen position
+        // (baked from cam_px/cam_py at draw time) would go stale the instant the
+        // camera moves on. Both are common (an AI action roughly every 0.2-0.5s), so
+        // this doesn't win as much as the other games, but it's free when it applies.
+        let cam_settled =
+            (game.cam_x - game.cam_tx).abs() < 0.01 && (game.cam_y - game.cam_ty).abs() < 0.01;
+        let all_idle = game
+            .blocks
+            .iter()
+            .all(|b| matches!(b.state, game::BlockState::Idle | game::BlockState::Gone));
+        if cam_settled && all_idle {
+            board_cache.draw(|| draw_field(&game));
+        } else {
+            draw_field(&game);
+            board_cache.mark_dirty();
         }
 
         // HUD

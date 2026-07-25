@@ -3,10 +3,12 @@ pub mod solver;
 
 use board::{Board, Cell, CellState, GridKind, Phase};
 use macroquad::prelude::*;
+use render_cache::RenderCache;
 use solver::{Action, next_action, update_probs};
 
 const TICK: f32 = 0.18;
 const RESTART_DELAY: f64 = 3.5;
+const HUD_H: f32 = 34.0;
 
 // ── CLI args (native only — meaningless in a browser tab) ───────────────────────
 // Shared by both `minesweeper-square` and `minesweeper-hex`, which are thin binaries
@@ -176,19 +178,37 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
     let mut control = control::Control::new();
     const GAME_NAME: &str = "minesweeper";
 
+    // The grid (cell backgrounds, revealed-neighbor-count text, flags) only actually
+    // changes once per solver tick (`TICK`), but was being fully re-drawn every render
+    // frame regardless — up to a few hundred `draw_text`/`draw_rectangle` calls
+    // apiece. See `render_cache::RenderCache`. Sized to everything below the HUD
+    // strip; rebuilt if the canvas itself resizes (native window resize only — the
+    // deployed WASM canvas is pinned to a fixed backing resolution).
+    let mut cached_size = (screen_width(), screen_height());
+    let mut board_cache =
+        RenderCache::new(Rect::new(0.0, HUD_H, cached_size.0, cached_size.1 - HUD_H));
+
     loop {
         control.handle_keys();
         accum += control.scale(get_frame_time().min(0.1));
+
+        let cur_size = (screen_width(), screen_height());
+        if cur_size != cached_size {
+            board_cache = RenderCache::new(Rect::new(0.0, HUD_H, cur_size.0, cur_size.1 - HUD_H));
+            cached_size = cur_size;
+        }
 
         if is_key_pressed(KeyCode::V) {
             kind = kind.cycle();
             board = Board::new(kind);
             update_probs(&mut board);
             accum = 0.0;
+            board_cache.mark_dirty();
         }
 
         while accum >= TICK {
             accum -= TICK;
+            board_cache.mark_dirty();
             if step(&mut board, &cli) {
                 if let Phase::GameOver(t) | Phase::Won(t) = board.phase
                     && macroquad::miniquad::date::now() - t > RESTART_DELAY
@@ -215,7 +235,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
             }
         }
 
-        draw_board(&board, &control.label());
+        draw_board(&board, &control.label(), &mut board_cache);
         shot.tick();
         screenshot::handle_hotkey();
         next_frame().await;
@@ -615,7 +635,7 @@ fn draw_hex_grid(
 
 // ── Top-level draw ────────────────────────────────────────────────────────────
 
-fn draw_board(board: &Board, speed_label: &str) {
+fn draw_board(board: &Board, speed_label: &str, board_cache: &mut RenderCache) {
     let sw = screen_width();
     let sh = screen_height();
 
@@ -642,10 +662,10 @@ fn draw_board(board: &Board, speed_label: &str) {
 
     let pad = 10.0_f32;
     let avail_w = sw - 2.0 * pad;
-    let avail_h = sh - 34.0 - pad;
+    let avail_h = sh - HUD_H - pad;
 
-    match board.kind {
-        GridKind::Square => draw_square(board, pad, 34.0, avail_w, avail_h, global_prob),
-        GridKind::Hex => draw_hex_grid(board, pad, 34.0, avail_w, avail_h, global_prob),
-    }
+    board_cache.draw(|| match board.kind {
+        GridKind::Square => draw_square(board, pad, HUD_H, avail_w, avail_h, global_prob),
+        GridKind::Hex => draw_hex_grid(board, pad, HUD_H, avail_w, avail_h, global_prob),
+    });
 }
