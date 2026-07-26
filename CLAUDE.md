@@ -48,8 +48,11 @@ pair, `xtask::manifest_json` writes that page's own `manifest.webmanifest` along
 `index.html` (scoped to `./`, so a game installs separately from the homepage), and
 `xtask::sw_register_bridge` registers the single shared `static/sw.js` (copied verbatim to
 `dist/sw.js` by `mise run deploy`) for offline static-asset caching — a plain
-stale-while-revalidate cache-on-fetch worker, no precache list to maintain per game. New
-games get all three automatically through `generate_game_html`; nothing to wire up by hand.
+network-first-falling-back-to-cache-on-fetch worker (not stale-while-revalidate: none of
+these assets are content-hashed, so SWR could serve an infrequent visitor's stale copy of
+a game indefinitely — see `static/sw.js`'s own doc comment), no precache list to maintain
+per game. New games get all three automatically through `generate_game_html`; nothing to
+wire up by hand.
 Manifest icons follow the same `dist/favicon.png` / `dist/icon-512.png` exists-or-skip
 fallback pattern as `favicon_links`/`social_image` (both rasterized from `static/favicon.svg`
 by `mise run rasterize`, skipped locally without resvg).

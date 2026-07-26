@@ -1,11 +1,18 @@
 // Minimal offline static-asset cache, shared by every page (homepage + each game's own
-// manifest-scoped app — see xtask::sw_register_bridge). Stale-while-revalidate: serve a
-// cached response instantly if one exists, then refresh the cache from the network in the
-// background; with nothing cached yet, wait on the network and fall back to cache (which
-// will still be empty) only on failure. No precache list — assets fill in as they're
-// visited, which is enough for "revisit while offline" without hand-maintaining a manifest
-// of every game's .wasm/preview/font files.
-const CACHE = "hcg-v1";
+// manifest-scoped app — see xtask::sw_register_bridge). Network-first, falling back to
+// cache only when the network fetch fails outright (offline): none of these assets are
+// content-hashed (a game's .wasm keeps the same filename across every deploy), so
+// stale-while-revalidate — this worker's original strategy — would keep serving an
+// infrequent visitor's old cached copy indefinitely; it only "heals" on that visitor's
+// *next* load after a deploy, which for a rarely-revisited page can be arbitrarily far in
+// the future. Network-first still isn't a full redownload on every visit — the fetch()
+// below goes through the browser's own HTTP cache (Cache-Control/ETag), which GitHub
+// Pages sets a real max-age on — it just means "online" always means "current", and the
+// Cache Storage entries this worker maintains are purely a last-resort fallback for
+// genuinely offline revisits. No precache list — assets fill in as they're visited, which
+// is enough for that without hand-maintaining a manifest of every game's .wasm/preview/
+// font files.
+const CACHE = "hcg-v2";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -27,15 +34,12 @@ self.addEventListener("fetch", (event) => {
 
   event.respondWith(
     caches.open(CACHE).then((cache) =>
-      cache.match(event.request).then((cached) => {
-        const network = fetch(event.request)
-          .then((response) => {
-            if (response.ok) cache.put(event.request, response.clone());
-            return response;
-          })
-          .catch(() => cached);
-        return cached || network;
-      })
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) cache.put(event.request, response.clone());
+          return response;
+        })
+        .catch(() => cache.match(event.request))
     )
   );
 });
