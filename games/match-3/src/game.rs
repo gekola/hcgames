@@ -23,8 +23,13 @@ impl Color {
         Color::Purple,
     ];
 
-    fn random() -> Color {
-        Color::ALL[macroquad::rand::gen_range(0, Color::ALL.len())]
+    /// Picks a random color from a runtime subset — used everywhere a board's own
+    /// `active_colors` needs to be respected (initial gen, gravity refill, reshuffle) so
+    /// a level with fewer active colors never has one sneak back in via a fresh tile.
+    /// Every caller currently passes either `Color::ALL` (free-cycling variants) or a
+    /// `LevelParams::color_count`-sized prefix of it (`Variant::Mode::Levels`).
+    fn random_from(colors: &[Color]) -> Color {
+        colors[macroquad::rand::gen_range(0, colors.len())]
     }
 
     /// Index into `Color::ALL` / `Resolution::color_cleared` — used by `Variant::Mystery`
@@ -94,6 +99,13 @@ pub struct Board {
     /// Decremented (not tile-color-gated) whenever that cell is cleared by any match or
     /// bonus effect.
     pub jelly: Jelly,
+    /// The color palette this board draws fresh tiles from — a runtime subset of
+    /// `Color::ALL`, sized by `LevelParams::color_count` for `Variant::Mode::Levels`
+    /// (always the full 6 for the free-cycling variants). Carried on `Board` itself
+    /// (rather than threaded through every gravity/reshuffle call separately) so it stays
+    /// consistent automatically across every clone this game already makes —
+    /// `simulate`'s scratch boards, each wave's `board_before`/`board_after`, etc.
+    pub active_colors: Vec<Color>,
 }
 
 /// A tile arriving at `to_row` in `col`, animated by the renderer from `from_row`
@@ -210,6 +222,11 @@ const MYSTERY_TARGET_RANGES: [(u32, u32); MYSTERY_MAX_COLORS] = [(28, 34), (24, 
 /// difficulty can ramp across the line. `move_limit`/`jelly_cell_count`/
 /// `ingredients_target`/`time_limit` are only meaningful for the corresponding
 /// `variant` (e.g. `time_limit` is ignored by a `Score` level) — see `Game::new_level`.
+/// `color_count` applies to every variant, unlike those — fewer simultaneous colors
+/// means more frequent incidental matches (real match-3 games' standard difficulty
+/// ramp), so early levels use a narrower palette and later ones widen back to the full
+/// `Color::ALL` (see `MIN_LEVEL_COLORS` for the floor `gen_plain_tiles`' avoid-immediate-
+/// match retry loop needs to still terminate).
 #[derive(Clone, Copy)]
 pub struct LevelParams {
     pub name: &'static str,
@@ -219,7 +236,15 @@ pub struct LevelParams {
     pub jelly_cell_count: usize,
     pub ingredients_target: u32,
     pub time_limit: f32,
+    pub color_count: usize,
 }
+
+/// `gen_plain_tiles`' per-cell retry loop excludes at most 2 distinct colors (one to
+/// avoid extending a horizontal run, one for vertical) before it finds a legal fill —
+/// with only 2 active colors, both could be excluded simultaneously and the loop would
+/// spin forever. 3 is the hard floor; `LEVELS` stays at 4+ for actual difficulty
+/// headroom on top of that safety margin.
+const MIN_LEVEL_COLORS: usize = 3;
 
 /// After this many consecutive losses on the same level, `Session::next_generation`
 /// (main.rs) advances to the next level anyway rather than replaying it forever — there's
@@ -241,6 +266,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 4,
     },
     LevelParams {
         name: "Sticky Start",
@@ -250,6 +276,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 10,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 4,
     },
     LevelParams {
         name: "First Delivery",
@@ -259,6 +286,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 1,
         time_limit: 0.0,
+        color_count: 4,
     },
     LevelParams {
         name: "Building Up",
@@ -268,6 +296,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 4,
     },
     LevelParams {
         name: "Jelly Patch",
@@ -277,6 +306,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 16,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 5,
     },
     LevelParams {
         name: "Two by Two",
@@ -286,6 +316,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 2,
         time_limit: 0.0,
+        color_count: 5,
     },
     LevelParams {
         name: "Quick Hands",
@@ -295,6 +326,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 45.0,
+        color_count: 5,
     },
     LevelParams {
         name: "Point Rush",
@@ -304,6 +336,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 5,
     },
     LevelParams {
         name: "Deep Jelly",
@@ -313,6 +346,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 22,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 6,
     },
     LevelParams {
         name: "Full Batch",
@@ -322,6 +356,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 3,
         time_limit: 0.0,
+        color_count: 6,
     },
     LevelParams {
         name: "Against the Clock",
@@ -331,6 +366,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 55.0,
+        color_count: 6,
     },
     LevelParams {
         name: "Grand Finale",
@@ -340,6 +376,7 @@ pub const LEVELS: &[LevelParams] = &[
         jelly_cell_count: 0,
         ingredients_target: 0,
         time_limit: 0.0,
+        color_count: 6,
     },
 ];
 
@@ -371,7 +408,7 @@ pub struct Game {
 
 impl Game {
     pub fn new(variant: Variant, generation: u32) -> Self {
-        let board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET);
+        let board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET, &Color::ALL);
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
         Self {
             board,
@@ -413,7 +450,18 @@ impl Game {
     /// `VariantMode::Levels` (main.rs).
     pub fn new_level(params: LevelParams, generation: u32) -> Self {
         let variant = params.variant;
-        let board = gen_board(variant, params.jelly_cell_count, params.ingredients_target);
+        debug_assert!(
+            (MIN_LEVEL_COLORS..=Color::ALL.len()).contains(&params.color_count),
+            "level {} color_count {} out of range",
+            params.name,
+            params.color_count
+        );
+        let board = gen_board(
+            variant,
+            params.jelly_cell_count,
+            params.ingredients_target,
+            &Color::ALL[..params.color_count],
+        );
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
         Self {
             board,
@@ -904,6 +952,10 @@ fn compact_and_refill(
 ) -> (Vec<FallEntry>, u32) {
     let mut falls = Vec::new();
     let mut collected = 0u32;
+    // Cloned up front rather than read through `board.active_colors` inside the loop
+    // below — the loop also mutates `board.tiles`, and this avoids holding a borrow of
+    // `board` across that.
+    let active_colors = board.active_colors.clone();
 
     for col in 0..W {
         let mut survivors: Vec<(usize, Tile)> = Vec::new(); // (original row, tile)
@@ -943,7 +995,7 @@ fn compact_and_refill(
             }
         }
         for (i, slot) in new_col.iter_mut().enumerate().take(deficit) {
-            let tile = Tile::Plain(Color::random());
+            let tile = Tile::Plain(Color::random_from(&active_colors));
             *slot = tile;
             falls.push(FallEntry {
                 col,
@@ -1063,12 +1115,12 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
 
 // ── Board generation ────────────────────────────────────────────────────────────────
 
-fn gen_plain_tiles() -> Tiles {
+fn gen_plain_tiles(active_colors: &[Color]) -> Tiles {
     let mut tiles = [[Tile::Plain(Color::Red); W]; H];
     for r in 0..H {
         for c in 0..W {
             loop {
-                let color = Color::random();
+                let color = Color::random_from(active_colors);
                 let left_two = c >= 2
                     && tiles[r][c - 1].color() == Some(color)
                     && tiles[r][c - 2].color() == Some(color);
@@ -1104,8 +1156,13 @@ fn gen_mystery_goals() -> Vec<MysteryGoal> {
         .collect()
 }
 
-fn gen_board(variant: Variant, jelly_cell_count: usize, ingredients_target: u32) -> Board {
-    let mut tiles = gen_plain_tiles();
+fn gen_board(
+    variant: Variant,
+    jelly_cell_count: usize,
+    ingredients_target: u32,
+    active_colors: &[Color],
+) -> Board {
+    let mut tiles = gen_plain_tiles(active_colors);
     let mut jelly = [[0u8; W]; H];
 
     match variant {
@@ -1131,7 +1188,11 @@ fn gen_board(variant: Variant, jelly_cell_count: usize, ingredients_target: u32)
         Variant::Score | Variant::Timed | Variant::Mystery => {}
     }
 
-    let mut board = Board { tiles, jelly };
+    let mut board = Board {
+        tiles,
+        jelly,
+        active_colors: active_colors.to_vec(),
+    };
     reshuffle(&mut board); // guarantees at least one legal move exists, same as any fresh board
     board
 }
@@ -1149,12 +1210,15 @@ fn shuffle<T>(items: &mut [T]) {
 /// and no pre-existing match. Called both at board generation and whenever a resolved
 /// board turns out to have no legal move left.
 fn reshuffle(board: &mut Board) {
+    let active_colors = board.active_colors.clone();
     loop {
         for row in board.tiles.iter_mut() {
             for tile in row.iter_mut() {
                 match *tile {
-                    Tile::Plain(_) => *tile = Tile::Plain(Color::random()),
-                    Tile::Bonus(_, special) => *tile = Tile::Bonus(Color::random(), special),
+                    Tile::Plain(_) => *tile = Tile::Plain(Color::random_from(&active_colors)),
+                    Tile::Bonus(_, special) => {
+                        *tile = Tile::Bonus(Color::random_from(&active_colors), special)
+                    }
                     Tile::ColorBomb | Tile::Ingredient => {}
                 }
             }
@@ -1338,6 +1402,7 @@ mod tests {
         let mut board = Board {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
+            active_colors: Color::ALL.to_vec(),
         };
         board.tiles[0][0] = Tile::ColorBomb;
         board.tiles[0][1] = Tile::Plain(Color::Red);
@@ -1368,6 +1433,7 @@ mod tests {
         let mut board = Board {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
+            active_colors: Color::ALL.to_vec(),
         };
         board.tiles[0][0] = Tile::Bonus(Color::Red, Special::RowClear);
         board.tiles[1][0] = Tile::Plain(Color::Blue);
@@ -1441,6 +1507,7 @@ mod tests {
         let mut board = Board {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
+            active_colors: Color::ALL.to_vec(),
         };
         board.tiles[0][0] = Tile::ColorBomb;
         board.tiles[0][1] = Tile::Bonus(Color::Red, Special::Wrapped);

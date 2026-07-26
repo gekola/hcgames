@@ -245,10 +245,10 @@ A fifth `V`-cycle entry alongside the four free-cycling variants above (`--varia
 levels`) — steps through a hand-authored line, `game::LEVELS: &[LevelParams]`, instead
 of one fixed `Variant`. Each `LevelParams` reuses the same four `Variant` win-conditions
 but supplies its own `score_target`/`move_limit`/`jelly_cell_count`/
-`ingredients_target`/`time_limit` instead of the module's fixed per-variant constants —
-`Game::new_level` is the level-aware sibling of `Game::new`, and `gen_board` takes
-`jelly_cell_count`/`ingredients_target` as parameters rather than reading the consts
-directly, for exactly this reason.
+`ingredients_target`/`time_limit`/`color_count` instead of the module's fixed per-variant
+constants — `Game::new_level` is the level-aware sibling of `Game::new`, and `gen_board`
+takes `jelly_cell_count`/`ingredients_target`/`active_colors` as parameters rather than
+reading the consts directly, for exactly this reason.
 
 Deliberately **not** one of `Auto`'s `generation % 4` rotation targets — per root
 CLAUDE.md's "In-game controls" note, `Auto` should never land on a mode only reachable
@@ -280,6 +280,40 @@ Run it after touching `LEVELS` or the solver's weights:
 ```
 cargo test --release -p match-3 level_line_win_rates -- --ignored --nocapture
 ```
+
+**Board color count scales with level** (todo backlog item #2): `LevelParams::color_count`
+(4-6, only meaningful for `Levels` — every free-cycling variant always uses the full
+`Color::ALL`) slices `&Color::ALL[..color_count]` and carries it as `Board::active_colors`,
+which every color-rolling call site reads instead of the old parameterless
+`Color::random()` (now deleted): `gen_plain_tiles` (initial fill), `compact_and_refill`
+(gravity's fresh-tile spawns), and `reshuffle` (both the initial "guarantee a legal move"
+pass and the deadlock safety net). Carrying the palette *on the board* rather than
+threading it through every one of those calls separately means it survives every clone
+this game already makes for free — `simulate`'s scratch boards, each wave's
+`board_before`/`board_after` — without a fourth parameter creeping into functions that
+don't otherwise need to know about levels at all. `MIN_LEVEL_COLORS` (3) is a hard floor,
+not a difficulty knob: `gen_plain_tiles`'s per-cell retry loop excludes at most 2 distinct
+colors (one to avoid extending a horizontal run, one for vertical), so 2 active colors
+could exclude both and spin forever — `Game::new_level` `debug_assert!`s every level's
+`color_count` stays above it. `LEVELS` currently ramps 4 (levels 1-4) → 5 (5-8) → 6 (9-12).
+
+Re-running the floor-check soak test after adding `color_count` surfaced a real, sizeable
+effect worth knowing about before "fixing" it as a regression later: **levels 1-8 (4-5
+colors) jumped to near-100% win rate**, while **levels 9-12 (still the unchanged, always-6
+colors) stayed exactly where they were before this feature** (63%/53%/62%/30% — identical
+seed-for-seed, since a `color_count: 6` level's `&Color::ALL[..6]` is the same full slice
+`gen_board` always used). Fewer colors means far more incidental matches at the *same*
+`score_target`/`move_limit`/etc. those early levels were originally tuned against (tuned
+back when every level used 6 colors) — this reads as correct, not broken: the LEVELS
+floor rule (see above) only asserts a *minimum* of 25%, deliberately with no matching
+upper bound, because unlike a standalone free-cycling variant (which should always feel
+like a real toss-up, hence *that* convention's 45-55% band) a hand-authored level *line*
+is supposed to ramp from trivial to hard — an early "Warm-Up" the bot always wins is the
+intended shape, not a bug. Left as-is; re-tuning every level's *other* numbers (score
+targets, move limits, etc.) downward to compensate and manufacture a tighter early-level
+band was considered and deliberately not done — no floor violation to fix, and doing so
+would be re-tuning 8 levels' worth of already-shipped, already-floor-checked numbers on
+taste alone rather than in response to a measured problem.
 
 ## Bonus tiles and combos
 
