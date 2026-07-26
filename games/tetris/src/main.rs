@@ -571,12 +571,17 @@ fn draw_board_static(board: &Board) {
         }
     }
 
+    // Interior lines only (1..W / 1..H, not 0..=W / 0..=H) — the outer edges are already
+    // marked by the border rect above; drawing a grid line directly on top of it there
+    // partially overwrote the border, and asymmetrically enough between the left/right
+    // edges (line rasterization doesn't split a 1px line evenly across a coordinate) that
+    // the left border ended up visibly thinner than the right.
     let grid = rgb(35, 35, 46);
-    for c in 0..=W {
+    for c in 1..W {
         let x = BOARD_X + c as f32 * CELL;
         draw_line(x, BOARD_Y, x, BOARD_Y + BOARD_H, 1.0, grid);
     }
-    for r in 0..=H {
+    for r in 1..H {
         let y = BOARD_Y + r as f32 * CELL;
         draw_line(BOARD_X, y, BOARD_X + BOARD_W, y, 1.0, grid);
     }
