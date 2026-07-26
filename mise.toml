@@ -12,7 +12,7 @@ cargo run --bin "$1"
 
 # Build one game to WASM: mise run build-wasm snake
 [tasks.build-wasm]
-description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/, skipping wasm-opt/screenshot/HTML when neither the built wasm nor xtask's HTML generator have changed"
+description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/, skipping wasm-opt/screenshot when the built wasm hasn't changed and HTML regen when xtask's generator hasn't, independently"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -32,8 +32,16 @@ xtask_bin="target/release/generate_game_html"
 # check — covers edits to the game itself as well as any shared lib/ crate it uses.
 src="target/$WASM_TARGET/release/$name.wasm"
 out="dist/$name/$name.wasm"
-if [ -f "$out" ] && [ ! "$src" -nt "$out" ] && [ ! "$xtask_bin" -nt "$out" ]; then
-  echo "$name: wasm + xtask templates unchanged, skipping wasm-opt/screenshot/HTML" >&2
+html_out="dist/$name/index.html"
+
+# Two independent checks, not one combined — wasm-opt/screenshot only cares whether the
+# game's own build changed (a screenshot is pixels of gameplay, unaffected by page-chrome
+# HTML/CSS/JS), while HTML regen only cares whether xtask's generator changed. Bundling
+# both behind a single check used to force a full xvfb screenshot recapture for every
+# game on the next build-wasm after ANY xtask/src/lib.rs edit — including page-chrome-only
+# changes (a CSS tweak, a new hotkey-popup link) with zero effect on rendered gameplay.
+if [ -f "$out" ] && [ ! "$src" -nt "$out" ]; then
+  echo "$name: wasm unchanged, skipping wasm-opt/screenshot" >&2
 else
   # --all-features made wasm-opt enable engine features (reference-types, multivalue,
   # ...) beyond what rustc's wasm32-unknown-unknown target actually emits, and combining
@@ -46,6 +54,10 @@ else
     cp "$src" "$out"
   fi
   mise run screenshot "$name"
+fi
+if [ -f "$html_out" ] && [ ! "$xtask_bin" -nt "$html_out" ]; then
+  echo "$name: xtask templates unchanged, skipping HTML regen" >&2
+else
   cargo run --release --package xtask --bin generate_game_html -- "$name"
 fi
 # Shared across all games (dist/mq_js_bundle.js, not dist/<name>/) so it's fetched and
