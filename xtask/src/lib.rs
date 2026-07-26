@@ -216,7 +216,10 @@ font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: poin
 /// reloads into stream mode immediately, which also doubles as a live preview before they
 /// copy the URL into OBS.
 pub fn hotkey_popup(name: &str) -> Markup {
-    let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
+    let has_variant_switch = matches!(
+        name,
+        "klondike" | "spider" | "sudoku" | "minesweeper" | "tetris"
+    );
     html! {
         button id="hotkeys-btn" aria-label="Show hotkeys" { "?" }
         div id="hotkeys" {
@@ -495,6 +498,7 @@ pub fn description(name: &str) -> String {
         "sudoku" => "Self-playing Sudoku. Watch an AI fill in sure cells with logical deduction, showing its candidate notes, before falling back to a guess.".into(),
         "arrow-blocks" => "A browser puzzle game solved automatically by an AI, sliding arrow-marked blocks through procedurally generated levels.".into(),
         "minesweeper" => "AI-solved Minesweeper, played automatically in your browser. Cycle between square and hexagonal grids.".into(),
+        "tetris" => "Self-playing Tetris. An AI scores every drop by height, holes, and bumpiness with a known-next-piece lookahead, cycling between 7-bag, classic NES-style, TGM, and pure-random piece generators.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }

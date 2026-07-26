@@ -534,6 +534,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tetris"
+version = "0.1.0"
+dependencies = [
+ "beam_solver",
+ "control",
+ "game_common",
+ "macroquad",
+ "render_cache",
+ "screenshot",
+]
+
+[[package]]
 name = "time"
 version = "0.3.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
