@@ -39,6 +39,10 @@ pub fn title(name: &str) -> String {
 pub fn native_size(name: &str) -> (u32, u32) {
     match name {
         "game2048" => (500, 610),
+        // Tetris's 10x20 board is inherently tall and narrow — a 900px-wide canvas left a
+        // small next-piece panel stranded in a wide leftover gap. Narrower canvas sized to
+        // its own content instead of the shared default.
+        "tetris" => (600, 720),
         _ => (900, 720),
     }
 }
@@ -54,10 +58,11 @@ pub fn native_size(name: &str) -> (u32, u32) {
 /// `high_dpi`/CSS-transform interaction, and reads as a modest fixed-size window rather
 /// than something that grows to dominate the screen. The 900x720 games keep the looser
 /// 1.5, which matched their existing on-screen size on a typical 1080p display, since
-/// there's no report of them looking oversized.
+/// there's no report of them looking oversized. Tetris's 600x720 canvas is portrait-ish
+/// for the same reason game2048's is — same 1.0 treatment.
 fn max_fit_scale(name: &str) -> f64 {
     match name {
-        "game2048" => 1.0,
+        "game2048" | "tetris" => 1.0,
         _ => 1.5,
     }
 }

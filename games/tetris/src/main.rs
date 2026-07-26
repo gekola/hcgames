@@ -9,15 +9,21 @@ use game::{Board, Game, H, Phase, Piece, W, full_rows, place_cells, rotation_sta
 use generator::{GenMode, PieceGenerator};
 use solver::Solver;
 
+// Tetris's board is inherently tall and narrow (10x20) — unlike every other game here,
+// which uses the shared 900x720 default (see `xtask::native_size`), it gets its own
+// narrower canvas (matched in `conf()` and `xtask::native_size`/`max_fit_scale`, same
+// precedent as `game2048`'s 500x610) sized to the board+panel content instead of
+// stretching a small next-piece panel across a wide leftover gap.
+const WIN_W: f32 = 600.0;
+const WIN_H: f32 = 720.0;
+
 const CELL: f32 = 28.0;
 const BOARD_W: f32 = W as f32 * CELL;
 const BOARD_H: f32 = H as f32 * CELL;
-const PANEL_GAP: f32 = 50.0;
-/// Width of the NEXT-piece boxes and the stat lines below them. Sized, together with
-/// `BOARD_X` below, so the board+panel group is centered in the 900px canvas instead of
-/// hugging the left edge and leaving a lopsided slab of empty space on the right.
-const PANEL_W: f32 = 340.0;
-const BOARD_X: f32 = (900.0 - (BOARD_W + PANEL_GAP + PANEL_W)) / 2.0;
+const PANEL_GAP: f32 = 40.0;
+/// Width of the NEXT-piece boxes and the stat lines below them.
+const PANEL_W: f32 = 120.0;
+const BOARD_X: f32 = (WIN_W - (BOARD_W + PANEL_GAP + PANEL_W)) / 2.0;
 // Tall enough that a piece spawning at `SPAWN_ROW` (2 rows above the board, like real
 // Tetris) clears the title text above it instead of drawing through it.
 const BOARD_Y: f32 = 128.0;
@@ -407,8 +413,8 @@ fn run_headless(cli: CliArgs) {
 fn conf() -> Conf {
     Conf {
         window_title: "Tetris".to_owned(),
-        window_width: 900,
-        window_height: 720,
+        window_width: WIN_W as i32,
+        window_height: WIN_H as i32,
         high_dpi: true,
         ..Default::default()
     }
@@ -606,7 +612,7 @@ fn draw_flash(cleared_rows: &[usize], flash_t: f32) {
 }
 
 fn draw_piece_preview(x: f32, y: f32, w: f32, h: f32, piece: Piece) {
-    const PREVIEW_CELL: f32 = 20.0;
+    const PREVIEW_CELL: f32 = 14.0;
     let shape = rotation_states(piece)[0];
     let sw = (shape.iter().map(|c| c.0).max().unwrap() + 1) as f32 * PREVIEW_CELL;
     let sh = (shape.iter().map(|c| c.1).max().unwrap() + 1) as f32 * PREVIEW_CELL;
@@ -646,15 +652,15 @@ fn draw_hud(session: &Session, control: &control::Control) {
     if !control.stream_mode() {
         let speed = control.label();
         let sd = measure_text(&speed, None, 20, 1.0);
-        draw_text(&speed, 900.0 - 20.0 - sd.width, 46.0, 20.0, dim);
+        draw_text(&speed, WIN_W - 20.0 - sd.width, 46.0, 20.0, dim);
     }
 
-    draw_text("NEXT", PANEL_X, BOARD_Y + 18.0, 22.0, dim);
-    let mut y = BOARD_Y + 30.0;
+    draw_text("NEXT", PANEL_X, BOARD_Y + 16.0, 20.0, dim);
+    let mut y = BOARD_Y + 26.0;
     for &piece in session.game.queue.iter().take(3) {
-        draw_rectangle(PANEL_X, y, PANEL_W, 92.0, rgb(24, 24, 32));
-        draw_piece_preview(PANEL_X, y, PANEL_W, 92.0, piece);
-        y += 104.0;
+        draw_rectangle(PANEL_X, y, PANEL_W, 68.0, rgb(24, 24, 32));
+        draw_piece_preview(PANEL_X, y, PANEL_W, 68.0, piece);
+        y += 80.0;
     }
 
     y += 16.0;
@@ -665,8 +671,8 @@ fn draw_hud(session: &Session, control: &control::Control) {
         ("GEN", session.game.generation + 1),
     ] {
         let line = format!("{label}  {value}");
-        draw_text(&line, PANEL_X, y, 24.0, text);
-        y += 34.0;
+        draw_text(&line, PANEL_X, y, 20.0, text);
+        y += 28.0;
     }
 }
 
