@@ -78,6 +78,20 @@ header .kicker {
   opacity: 0.85;
 }
 
+header .wall-link {
+  display: inline-block;
+  margin-top: 0.8rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+
+header .wall-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 .main {
   display: flex;
   flex-wrap: nowrap;
@@ -344,6 +358,37 @@ header .kicker {
   .postcards { margin-bottom: 0; }
 
   .game-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+"#;
+
+// Each tile's WASM instance still renders its game at full native resolution internally
+// (canvas backing size follows clientWidth/height × devicePixelRatio, independent of the
+// tile's on-screen CSS size — see xtask::native_size_style's doc comment on why the box
+// can't just be shrunk directly), so this page's GPU/CPU cost scales with tile count same
+// as opening that many game tabs at once. Fine for a handful of tiles; no per-tile
+// resolution/frame-rate cap implemented yet if the game count grows a lot further.
+const WALL_STYLE: &str = r#"
+:root { color-scheme: dark; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { background: #171310; color: #e7ddcd; min-height: 100%; }
+body { font-family: 'Archivo', system-ui, sans-serif; }
+header { padding: 1.5rem 1rem 1rem; text-align: center; }
+header a { color: #a89a86; font-size: 0.8rem; text-decoration: none; }
+header a:hover { color: #d4a373; }
+header h1 { font-family: 'Fraunces', serif; font-weight: 600; font-size: clamp(1.4rem, 5vw, 2rem); margin-top: 0.4rem; }
+header p { margin-top: 0.4rem; font-size: 0.8rem; color: #a89a86; }
+.wall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 1rem;
+}
+.wall-tile {
+  width: 100%;
+  aspect-ratio: 5 / 4;
+  border: none;
+  border-radius: 6px;
+  background: #000;
 }
 "#;
 
@@ -719,6 +764,7 @@ fn main() {
                 header class="fade-up" {
                     h1 { "Hotel Chair Games" }
                     p class="kicker" { "The bed is taken. Sit anyway." }
+                    a class="wall-link" href="wall/" { "→ leave the whole wall running" }
                 }
                 main class="main" {
                     div class="scene-card fade-up" {
@@ -787,8 +833,44 @@ fn main() {
     )
     .unwrap();
 
+    let wall_page = html! {
+        (DOCTYPE)
+        html lang="en" {
+            head {
+                meta charset="utf-8";
+                meta name="viewport" content="width=device-width, initial-scale=1";
+                title { "Ambient Wall — Hotel Chair Games" }
+                (favicon_links(&base_url, dist))
+                meta name="description" content="Every self-playing game on this site at once, one AI per screen — leave it running in the background, nothing to do here either.";
+                link rel="canonical" href=(format!("{base_url}wall/"));
+                (gtag_head())
+                style { (PreEscaped(WALL_STYLE)) }
+            }
+            body {
+                header {
+                    a href="../" { "← Hotel Chair Games" }
+                    h1 { "Ambient Wall" }
+                    p { (format!("{} AIs. Zero players. Maximum efficiency.", games.len())) }
+                }
+                div class="wall-grid" {
+                    @for game in &games {
+                        iframe class="wall-tile" title=(title(game))
+                            src=(format!("../{game}/index.html?embed=1")) loading="lazy" allow="fullscreen" {}
+                    }
+                }
+                (sw_register_bridge("../sw.js"))
+            }
+        }
+    };
+    std::fs::create_dir_all(dist.join("wall")).unwrap();
+    std::fs::write(
+        dist.join("wall").join("index.html"),
+        wall_page.into_string(),
+    )
+    .unwrap();
+
     let today = time::OffsetDateTime::now_utc().date();
-    let mut urls = vec![base_url.clone()];
+    let mut urls = vec![base_url.clone(), format!("{base_url}wall/")];
     urls.extend(games.iter().map(|g| format!("{base_url}{g}/")));
     let mut sitemap = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
