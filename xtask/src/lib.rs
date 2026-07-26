@@ -223,7 +223,7 @@ font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: poin
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(
         name,
-        "klondike" | "spider" | "sudoku" | "minesweeper" | "tetris"
+        "klondike" | "spider" | "sudoku" | "minesweeper" | "tetris" | "match-3"
     );
     html! {
         button id="hotkeys-btn" aria-label="Show hotkeys" { "?" }
@@ -504,6 +504,7 @@ pub fn description(name: &str) -> String {
         "arrow-blocks" => "A browser puzzle game solved automatically by an AI, sliding arrow-marked blocks through procedurally generated levels.".into(),
         "minesweeper" => "AI-solved Minesweeper, played automatically in your browser. Cycle between square and hexagonal grids.".into(),
         "tetris" => "Self-playing Tetris. An AI scores every drop by height, holes, and bumpiness with a known-next-piece lookahead, cycling between 7-bag, classic NES-style, TGM, and pure-random piece generators.".into(),
+        "match-3" => "Self-playing match-3 puzzle. An AI swaps gems to chase score, jelly-clear, and ingredient-collection goals, triggering striped/wrapped/color-bomb combos along the way.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }

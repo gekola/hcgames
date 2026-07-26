@@ -260,6 +260,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "match-3"
+version = "0.1.0"
+dependencies = [
+ "control",
+ "game_common",
+ "macroquad",
+ "render_cache",
+ "screenshot",
+]
+
+[[package]]
 name = "maud"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
