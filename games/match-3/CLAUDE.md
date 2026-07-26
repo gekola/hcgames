@@ -41,6 +41,25 @@ not a foregone conclusion, matching this repo's other self-playing games' feel).
 is how `SCORE_TARGET`/`INGREDIENTS_MOVE_LIMIT`/`solver::INGREDIENT_PROGRESS_WEIGHT` were
 tuned — re-check any change to board gen, targets, or solver weights the same way.
 
+**Exclude reshuffled episodes from win-rate A/B comparisons.** `Game::apply`'s
+deadlock-safety-net reshuffle (see `Resolution model` below) mutates the board
+mid-episode for reasons unrelated to solver skill — including it can muddy a before/after
+comparison. `Game::reshuffles` counts how many times it fired this episode, and the
+`--once` `result=` line prints it (`reshuffles=N`); filter with `grep reshuffles=0` (rare
+in practice — ~2% of episodes in an `Ingredients` seed sweep) before trusting a close
+win-rate delta. Disabling reshuffle outright for validation runs was considered and
+rejected: it's there so the solver never faces a truly-zero-legal-moves board, so turning
+it off risks an unhandled stuck state rather than just producing a "harder" episode —
+excluding-after-the-fact is the safe version of the same idea.
+
+**Reshuffle scope stays whole-board — closed, not revisited.** A narrower
+"partial reshuffle limited to one stuck column" was floated as a possible fix for
+`Ingredients` losses. Decided against: whole-board reshuffle-on-deadlock is the
+genre-standard bailout (players of this kind of game already expect it), so narrowing it
+would be a rules change with no established precedent to justify it, for a mechanism that
+only fires in ~2% of episodes anyway. Don't re-propose without new evidence it's actually
+costing win rate.
+
 **`HCG_SEED` reproducibility gotcha**: `find_matches_with_spawns`' tie-break for *which*
 of several simultaneous L/T-shape matches spawns the `Wrapped` tile used to read directly
 off a `HashSet<Pos>`'s iteration order (`.next()`/`.find()`) — `std`'s default hasher is
@@ -101,6 +120,22 @@ disjoint 150-seed ranges, every single range individually improved** (+4, +3, +1
 one lucky range propping up a flat-elsewhere average, which is what made this trustworthy
 enough to ship despite the speculative premise).
 
+**Shipped: a narrow, `Ingredients`-only 2-ply lookahead** (`solver::best_next_move_ingredient_gain`)
+— the "most promising unexplored direction" flagged by a prior session's research handoff.
+Not a general 2-ply (still correctly ruled out — see "Why no `beam_solver`" above): only
+the top `INGREDIENT_LOOKAHEAD_TOPK` (12) first-ply candidates get a second-ply probe, and
+that probe only considers second-ply moves whose column falls within 1 of a still-uncollected
+`Ingredient`'s column — moves elsewhere on the board can't affect that ingredient's fall
+path next turn, so they're excluded rather than scored. Unlike `ingredient_setup_score`
+(which rewards "primed," a proxy), this rewards a *simulated, deterministic* next-move
+`ingredients_collected` gain — genuinely 2 plies of real lookahead, just pruned to a small
+candidate set on both plies instead of the full ~100×100. Measured on 4 disjoint 150-seed
+ranges against the setup-heuristic-only baseline, every range positive: 65→68, 59→75,
+63→64, 48→58 (net 235→265/600, +5pp). Per-move solver cost overhead: ~0.5ms average in a
+native release build (150-episode batch: 0.445s→1.799s baseline vs. lookahead) — trivial
+against the fixed tick interval a solver runs at, including on WASM/mobile, since this
+isn't a per-frame cost.
+
 A *board-gen* lever was also tried and rejected: spawning ingredients 2 rows lower
 (`gen_range` in `gen_board`'s `Ingredients` arm, rows 2-3 instead of 0-1) to shorten the
 required descent. Looked promising on one seed range (+12) but was *worse* on the other
@@ -123,6 +158,36 @@ existing bonus weights are tuned. Separately, `Score` losses are broad scoring d
 (mean 2552 vs target 3400; only 10/88 losses within 200 points of the target), not
 near-misses a bonus-choice tweak touching <1% of moves could plausibly close. No fix
 attempted — the diagnosis alone was conclusive enough not to need one.
+
+**Follow-up, same broad-deficit diagnosis pushed one step further: `Score`'s weakness
+was balance mis-calibration, not solver skill — fixed by lowering `SCORE_TARGET`.**
+Traced real losing episodes (`--debug`) rather than reasoning from the eval alone: the
+final-score distribution at move-limit-out is smooth and unimodal, centered *below*
+3400 (median 3120 at the old target, n=150) — the signature of "target set too high for
+the move budget," not "solver falls off a cliff on a subset of boards." Loser episodes
+are cascade-starved by random-refill luck (losers average ~3.5 big/≥200pt cascades and
+~7 bare-3s per episode vs. winners' ~6 big/~3 bare-3s) rather than by the solver passing
+up a bigger available move — `score_gained` is what the eval already optimizes most
+directly, so there was little skill headroom left to find. Since `score_resolution`
+never reads `SCORE_TARGET` (only `update_phase`'s win check does), the chosen move
+sequence — and therefore every episode's final score — is bit-identical regardless of
+the target's value, so the win-rate-at-each-target-value comparison below is exact, not
+resampled: **`SCORE_TARGET` 3400→3100** (`game.rs`), measured on the same three disjoint
+150-seed ranges used throughout this section, every range improved: 62→77, 60→76,
+66→79 — overall `Score` **188/450 (41.8%) → 232/450 (51.6%)**, landing in the repo's
+stated 45-55% band for the first time. `Score` `LEVELS` entries are unaffected (each
+level's own `LevelParams::score_target` is independent of the module constant, by
+design).
+
+A companion *skill* idea was tried and rejected: a sub-quantum "churn" tiebreak
+(`fall_distance / 12, capped at 9` — provably incapable of overriding any real
+score/spawn/combo difference, since `score_for` only ever changes `score_gained` in
+multiples of 10) rewarding moves that displace more cells, on the theory that more
+churn means more fresh random refill means more future cascade chances. Looked mildly
+positive on the first three 150-seed ranges (+4, +2, +1) but **-15 on a fourth,
+holdout range** — net *negative* across all 600 seeds once that range is included.
+Same rejection shape as the `Ingredients` board-gen lever above: don't trust a small
+positive signal on too few ranges. Rejected; not shipped.
 
 ## Level progression (`VariantMode::Levels`)
 

@@ -771,14 +771,15 @@ fn print_result(session: &Session) {
         String::new()
     };
     println!(
-        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} generation={}{level_suffix}",
+        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} generation={} reshuffles={}{level_suffix}",
         session.game.variant,
         session.game.score,
         session.game.moves_used,
         session.game.jelly_remaining,
         session.game.ingredients_collected,
         session.game.ingredients_target,
-        session.game.generation + 1
+        session.game.generation + 1,
+        session.game.reshuffles
     );
 }
 

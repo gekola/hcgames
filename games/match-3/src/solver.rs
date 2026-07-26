@@ -69,6 +69,58 @@ fn ingredient_setup_score(board: &Board) -> i64 {
     primed
 }
 
+/// Narrow 2-ply lookahead for `Ingredients`, scoped to *only* moves near an
+/// uncollected ingredient's column — not a general 2-ply (root CLAUDE.md's "Self-playing
+/// solver games" section already rules that out: ~100 legal swaps squared multiplies
+/// branching rather than sharpening a candidate set). Only examines the top
+/// `INGREDIENT_LOOKAHEAD_TOPK` first-ply candidates by 1-ply score, and within each,
+/// only second-ply moves touching a column adjacent to a still-uncollected ingredient —
+/// bounded cost even on a low-end mobile CPU. Rewards realized (deterministically
+/// simulated, not just "primed") completion one move further out than
+/// `ingredient_setup_score` can see.
+const INGREDIENT_LOOKAHEAD_TOPK: usize = 12;
+const INGREDIENT_LOOKAHEAD_WEIGHT: i64 = 450;
+
+fn ingredient_columns(board: &Board) -> Vec<usize> {
+    let mut cols = Vec::new();
+    for row in &board.tiles {
+        for (c, tile) in row.iter().enumerate() {
+            if matches!(tile, Tile::Ingredient) && !cols.contains(&c) {
+                cols.push(c);
+            }
+        }
+    }
+    cols
+}
+
+/// Best `ingredients_collected` achievable by a single legal move restricted to columns
+/// within 1 of `cols` — the only moves that can plausibly affect one of these ingredients'
+/// fall path next turn.
+fn best_next_move_ingredient_gain(board: &Board, cols: &[usize]) -> i64 {
+    let touches = |p: (usize, usize)| cols.iter().any(|&c| p.1.abs_diff(c) <= 1);
+    let mut best = 0i64;
+    for r in 0..H {
+        for c in 0..W {
+            for &(dr, dc) in &[(0i32, 1i32), (1, 0)] {
+                let (nr, nc) = (r as i32 + dr, c as i32 + dc);
+                if nr < 0 || nc < 0 || nr as usize >= H || nc as usize >= W {
+                    continue;
+                }
+                let (nr, nc) = (nr as usize, nc as usize);
+                let (a, b) = ((r, c), (nr, nc));
+                if !(touches(a) || touches(b)) || !crate::game::is_legal_swap(&board.tiles, a, b) {
+                    continue;
+                }
+                let mut scratch = board.clone();
+                let gained =
+                    crate::game::resolve(&mut scratch, Move { a, b }).ingredients_collected;
+                best = best.max(gained as i64);
+            }
+        }
+    }
+    best
+}
+
 fn score_resolution(game: &Game, res: &Resolution) -> i64 {
     let mut s = res.score_gained as i64;
     s += res.jelly_cleared as i64 * JELLY_WEIGHT;
@@ -108,9 +160,35 @@ fn score_resolution(game: &Game, res: &Resolution) -> i64 {
 /// sharpen a small candidate set). `None` only if `legal_moves()` is empty, which
 /// `Game::apply`'s reshuffle-on-deadlock keeps from happening during normal play.
 pub fn choose_move(game: &Game) -> Option<Move> {
-    game.legal_moves()
+    let mut candidates: Vec<(Move, i64, Board)> = game
+        .legal_moves()
         .into_iter()
-        .map(|mv| (mv, score_resolution(game, &game.simulate(mv))))
-        .max_by_key(|&(_, score)| score)
-        .map(|(mv, _)| mv)
+        .map(|mv| {
+            let res = game.simulate(mv);
+            let score = score_resolution(game, &res);
+            let board_after = res
+                .waves
+                .last()
+                .map(|w| w.board_after.clone())
+                .unwrap_or_else(|| game.board.clone());
+            (mv, score, board_after)
+        })
+        .collect();
+
+    if game.variant == Variant::Ingredients {
+        candidates.sort_by_key(|&(_, score, _)| std::cmp::Reverse(score));
+        for (_, score, board_after) in candidates.iter_mut().take(INGREDIENT_LOOKAHEAD_TOPK) {
+            let cols = ingredient_columns(board_after);
+            if cols.is_empty() {
+                continue;
+            }
+            *score +=
+                best_next_move_ingredient_gain(board_after, &cols) * INGREDIENT_LOOKAHEAD_WEIGHT;
+        }
+    }
+
+    candidates
+        .into_iter()
+        .max_by_key(|&(_, score, _)| score)
+        .map(|(mv, _, _)| mv)
 }

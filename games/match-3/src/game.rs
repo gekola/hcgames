@@ -156,7 +156,7 @@ pub struct Move {
     pub b: (usize, usize),
 }
 
-const SCORE_TARGET: u32 = 3400;
+const SCORE_TARGET: u32 = 3100;
 const SCORE_MOVE_LIMIT: u32 = 20;
 const JELLY_MOVE_LIMIT: u32 = 25;
 const JELLY_CELL_COUNT: usize = 24;
@@ -318,6 +318,12 @@ pub struct Game {
     pub ingredients_collected: u32,
     pub time_remaining: f32,
     pub phase: Phase,
+    /// Times `apply` has had to bail the board out via `reshuffle` this episode — a
+    /// deadlock-safety net, not solver skill. Seed-sweep win-rate validation should
+    /// exclude (or note) episodes where this is nonzero: a reshuffle can hand the solver
+    /// a materially easier or harder board mid-episode, unrelated to whatever change is
+    /// being measured. See CLAUDE.md's "Goal-aware solver tuning" methodology note.
+    pub reshuffles: u32,
 }
 
 impl Game {
@@ -349,6 +355,7 @@ impl Game {
             ingredients_collected: 0,
             time_remaining: TIME_LIMIT,
             phase: Phase::Playing,
+            reshuffles: 0,
         }
     }
 
@@ -375,6 +382,7 @@ impl Game {
             ingredients_collected: 0,
             time_remaining: params.time_limit,
             phase: Phase::Playing,
+            reshuffles: 0,
         }
     }
 
@@ -429,6 +437,7 @@ impl Game {
         self.update_phase();
         if self.phase == Phase::Playing && self.legal_moves().is_empty() {
             reshuffle(&mut self.board);
+            self.reshuffles += 1;
         }
         res
     }
@@ -492,7 +501,7 @@ fn classify_swap(a: Tile, b: Tile) -> SwapKind {
     }
 }
 
-fn is_legal_swap(tiles: &Tiles, a: (usize, usize), b: (usize, usize)) -> bool {
+pub(crate) fn is_legal_swap(tiles: &Tiles, a: (usize, usize), b: (usize, usize)) -> bool {
     let ta = tiles[a.0][a.1];
     let tb = tiles[b.0][b.1];
     match classify_swap(ta, tb) {
@@ -892,7 +901,7 @@ fn compact_and_refill(
 
 // ── Resolution driver ────────────────────────────────────────────────────────────────
 
-fn resolve(board: &mut Board, mv: Move) -> Resolution {
+pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
     let a = mv.a;
     let b = mv.b;
     let tile_a = board.tiles[a.0][a.1];
