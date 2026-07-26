@@ -32,6 +32,15 @@ const INGREDIENT_PROGRESS_WEIGHT: i64 = 180;
 const JELLY_ENDGAME_REMAINING: u32 = 4;
 const JELLY_ENDGAME_BONUS: i64 = 5000;
 
+/// A `Mystery` move is scored by how many cells of `game.mystery_color` it clears.
+/// `Jelly`'s dominance-threshold trick (`JELLY_ENDGAME_*`) was tried here too on the
+/// theory it'd transfer, but an ablation (same weight, bonus zeroed) produced *identical*
+/// win/loss outcomes across 450 seeds — unlike `Jelly`, an ordinary 3-match of the target
+/// color already dumps 3 cells at `MYSTERY_WEIGHT` each in one shot, so the plain weight
+/// already wins the moves that matter; there's no near-miss-losing-to-COMBO_BONUS pattern
+/// to fix. Dropped rather than shipped as inert complexity.
+const MYSTERY_WEIGHT: i64 = 300;
+
 /// Experimental: reward a move for leaving the cell directly *below* a still-uncollected
 /// `Ingredient` primed (already has a same-color neighbor, one swap away from a match) —
 /// clearing that cell is what actually pulls the ingredient down a row (verified against
@@ -128,6 +137,14 @@ fn score_resolution(game: &Game, res: &Resolution) -> i64 {
         s += res.jelly_cleared as i64 * JELLY_ENDGAME_BONUS;
     }
     s += res.ingredients_collected as i64 * INGREDIENT_WEIGHT;
+    if game.variant == Variant::Mystery {
+        // Only reward progress on goals not yet met — otherwise clears of an
+        // already-completed color would keep scoring, diluting the incentive to focus on
+        // whichever goal(s) are still open when there's more than one.
+        for goal in game.mystery_goals.iter().filter(|g| g.collected < g.target) {
+            s += res.color_cleared[goal.color.index()] as i64 * MYSTERY_WEIGHT;
+        }
+    }
     if res.combo {
         s += COMBO_BONUS;
     }

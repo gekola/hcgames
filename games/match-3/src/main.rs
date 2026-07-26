@@ -43,6 +43,17 @@ fn color_rgb(c: game::Color) -> Color {
     }
 }
 
+fn color_name(c: game::Color) -> &'static str {
+    match c {
+        game::Color::Red => "RED",
+        game::Color::Orange => "ORANGE",
+        game::Color::Yellow => "YELLOW",
+        game::Color::Green => "GREEN",
+        game::Color::Blue => "BLUE",
+        game::Color::Purple => "PURPLE",
+    }
+}
+
 fn darken(c: Color, amt: f32) -> Color {
     Color::new(c.r * (1.0 - amt), c.g * (1.0 - amt), c.b * (1.0 - amt), c.a)
 }
@@ -426,6 +437,7 @@ enum VariantMode {
     Score,
     Jelly,
     Ingredients,
+    Mystery,
     Timed,
     /// Steps through the hand-tuned `game::LEVELS` line instead of one fixed `Variant`
     /// — deliberately *not* one of `Auto`'s generation%4 rotation targets (see root
@@ -443,7 +455,8 @@ impl VariantMode {
         match self {
             VariantMode::Score => VariantMode::Jelly,
             VariantMode::Jelly => VariantMode::Ingredients,
-            VariantMode::Ingredients => VariantMode::Timed,
+            VariantMode::Ingredients => VariantMode::Mystery,
+            VariantMode::Mystery => VariantMode::Timed,
             VariantMode::Timed => VariantMode::Levels,
             VariantMode::Levels => VariantMode::Auto,
             VariantMode::Auto => VariantMode::Score,
@@ -455,11 +468,13 @@ impl VariantMode {
             VariantMode::Score => Variant::Score,
             VariantMode::Jelly => Variant::Jelly,
             VariantMode::Ingredients => Variant::Ingredients,
+            VariantMode::Mystery => Variant::Mystery,
             VariantMode::Timed => Variant::Timed,
-            VariantMode::Auto => match generation % 4 {
+            VariantMode::Auto => match generation % 5 {
                 0 => Variant::Score,
                 1 => Variant::Jelly,
                 2 => Variant::Ingredients,
+                3 => Variant::Mystery,
                 _ => Variant::Timed,
             },
             // Never actually read — `Session` builds `Levels` games via `Game::new_level`
@@ -473,6 +488,7 @@ impl VariantMode {
             Variant::Score => "score attack",
             Variant::Jelly => "jelly clear",
             Variant::Ingredients => "collection",
+            Variant::Mystery => "color hunt",
             Variant::Timed => "timed",
         }
     }
@@ -706,7 +722,7 @@ fn parse_cli_args() -> CliArgs {
                 i += 1;
                 let v = rest.get(i).unwrap_or_else(|| {
                     eprintln!(
-                        "--variant requires a value: score, jelly, ingredients, timed, levels, or auto"
+                        "--variant requires a value: score, jelly, ingredients, mystery, timed, levels, or auto"
                     );
                     std::process::exit(2);
                 });
@@ -714,12 +730,13 @@ fn parse_cli_args() -> CliArgs {
                     "score" => VariantMode::Score,
                     "jelly" => VariantMode::Jelly,
                     "ingredients" => VariantMode::Ingredients,
+                    "mystery" => VariantMode::Mystery,
                     "timed" => VariantMode::Timed,
                     "levels" => VariantMode::Levels,
                     "auto" => VariantMode::Auto,
                     other => {
                         eprintln!(
-                            "unknown --variant value '{other}': expected score, jelly, ingredients, timed, levels, or auto"
+                            "unknown --variant value '{other}': expected score, jelly, ingredients, mystery, timed, levels, or auto"
                         );
                         std::process::exit(2);
                     }
@@ -727,7 +744,7 @@ fn parse_cli_args() -> CliArgs {
             }
             other => {
                 eprintln!(
-                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <score|jelly|ingredients|timed|levels|auto>)"
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <score|jelly|ingredients|mystery|timed|levels|auto>)"
                 );
                 std::process::exit(2);
             }
@@ -770,8 +787,15 @@ fn print_result(session: &Session) {
     } else {
         String::new()
     };
+    let mystery_goals = session
+        .game
+        .mystery_goals
+        .iter()
+        .map(|g| format!("{:?}:{}/{}", g.color, g.collected, g.target))
+        .collect::<Vec<_>>()
+        .join(",");
     println!(
-        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} generation={} reshuffles={}{level_suffix}",
+        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} mystery_goals=[{mystery_goals}] generation={} reshuffles={}{level_suffix}",
         session.game.variant,
         session.game.score,
         session.game.moves_used,
@@ -1051,6 +1075,18 @@ fn draw_hud(session: &Session, view: &View, control: &control::Control) {
                 &mut y,
             );
             line("SCORE", &g.score.to_string(), text, &mut y);
+        }
+        Variant::Mystery => {
+            for goal in &g.mystery_goals {
+                line(
+                    &format!("{} CLEARED", color_name(goal.color)),
+                    &format!("{} / {}", goal.collected, goal.target),
+                    color_rgb(goal.color),
+                    &mut y,
+                );
+            }
+            line("MOVES LEFT", &g.remaining_moves().to_string(), text, &mut y);
+            line("SCORE", &g.score.to_string(), dim, &mut y);
         }
     }
 

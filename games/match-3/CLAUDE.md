@@ -32,7 +32,57 @@ and picks the highest-scoring `Resolution` by `solver::score_resolution`. See CL
 | `Score` | reach `SCORE_TARGET` | `SCORE_MOVE_LIMIT` moves |
 | `Jelly` | clear all `Board::jelly` layers | `JELLY_MOVE_LIMIT` moves |
 | `Ingredients` | get `INGREDIENTS_TARGET` `Tile::Ingredient` tiles to row `H-1` via gravity only | `INGREDIENTS_MOVE_LIMIT` moves |
+| `Mystery` | clear every goal in `Game::mystery_goals` (1-3 colors, each own target — "hit all to win"; HUD names it "color hunt") | `MYSTERY_MOVE_LIMIT` moves |
 | `Timed` | no move limit | real countdown, `Game::tick_time(dt)` called from `amain` directly (time-paced, not move-paced — the only variant not driven through `Game::apply`) |
+
+**`Mystery`** (todo backlog item #4's "candy-order" goal — collect N of a specific
+color, generalized to a small *combination* of simultaneous color targets) needed no new
+`Tile`/board-gen: `Resolution::color_cleared: [u32; 6]` is computed unconditionally in
+`resolve()` alongside `jelly_cleared`/`ingredients_collected` (indexed via `Color::index`),
+so `Game::apply` just loops `self.mystery_goals` adding `res.color_cleared[goal.color
+.index()]` to each — same mechanism as `Ingredients` reading `ingredients_collected`, just
+per-goal instead of singular. `gen_mystery_goals` (called from `Game::new`) rolls 1-3
+distinct colors (`MYSTERY_MAX_COLORS`) each with its *own* randomly-picked target from
+`MYSTERY_TARGET_RANGES[count - 1]` — "various targets" per design, not one shared number.
+Win condition (`update_phase`) is a plain `.all(|g| g.collected >= g.target)`. Not part of
+`LEVELS` (yet) — `Game::new_level` sets `mystery_goals: Vec::new()` for every level, same
+"carried but unused" shape as `ingredients_target` outside `Variant::Ingredients`. No
+`Variant`-to-struct architecture change was needed for this (the todo doc's harder
+"multi-goal-level" idea — combining goals *across different variants*, e.g. jelly AND
+ingredients in one level — is a different, still-unbuilt ask; a `Mystery` episode's
+multiple goals are all the same kind, just different colors/targets, which fits inside
+one `Vec` field cleanly).
+
+Solver: `solver::MYSTERY_WEIGHT` (300, same magnitude as `JELLY_WEIGHT`) per cell of *any
+not-yet-completed* goal's color cleared (filtering out completed goals, so clears of an
+already-finished color don't keep diluting the score once there's more than one goal
+active). `Jelly`'s `JELLY_ENDGAME_*` dominance-threshold trick was tried here too and
+**measurably didn't help**: an ablation (identical weight, endgame bonus zeroed) produced
+byte-identical win/loss outcomes across 450 sweep seeds (back when this was still a single
+fixed goal). Diagnosis: unlike jelly (any match landing on a jelly cell clears it, so
+there's a real "pass up an available jelly-clear for a bigger `COMBO_BONUS`" failure
+mode), an ordinary 3-match of a *target color specifically* already scores `3 ×
+MYSTERY_WEIGHT = 900` in one shot — close enough to `COMBO_BONUS` (1200) that the
+near-miss-losing-the-comparison pattern `Jelly` had just doesn't arise here. Dropped
+rather than shipped as inert complexity; don't re-add without new evidence.
+
+**Multi-goal balance surprised expectations going in — naive "split the single-goal
+target across N colors" made 2-3 goal episodes trivially easy, not harder.** First pass
+divided the single-goal target (31) down per goal count (e.g. ~15 for 2 colors, ~10 for
+3) on the assumption that more simultaneous goals is more work. Measured instead: count=2
+at 98.8% win rate, count=3 at 100% (n=150 each) — because ordinary, undirected play
+already clears roughly equal amounts of *every* color over a game's cascades, so 2-3
+colors out of the 6 on the board get satisfied largely as a side effect of playing at
+all, regardless of solver intent; requiring *more* colors doesn't add difficulty the way
+requiring *more of one* color does. Fix: per-goal targets for count=2/3 need to stay
+close to the *single*-goal target's magnitude, not shrink proportionally — final
+`MYSTERY_TARGET_RANGES` are `[(28,34), (24,30), (22,28)]` (count 1/2/3), all similar
+order of magnitude despite covering different color counts. Tuned across three disjoint 450-seed ranges (1350 seeds total, `--no-ui --once --variant
+mystery`, bucketed by goal count from the `mystery_goals=[...]` field in the `result=`
+line, since the count itself is randomly rolled per episode): count=1 53.0% (224/423),
+count=2 49.4% (238/482), count=3 54.8% (244/445) — all inside the 45-55% band. Don't
+re-derive the naive proportional-split approach without re-checking this; it's a real,
+measured trap, not a hunch.
 
 Constants live at the top of `game.rs`. Win rate must be checked empirically, not
 assumed from the heuristic weights — `--no-ui --once --variant X` across a range of

@@ -26,6 +26,12 @@ impl Color {
     fn random() -> Color {
         Color::ALL[macroquad::rand::gen_range(0, Color::ALL.len())]
     }
+
+    /// Index into `Color::ALL` / `Resolution::color_cleared` — used by `Variant::Mystery`
+    /// to look up how many of its target color a move cleared.
+    pub fn index(self) -> usize {
+        Color::ALL.iter().position(|&c| c == self).unwrap()
+    }
 }
 
 /// The three colored bonus tiles, spawned by matching more than the minimum 3-in-a-row —
@@ -127,6 +133,12 @@ pub struct Resolution {
     pub score_gained: u32,
     pub jelly_cleared: u32,
     pub ingredients_collected: u32,
+    /// How many cells of each `Color` (indexed via `Color::index`) this move cleared —
+    /// computed unconditionally, same as `jelly_cleared`/`ingredients_collected`, since
+    /// `resolve()` doesn't know which `Variant` is asking. Only `Variant::Mystery` reads
+    /// it (one lookup per active `Game::mystery_goals` entry), same relationship as the
+    /// other two goal counters to their own variant.
+    pub color_cleared: [u32; Color::ALL.len()],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,6 +147,22 @@ pub enum Variant {
     Jelly,
     Ingredients,
     Timed,
+    /// Clear every goal in `Game::mystery_goals` (1-3 colors, each with its own target —
+    /// "hit all to win") — the "collect N of a specific color" goal (real match-3 games'
+    /// most common goal type per `.notes/match3_todo.md` item #4), generalized to a small
+    /// combination of simultaneous color targets rather than always exactly one. Reuses
+    /// the plain `Score`-shaped board (no special board-gen needed) and counts cleared
+    /// cells by color via `Resolution::color_cleared`.
+    Mystery,
+}
+
+/// One color target within a `Variant::Mystery` episode — `Game::mystery_goals` holds
+/// 1-3 of these, all of which must reach `target` to win.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MysteryGoal {
+    pub color: Color,
+    pub target: u32,
+    pub collected: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -163,6 +191,17 @@ const JELLY_CELL_COUNT: usize = 24;
 const INGREDIENTS_TARGET: u32 = 3;
 const INGREDIENTS_MOVE_LIMIT: u32 = 26;
 pub const TIME_LIMIT: f32 = 60.0;
+const MYSTERY_MOVE_LIMIT: u32 = 20;
+/// Max simultaneous color goals a `Mystery` episode can roll — 1-3, chosen at board-gen
+/// time (`gen_mystery_goals`). More goals means the same `MYSTERY_MOVE_LIMIT` has to cover
+/// all of them, so each goal's *own* target has to shrink as the count grows to stay
+/// winnable — see `MYSTERY_TARGET_RANGES`.
+const MYSTERY_MAX_COLORS: usize = 3;
+/// Inclusive per-goal target range for each goal count, indexed `[count - 1]` — "various
+/// targets" per design (each goal in a multi-goal episode rolls its own value in range,
+/// not one shared number). Tuned via the standard three-disjoint-150-seed-range sweep
+/// per count; see CLAUDE.md's "Mystery" section for the measured win rates.
+const MYSTERY_TARGET_RANGES: [(u32, u32); MYSTERY_MAX_COLORS] = [(28, 34), (24, 30), (22, 28)];
 
 /// One entry in the hand-authored level line `LEVELS` that `VariantMode::Levels` (see
 /// `main.rs`) steps through — reuses the same four `Variant` win-conditions as the
@@ -317,6 +356,10 @@ pub struct Game {
     pub ingredients_target: u32,
     pub ingredients_collected: u32,
     pub time_remaining: f32,
+    /// Only meaningful for `Variant::Mystery` — 1-3 independent color goals, all of which
+    /// must reach their `target` to win. Empty for every other variant, same pattern as
+    /// `ingredients_target` being carried but unused outside `Variant::Ingredients`.
+    pub mystery_goals: Vec<MysteryGoal>,
     pub phase: Phase,
     /// Times `apply` has had to bail the board out via `reshuffle` this episode — a
     /// deadlock-safety net, not solver skill. Seed-sweep win-rate validation should
@@ -341,6 +384,7 @@ impl Game {
                 Variant::Jelly => JELLY_MOVE_LIMIT,
                 Variant::Ingredients => INGREDIENTS_MOVE_LIMIT,
                 Variant::Timed => u32::MAX,
+                Variant::Mystery => MYSTERY_MOVE_LIMIT,
             },
             // 0 for `Timed`: that variant has no win condition (see `update_phase`) —
             // its `score_target` is otherwise dead, kept at 0 rather than `SCORE_TARGET`
@@ -354,6 +398,11 @@ impl Game {
             ingredients_target: INGREDIENTS_TARGET,
             ingredients_collected: 0,
             time_remaining: TIME_LIMIT,
+            mystery_goals: if variant == Variant::Mystery {
+                gen_mystery_goals()
+            } else {
+                Vec::new()
+            },
             phase: Phase::Playing,
             reshuffles: 0,
         }
@@ -381,6 +430,9 @@ impl Game {
             ingredients_target: params.ingredients_target,
             ingredients_collected: 0,
             time_remaining: params.time_limit,
+            // `Mystery` isn't part of `LEVELS` (yet) — no `LevelParams` field for it, same
+            // "carried but unused" shape as `ingredients_target` outside `Ingredients`.
+            mystery_goals: Vec::new(),
             phase: Phase::Playing,
             reshuffles: 0,
         }
@@ -434,6 +486,11 @@ impl Game {
         if self.variant == Variant::Ingredients {
             self.ingredients_collected += res.ingredients_collected;
         }
+        if self.variant == Variant::Mystery {
+            for goal in &mut self.mystery_goals {
+                goal.collected += res.color_cleared[goal.color.index()];
+            }
+        }
         self.update_phase();
         if self.phase == Phase::Playing && self.legal_moves().is_empty() {
             reshuffle(&mut self.board);
@@ -467,6 +524,10 @@ impl Game {
             // (`score_target` is 0 for it — see `Game::new`); a `Timed` *level* gives
             // it a real target to race the clock against instead.
             Variant::Timed => self.score_target > 0 && self.score >= self.score_target,
+            Variant::Mystery => {
+                !self.mystery_goals.is_empty()
+                    && self.mystery_goals.iter().all(|g| g.collected >= g.target)
+            }
         };
         if won {
             self.phase = Phase::Over(Outcome::Won);
@@ -941,6 +1002,7 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
     let mut score_gained = 0u32;
     let mut jelly_cleared = 0u32;
     let mut ingredients_collected = 0u32;
+    let mut color_cleared = [0u32; Color::ALL.len()];
 
     loop {
         let spawn_cells: HashSet<(usize, usize)> = spawns.iter().map(|(p, _)| *p).collect();
@@ -961,6 +1023,9 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
             if board.jelly[r][c] > 0 {
                 board.jelly[r][c] -= 1;
                 jelly_cleared += 1;
+            }
+            if let Some(color) = board_before.tiles[r][c].color() {
+                color_cleared[color.index()] += 1;
             }
         }
         for &(pos, tile) in &spawns {
@@ -992,6 +1057,7 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
         score_gained,
         jelly_cleared,
         ingredients_collected,
+        color_cleared,
     }
 }
 
@@ -1019,6 +1085,25 @@ fn gen_plain_tiles() -> Tiles {
     tiles
 }
 
+/// Rolls a fresh `Variant::Mystery` goal set: 1-3 distinct colors (`MYSTERY_MAX_COLORS`),
+/// each with its own randomly rolled target in the range for that goal count
+/// (`MYSTERY_TARGET_RANGES`) — "various targets," not one shared number, per design.
+fn gen_mystery_goals() -> Vec<MysteryGoal> {
+    let count = macroquad::rand::gen_range(1, MYSTERY_MAX_COLORS + 1);
+    let mut colors = Color::ALL.to_vec();
+    shuffle(&mut colors);
+    let (min, max) = MYSTERY_TARGET_RANGES[count - 1];
+    colors
+        .into_iter()
+        .take(count)
+        .map(|color| MysteryGoal {
+            color,
+            target: macroquad::rand::gen_range(min, max + 1),
+            collected: 0,
+        })
+        .collect()
+}
+
 fn gen_board(variant: Variant, jelly_cell_count: usize, ingredients_target: u32) -> Board {
     let mut tiles = gen_plain_tiles();
     let mut jelly = [[0u8; W]; H];
@@ -1043,7 +1128,7 @@ fn gen_board(variant: Variant, jelly_cell_count: usize, ingredients_target: u32)
                 tiles[r][c] = Tile::Ingredient;
             }
         }
-        Variant::Score | Variant::Timed => {}
+        Variant::Score | Variant::Timed | Variant::Mystery => {}
     }
 
     let mut board = Board { tiles, jelly };
@@ -1106,6 +1191,7 @@ mod tests {
             Variant::Jelly,
             Variant::Ingredients,
             Variant::Timed,
+            Variant::Mystery,
         ] {
             for _ in 0..20 {
                 let game = Game::new(variant, 0);
@@ -1149,6 +1235,7 @@ mod tests {
             Variant::Jelly,
             Variant::Ingredients,
             Variant::Timed,
+            Variant::Mystery,
         ] {
             for episode in 0..10 {
                 let mut game = Game::new(variant, episode);
