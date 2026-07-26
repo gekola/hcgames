@@ -21,13 +21,18 @@ const CELL: f32 = 28.0;
 const BOARD_W: f32 = W as f32 * CELL;
 const BOARD_H: f32 = H as f32 * CELL;
 const PANEL_GAP: f32 = 40.0;
+/// Inner padding between the panel's bordered container and its content (next-piece
+/// boxes, stat lines).
+const PANEL_PAD: f32 = 10.0;
 /// Width of the NEXT-piece boxes and the stat lines below them.
 const PANEL_W: f32 = 120.0;
-const BOARD_X: f32 = (WIN_W - (BOARD_W + PANEL_GAP + PANEL_W)) / 2.0;
+const PANEL_OUTER_W: f32 = PANEL_W + PANEL_PAD * 2.0;
+const BOARD_X: f32 = (WIN_W - (BOARD_W + PANEL_GAP + PANEL_OUTER_W)) / 2.0;
 // Tall enough that a piece spawning at `SPAWN_ROW` (2 rows above the board, like real
 // Tetris) clears the title text above it instead of drawing through it.
 const BOARD_Y: f32 = 128.0;
-const PANEL_X: f32 = BOARD_X + BOARD_W + PANEL_GAP;
+const PANEL_OUTER_X: f32 = BOARD_X + BOARD_W + PANEL_GAP;
+const PANEL_X: f32 = PANEL_OUTER_X + PANEL_PAD;
 
 /// Row the falling piece visually spawns at — purely cosmetic (`Game::apply` places
 /// pieces instantly; this is the renderer's own "drop-in" effect, matching how real
@@ -654,6 +659,26 @@ fn draw_hud(session: &Session, control: &control::Control) {
         let sd = measure_text(&speed, None, 20, 1.0);
         draw_text(&speed, WIN_W - 20.0 - sd.width, 46.0, 20.0, dim);
     }
+
+    // The panel container: same border/fill treatment as the board, spanning its full
+    // height. Without this, the panel's actual content (next-piece boxes + a handful of
+    // stat lines) only fills the top third or so of the board's height, leaving a tall
+    // stretch of bare background beneath it that reads as extra empty space on the right
+    // — even though the board and panel are already horizontally centered as a pair.
+    draw_rectangle(
+        PANEL_OUTER_X - 1.0,
+        BOARD_Y - 1.0,
+        PANEL_OUTER_W + 2.0,
+        BOARD_H + 2.0,
+        rgb(60, 60, 75),
+    );
+    draw_rectangle(
+        PANEL_OUTER_X,
+        BOARD_Y,
+        PANEL_OUTER_W,
+        BOARD_H,
+        rgb(18, 18, 26),
+    );
 
     draw_text("NEXT", PANEL_X, BOARD_Y + 16.0, 20.0, dim);
     let mut y = BOARD_Y + 26.0;
