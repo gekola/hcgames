@@ -503,9 +503,7 @@ async fn amain(cli: CliArgs) {
 
         clear_background(rgb(15, 15, 20));
 
-        if !control.stream_mode() {
-            draw_hud(&session, &control);
-        }
+        draw_hud(&session, &control);
 
         board_cache.draw(|| draw_board_static(&view.settled));
 
@@ -624,7 +622,10 @@ fn draw_piece_preview(x: f32, y: f32, w: f32, h: f32, piece: Piece) {
 /// Title, mode/speed labels, and the side panel (next-piece previews + score/lines/
 /// level). Cheap enough (a handful of `draw_text`/`draw_rectangle` calls, no per-cell
 /// text) to redraw every frame directly rather than caching, same as every other game's
-/// top HUD strip.
+/// top HUD strip. Drawn unconditionally, even in stream mode — this is the game's own
+/// visual identity (title, live score), not a HUD overlay for a spectator to hide. Only
+/// the speed multiplier (meaningless with no visitor around to have changed it) is
+/// stream-mode-gated, same split as `game2048`'s title/score-box HUD.
 fn draw_hud(session: &Session, control: &control::Control) {
     let text = rgb(210, 210, 225);
     let dim = rgb(140, 140, 160);
@@ -637,9 +638,11 @@ fn draw_hud(session: &Session, control: &control::Control) {
     );
     draw_text(&mode_label, BOARD_X, 72.0, 18.0, dim);
 
-    let speed = control.label();
-    let sd = measure_text(&speed, None, 20, 1.0);
-    draw_text(&speed, 900.0 - 20.0 - sd.width, 46.0, 20.0, dim);
+    if !control.stream_mode() {
+        let speed = control.label();
+        let sd = measure_text(&speed, None, 20, 1.0);
+        draw_text(&speed, 900.0 - 20.0 - sd.width, 46.0, 20.0, dim);
+    }
 
     draw_text("NEXT", PANEL_X, BOARD_Y + 16.0, 20.0, dim);
     let mut y = BOARD_Y + 26.0;
