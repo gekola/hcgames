@@ -10,13 +10,18 @@ use generator::{GenMode, PieceGenerator};
 use solver::Solver;
 
 const CELL: f32 = 28.0;
-const BOARD_X: f32 = 70.0;
+const BOARD_W: f32 = W as f32 * CELL;
+const BOARD_H: f32 = H as f32 * CELL;
+const PANEL_GAP: f32 = 50.0;
+/// Width of the NEXT-piece boxes and the stat lines below them. Sized, together with
+/// `BOARD_X` below, so the board+panel group is centered in the 900px canvas instead of
+/// hugging the left edge and leaving a lopsided slab of empty space on the right.
+const PANEL_W: f32 = 340.0;
+const BOARD_X: f32 = (900.0 - (BOARD_W + PANEL_GAP + PANEL_W)) / 2.0;
 // Tall enough that a piece spawning at `SPAWN_ROW` (2 rows above the board, like real
 // Tetris) clears the title text above it instead of drawing through it.
 const BOARD_Y: f32 = 128.0;
-const BOARD_W: f32 = W as f32 * CELL;
-const BOARD_H: f32 = H as f32 * CELL;
-const PANEL_X: f32 = BOARD_X + BOARD_W + 40.0;
+const PANEL_X: f32 = BOARD_X + BOARD_W + PANEL_GAP;
 
 /// Row the falling piece visually spawns at — purely cosmetic (`Game::apply` places
 /// pieces instantly; this is the renderer's own "drop-in" effect, matching how real
@@ -601,7 +606,7 @@ fn draw_flash(cleared_rows: &[usize], flash_t: f32) {
 }
 
 fn draw_piece_preview(x: f32, y: f32, w: f32, h: f32, piece: Piece) {
-    const PREVIEW_CELL: f32 = 14.0;
+    const PREVIEW_CELL: f32 = 20.0;
     let shape = rotation_states(piece)[0];
     let sw = (shape.iter().map(|c| c.0).max().unwrap() + 1) as f32 * PREVIEW_CELL;
     let sh = (shape.iter().map(|c| c.1).max().unwrap() + 1) as f32 * PREVIEW_CELL;
@@ -644,12 +649,12 @@ fn draw_hud(session: &Session, control: &control::Control) {
         draw_text(&speed, 900.0 - 20.0 - sd.width, 46.0, 20.0, dim);
     }
 
-    draw_text("NEXT", PANEL_X, BOARD_Y + 16.0, 20.0, dim);
-    let mut y = BOARD_Y + 26.0;
+    draw_text("NEXT", PANEL_X, BOARD_Y + 18.0, 22.0, dim);
+    let mut y = BOARD_Y + 30.0;
     for &piece in session.game.queue.iter().take(3) {
-        draw_rectangle(PANEL_X, y, 120.0, 68.0, rgb(24, 24, 32));
-        draw_piece_preview(PANEL_X, y, 120.0, 68.0, piece);
-        y += 80.0;
+        draw_rectangle(PANEL_X, y, PANEL_W, 92.0, rgb(24, 24, 32));
+        draw_piece_preview(PANEL_X, y, PANEL_W, 92.0, piece);
+        y += 104.0;
     }
 
     y += 16.0;
@@ -660,8 +665,8 @@ fn draw_hud(session: &Session, control: &control::Control) {
         ("GEN", session.game.generation + 1),
     ] {
         let line = format!("{label}  {value}");
-        draw_text(&line, PANEL_X, y, 20.0, text);
-        y += 28.0;
+        draw_text(&line, PANEL_X, y, 24.0, text);
+        y += 34.0;
     }
 }
 
