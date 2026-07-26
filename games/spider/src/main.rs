@@ -516,7 +516,9 @@ async fn amain(cli: CliArgs) {
             flying.iter().filter_map(|fc| fc.hide_at).collect();
 
         clear_background(Color::new(0.10, 0.22, 0.14, 1.0));
-        draw_hud(&game, mode.label(), &control.label());
+        if !control.stream_mode() {
+            draw_hud(&game, mode.label(), &control.label());
+        }
         board_cache.draw(|| draw_game(&display_game, &layout, &in_flight));
 
         let t = ease_in_out(anim_t);

@@ -307,36 +307,38 @@ async fn amain(cli: CliArgs) {
             }
         });
 
-        let font_size = (cell * 0.9).max(14.0);
-        let hud = format!("Score: {:>4}   Gen: {}", game.score, game.generation);
-        let hud_y = oy - font_size * 0.35;
-        draw_text(
-            &hud,
-            ox,
-            hud_y,
-            font_size,
-            Color {
-                r: 0.65,
-                g: 0.65,
-                b: 0.82,
-                a: 1.0,
-            },
-        );
+        if !control.stream_mode() {
+            let font_size = (cell * 0.9).max(14.0);
+            let hud = format!("Score: {:>4}   Gen: {}", game.score, game.generation);
+            let hud_y = oy - font_size * 0.35;
+            draw_text(
+                &hud,
+                ox,
+                hud_y,
+                font_size,
+                Color {
+                    r: 0.65,
+                    g: 0.65,
+                    b: 0.82,
+                    a: 1.0,
+                },
+            );
 
-        let speed_label = control.label();
-        let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
-        draw_text(
-            &speed_label,
-            ox + ow - sd.width,
-            hud_y,
-            font_size,
-            Color {
-                r: 0.65,
-                g: 0.65,
-                b: 0.82,
-                a: 1.0,
-            },
-        );
+            let speed_label = control.label();
+            let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
+            draw_text(
+                &speed_label,
+                ox + ow - sd.width,
+                hud_y,
+                font_size,
+                Color {
+                    r: 0.65,
+                    g: 0.65,
+                    b: 0.82,
+                    a: 1.0,
+                },
+            );
+        }
 
         shot.tick();
         screenshot::handle_hotkey();

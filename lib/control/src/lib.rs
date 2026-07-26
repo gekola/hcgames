@@ -15,6 +15,7 @@ const SWIPE_MAX_SECS: f64 = 0.6;
 #[cfg(target_arch = "wasm32")]
 unsafe extern "C" {
     fn hcg_ga_event(name_ptr: *const u8, name_len: u32, params_ptr: *const u8, params_len: u32);
+    fn hcg_is_stream_mode() -> i32;
 }
 
 /// Fires a Google Analytics event (`gtag('event', name, params)`) via the small JS plugin
@@ -57,6 +58,7 @@ pub struct Control {
     /// (x, y, start time) of an in-progress single-finger touch.
     one_finger_start: Option<(f32, f32, f64)>,
     variant_swipe: bool,
+    stream_mode: bool,
 }
 
 impl Control {
@@ -72,7 +74,21 @@ impl Control {
             two_finger_anchor: None,
             one_finger_start: None,
             variant_swipe: false,
+            #[cfg(target_arch = "wasm32")]
+            stream_mode: unsafe { hcg_is_stream_mode() != 0 },
+            #[cfg(not(target_arch = "wasm32"))]
+            stream_mode: false,
         }
+    }
+
+    /// True under the page's `?stream=1` query param (see
+    /// `xtask::stream_mode_query_bridge`) — an OBS/Twitch browser-source layer has no
+    /// visitor around to show score/speed HUD text to. Read once at startup (the query
+    /// string doesn't change mid-session); always `false` natively, since there's no
+    /// browser URL to read. Games should skip their own in-canvas HUD draw calls when
+    /// this is true — `Control` only carries the flag, it doesn't touch rendering itself.
+    pub fn stream_mode(&self) -> bool {
+        self.stream_mode
     }
 
     pub fn handle_keys(&mut self) {

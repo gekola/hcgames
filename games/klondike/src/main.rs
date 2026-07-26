@@ -565,7 +565,9 @@ async fn run_ui(cli: CliArgs) {
         let in_flight: HashSet<Card> = flying.iter().map(|fc| fc.card).collect();
 
         clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
-        draw_hud(&game, mode.label(), &control.label());
+        if !control.stream_mode() {
+            draw_hud(&game, mode.label(), &control.label());
+        }
         board_cache.draw(|| draw_game(&display_game, &layout, &in_flight));
 
         // Overlay flying cards at their interpolated position.

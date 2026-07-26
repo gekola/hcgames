@@ -600,6 +600,10 @@ async fn amain(cli: CliArgs) {
 
         clear_background(rgb(250, 248, 239));
 
+        // The title/score/best HUD is part of 2048's own visual identity (unlike the other
+        // games' HUD strips, which are just a status readout over the board) — stream mode
+        // only drops the speed indicator and the win/game-over overlay messages below, not
+        // this block.
         draw_text("2048", 15.0, 78.0, 72.0, rgb(119, 110, 101));
         if let Some(dir) = game.last_dir {
             draw_equilateral(15.0 + title_w + 28.0, 54.0, 20.0, dir, rgb(143, 122, 102));
@@ -608,15 +612,17 @@ async fn amain(cli: CliArgs) {
         score_box(260.0, 8.0, 90.0, 60.0, "SCORE", game.score);
         score_box(360.0, 8.0, 90.0, 60.0, "BEST", game.best);
 
-        let speed_label = control.label();
-        let sd = measure_text(&speed_label, None, 13, 1.0);
-        draw_text(
-            &speed_label,
-            WIN_W - 8.0 - sd.width,
-            26.0,
-            13.0,
-            rgb(150, 140, 130),
-        );
+        if !control.stream_mode() {
+            let speed_label = control.label();
+            let sd = measure_text(&speed_label, None, 13, 1.0);
+            draw_text(
+                &speed_label,
+                WIN_W - 8.0 - sd.width,
+                26.0,
+                13.0,
+                rgb(150, 140, 130),
+            );
+        }
 
         rrect(GRID_X, GRID_Y, GRID_W, GRID_W, 6.0, rgb(187, 173, 160));
 
@@ -680,7 +686,7 @@ async fn amain(cli: CliArgs) {
             board_cache.draw(|| draw_settled(&game));
         }
 
-        if game.phase == Phase::WinPause {
+        if game.phase == Phase::WinPause && !control.stream_mode() {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(255, 243, 108, 185));
             let txt = "You win!";
             let d = measure_text(txt, None, 64, 1.0);
@@ -698,7 +704,7 @@ async fn amain(cli: CliArgs) {
             );
         }
 
-        if game.phase == Phase::GameOver {
+        if game.phase == Phase::GameOver && !control.stream_mode() {
             draw_rectangle(GRID_X, GRID_Y, GRID_W, GRID_W, rgba(199, 187, 177, 190));
             let txt = "Game over!";
             let d = measure_text(txt, None, 60, 1.0);

@@ -339,41 +339,43 @@ async fn amain(cli: CliArgs) {
         }
 
         // HUD
-        let font_size = 16.0f32.max(cell * 0.7);
-        let remaining = game.remaining();
-        let hud = format!(
-            "Arrow Blocks   figure {}/{}   {} blocks",
-            game.level + 1,
-            puzzle::NFIGURES,
-            remaining,
-        );
-        draw_text(
-            &hud,
-            fx + 4.0,
-            20.0,
-            font_size,
-            Color {
-                r: 0.6,
-                g: 0.6,
-                b: 0.7,
-                a: 1.0,
-            },
-        );
+        if !control.stream_mode() {
+            let font_size = 16.0f32.max(cell * 0.7);
+            let remaining = game.remaining();
+            let hud = format!(
+                "Arrow Blocks   figure {}/{}   {} blocks",
+                game.level + 1,
+                puzzle::NFIGURES,
+                remaining,
+            );
+            draw_text(
+                &hud,
+                fx + 4.0,
+                20.0,
+                font_size,
+                Color {
+                    r: 0.6,
+                    g: 0.6,
+                    b: 0.7,
+                    a: 1.0,
+                },
+            );
 
-        let speed_label = control.label();
-        let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
-        draw_text(
-            &speed_label,
-            sw - 8.0 - sd.width,
-            20.0,
-            font_size,
-            Color {
-                r: 0.6,
-                g: 0.6,
-                b: 0.7,
-                a: 1.0,
-            },
-        );
+            let speed_label = control.label();
+            let sd = measure_text(&speed_label, None, font_size as u16, 1.0);
+            draw_text(
+                &speed_label,
+                sw - 8.0 - sd.width,
+                20.0,
+                font_size,
+                Color {
+                    r: 0.6,
+                    g: 0.6,
+                    b: 0.7,
+                    a: 1.0,
+                },
+            );
+        }
 
         shot.tick();
         screenshot::handle_hotkey();

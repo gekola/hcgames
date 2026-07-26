@@ -67,6 +67,12 @@ fn max_fit_scale(name: &str) -> f64 {
 /// viewport via `transform: scale`, letterboxed and centered. A CSS transform doesn't
 /// change `clientWidth`/`clientHeight`, so `mq_js_bundle.js`'s resize handling (which
 /// syncs the canvas's backing resolution to its CSS box) never sees a mismatch.
+///
+/// `?stream=1` (see `stream_mode_class_script`) swaps the opaque black `html`/`body`
+/// background for transparent instead — for dropping the page into OBS/Twitch as a
+/// browser-source layer over other scene content. The letterboxed area around the
+/// (still fixed-size, never stretched — see CLAUDE.md's "Canvas sizing is load-bearing")
+/// canvas just becomes see-through padding rather than black bars.
 pub fn native_size_style(name: &str) -> Markup {
     let (w, h) = native_size(name);
     let max_scale = max_fit_scale(name);
@@ -75,6 +81,7 @@ pub fn native_size_style(name: &str) -> Markup {
             (PreEscaped(format!(
                 "* {{ margin: 0; padding: 0; box-sizing: border-box; }}\n\
                  html, body {{ height: 100%; overflow: hidden; background: #000; }}\n\
+                 html.stream-mode, html.stream-mode body {{ background: transparent; }}\n\
                  body {{ display: flex; align-items: center; justify-content: center; }}\n\
                  main {{ display: grid; }}\n\
                  canvas, .loading {{ grid-area: 1 / 1; width: {w}px; height: {h}px; transform-origin: center; }}\n\
@@ -87,6 +94,7 @@ pub fn native_size_style(name: &str) -> Markup {
                  {POPUP_CSS}"
             )))
         }
+        (stream_mode_class_script())
         script {
             (PreEscaped(format!(
                 "function fitCanvas() {{\n\
@@ -101,6 +109,33 @@ pub fn native_size_style(name: &str) -> Markup {
         }
     }
 }
+
+/// Adds the `stream-mode` class to `<html>` under `?stream=1`, for `native_size_style`'s
+/// transparent-background rule to key off. A synchronous script (not deferred to
+/// `DOMContentLoaded`) so the class lands before first paint — `document.documentElement`
+/// already exists as soon as the parser reaches the `<html>` start tag, well before
+/// `<body>`/the canvas/the WASM fetch.
+fn stream_mode_class_script() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "if (new URLSearchParams(location.search).get('stream') === '1') {\n\
+                 \x20 document.documentElement.classList.add('stream-mode');\n\
+                 }"
+            ))
+        }
+    }
+}
+
+/// True under either query param that asks a per-game page to hide chrome meant for a
+/// human visitor — `?embed=1` (the ambient wall, `generate_index`'s `wall_page`, tiles
+/// too small for a 48px popup button to make sense on) or `?stream=1` (an OBS/Twitch
+/// browser-source layer, where the same button would show up on stream for no reason).
+/// Shared by `hotkey_popup` and `orientation_hint`, the two things that check it.
+const HIDE_CHROME_JS: &str = "(function() {\n\
+     \x20 var qs = new URLSearchParams(location.search);\n\
+     \x20 return qs.get('embed') === '1' || qs.get('stream') === '1';\n\
+     }())";
 
 /// Sarcastic one-liner shown behind the canvas while the WASM module fetches/inits.
 /// Same "watch, don't judge" tone as the homepage quotes. Sits in the same CSS grid
@@ -156,6 +191,10 @@ border-radius: 8px; padding: 20px 28px; min-width: 220px; }\n\
 font-size: 14px; margin: 0; }\n\
 #hotkeys dt { font-family: monospace; color: #8cf; }\n\
 #hotkeys dd { margin: 0; color: #ccc; }\n\
+#hotkeys .stream-hint { margin: 14px 0 0; padding-top: 12px; \
+border-top: 1px solid rgba(255,255,255,0.12); font-size: 12px; color: #999; \
+line-height: 1.5; }\n\
+#hotkeys .stream-hint a { color: #8cf; }\n\
 #hotkeys-close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; \
 border-radius: 50%; border: none; background: rgba(255,255,255,0.1); color: #eee; \
 font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: pointer; }\n\
@@ -168,7 +207,14 @@ font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: poin
 /// they're tappable without zooming. Pure HTML/CSS/JS — sits on top of the canvas rather
 /// than being drawn by the game itself. Hotkeys listed here must match what
 /// `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus any per-game hotkey
-/// the game's own `main.rs` reads directly (e.g. `V`).
+/// the game's own `main.rs` reads directly (e.g. `V`). Hidden instead under `?embed=1`/
+/// `?stream=1` (see `HIDE_CHROME_JS`) — a 48px popup button is visual clutter on an
+/// ambient-wall tile or an OBS/Twitch browser-source layer. The panel also carries a
+/// `?stream=1` link — otherwise stream mode is an undocumented URL param nobody would
+/// ever find — so a streamer can turn it on from the same place they'd already look for
+/// controls, without needing to know the query param exists ahead of time; clicking it
+/// reloads into stream mode immediately, which also doubles as a live preview before they
+/// copy the URL into OBS.
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(name, "klondike" | "spider" | "sudoku" | "minesweeper");
     html! {
@@ -194,21 +240,29 @@ pub fn hotkey_popup(name: &str) -> Markup {
                     dt { "?" } dd { "toggle this help (or tap the button)" }
                     dt { "Esc" } dd { "close (or tap ×)" }
                 }
+                p class="stream-hint" {
+                    "🎥 Streaming? " a href="?stream=1" { "Open in stream mode" }
+                    " for a clean, transparent OBS/Twitch layer — no HUD, no popup, see-through background."
+                }
             }
         }
         script {
-            (PreEscaped(
-                "document.addEventListener('keydown', function(e) {\n\
-                 \x20 if (e.key === '?') document.getElementById('hotkeys').classList.toggle('open');\n\
-                 \x20 else if (e.key === 'Escape') document.getElementById('hotkeys').classList.remove('open');\n\
-                 });\n\
-                 document.getElementById('hotkeys-btn').addEventListener('click', function() {\n\
-                 \x20 document.getElementById('hotkeys').classList.toggle('open');\n\
-                 });\n\
-                 document.getElementById('hotkeys-close').addEventListener('click', function() {\n\
-                 \x20 document.getElementById('hotkeys').classList.remove('open');\n\
-                 });"
-            ))
+            (PreEscaped(format!(
+                "if ({HIDE_CHROME_JS}) {{\n\
+                 \x20 document.getElementById('hotkeys-btn').style.display = 'none';\n\
+                 }} else {{\n\
+                 \x20 document.addEventListener('keydown', function(e) {{\n\
+                 \x20   if (e.key === '?') document.getElementById('hotkeys').classList.toggle('open');\n\
+                 \x20   else if (e.key === 'Escape') document.getElementById('hotkeys').classList.remove('open');\n\
+                 \x20 }});\n\
+                 \x20 document.getElementById('hotkeys-btn').addEventListener('click', function() {{\n\
+                 \x20   document.getElementById('hotkeys').classList.toggle('open');\n\
+                 \x20 }});\n\
+                 \x20 document.getElementById('hotkeys-close').addEventListener('click', function() {{\n\
+                 \x20   document.getElementById('hotkeys').classList.remove('open');\n\
+                 \x20 }});\n\
+                 }}"
+            )))
         }
     }
 }
@@ -220,7 +274,10 @@ pub fn hotkey_popup(name: &str) -> Markup {
 /// but on a badly-mismatched orientation that can leave the game a small fraction of the
 /// screen. Pure page-level HTML/CSS/JS, same pattern as `hotkey_popup`/`screenshot_bridge`.
 /// Dismissal is per-`sessionStorage` (not persisted across visits) so it can nudge again
-/// next session rather than being silenced forever after one tap.
+/// next session rather than being silenced forever after one tap. Never shown at all
+/// under `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`) — a tiny ambient-wall iframe
+/// tile's own viewport dimensions are a meaningless orientation signal, and an OBS/Twitch
+/// browser-source layer has no visitor around to rotate anything for either way.
 pub fn orientation_hint(name: &str) -> Markup {
     let (w, h) = native_size(name);
     let game_is_landscape = w > h;
@@ -245,6 +302,7 @@ pub fn orientation_hint(name: &str) -> Markup {
         script {
             (PreEscaped(format!(
                 "(function() {{\n\
+                 \x20 if ({HIDE_CHROME_JS}) return;\n\
                  \x20 var key = '{dismiss_key}';\n\
                  \x20 var gameIsLandscape = {game_is_landscape};\n\
                  \x20 var el = document.getElementById('rotate-hint');\n\
@@ -308,6 +366,31 @@ pub fn variant_query_bridge() -> Markup {
                  \x20 },\n\
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_variant_query\"\n\
+                 });"
+            ))
+        }
+    }
+}
+
+/// Registers a miniquad plugin exposing `env.hcg_is_stream_mode`, letting
+/// `control::Control::stream_mode()` read the page's `?stream=1` query param at startup
+/// so a game can skip drawing its own in-canvas HUD (score, speed label) for an OBS/Twitch
+/// browser-source layer. Must run before `load(...)`, same ordering constraint as
+/// `analytics_bridge`/`variant_query_bridge`. Registered unconditionally for every game
+/// (unlike `variant_query_bridge`, which only minesweeper needs) since every game has a
+/// HUD worth hiding.
+pub fn stream_mode_query_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "miniquad_add_plugin({\n\
+                 \x20 register_plugin: function(importObject) {\n\
+                 \x20   importObject.env.hcg_is_stream_mode = function() {\n\
+                 \x20     return new URLSearchParams(location.search).get('stream') === '1' ? 1 : 0;\n\
+                 \x20   };\n\
+                 \x20 },\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_stream_mode\"\n\
                  });"
             ))
         }

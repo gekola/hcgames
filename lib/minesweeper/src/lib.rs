@@ -251,7 +251,12 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
             }
         }
 
-        draw_board(&board, &control.label(), &mut board_cache);
+        draw_board(
+            &board,
+            &control.label(),
+            control.stream_mode(),
+            &mut board_cache,
+        );
         shot.tick();
         screenshot::handle_hotkey();
         next_frame().await;
@@ -651,7 +656,7 @@ fn draw_hex_grid(
 
 // ── Top-level draw ────────────────────────────────────────────────────────────
 
-fn draw_board(board: &Board, speed_label: &str, board_cache: &mut RenderCache) {
+fn draw_board(board: &Board, speed_label: &str, hide_hud: bool, board_cache: &mut RenderCache) {
     let sw = screen_width();
     let sh = screen_height();
 
@@ -661,7 +666,9 @@ fn draw_board(board: &Board, speed_label: &str, board_cache: &mut RenderCache) {
         b: 0.12,
         a: 1.0,
     });
-    draw_hud(board, sw, speed_label);
+    if !hide_hud {
+        draw_hud(board, sw, speed_label);
+    }
 
     let total_hidden = board
         .cells

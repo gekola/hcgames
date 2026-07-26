@@ -343,7 +343,9 @@ async fn run_ui(cli: CliArgs) {
         }
 
         clear_background(Color::new(0.09, 0.09, 0.13, 1.0));
-        draw_hud(&game, mode.label(), &control.label());
+        if !control.stream_mode() {
+            draw_hud(&game, mode.label(), &control.label());
+        }
         board_cache.draw(|| draw_board_static(&game, &metrics));
         draw_highlight(highlight);
 
