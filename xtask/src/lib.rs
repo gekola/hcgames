@@ -567,10 +567,14 @@ fn json_escape(s: &str) -> String {
 /// Builds a page's `manifest.webmanifest` contents. `start_url`/`scope` are both "./" —
 /// each generated page (homepage, or a game's own `dist/<name>/`) is installed as an
 /// independent app scoped to just that directory. `icon_dir` is the relative path back to
-/// wherever `favicon.svg`/`favicon.png`/`icon-512.png` live (`dist/`'s root) — "" from the
-/// homepage itself, "../" from a game one level down. The two raster sizes are included
-/// only when present, same fallback pattern as `favicon_links`/`social_image` (skipped
-/// locally without resvg).
+/// wherever `favicon.svg`/`favicon.png`/`icon-512.png`/`icon-512-maskable.png` live
+/// (`dist/`'s root) — "" from the homepage itself, "../" from a game one level down. The
+/// raster sizes are included only when present, same fallback pattern as
+/// `favicon_links`/`social_image` (skipped locally without resvg). The maskable icon
+/// (`static/favicon-maskable.svg` — safe-zone-padded + opaque background, unlike the
+/// edge-to-edge `favicon.svg`) declares `"purpose":"maskable"` so Android/adaptive-icon
+/// installs don't letterbox-crop the artwork — Lighthouse's `maskable-icon` PWA audit
+/// checks for exactly this.
 pub fn manifest_json(
     dist: &Path,
     title: &str,
@@ -589,6 +593,11 @@ pub fn manifest_json(
     if dist.join("icon-512.png").exists() {
         icons.push(format!(
             r#"{{"src":"{icon_dir}icon-512.png","sizes":"512x512","type":"image/png"}}"#
+        ));
+    }
+    if dist.join("icon-512-maskable.png").exists() {
+        icons.push(format!(
+            r#"{{"src":"{icon_dir}icon-512-maskable.png","sizes":"512x512","type":"image/png","purpose":"maskable"}}"#
         ));
     }
     format!(

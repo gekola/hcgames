@@ -118,6 +118,11 @@ fi
 if [ ! -f dist/icon-512.png ] || [ static/favicon.svg -nt dist/icon-512.png ]; then
     svg_to_png static/favicon.svg dist/icon-512.png 512 512
 fi
+# PWA manifest maskable icon (see xtask::manifest_json) — safe-zone-padded + opaque-bg
+# variant so Android/adaptive-icon installs don't letterbox-crop the artwork.
+if [ ! -f dist/icon-512-maskable.png ] || [ static/favicon-maskable.svg -nt dist/icon-512-maskable.png ]; then
+    svg_to_png static/favicon-maskable.svg dist/icon-512-maskable.png 512 512
+fi
 """
 
 # Generate the homepage + sitemap.xml: mise run generate-index

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <!-- Maskable variant of favicon.svg: OS adaptive-icon masks (circle, squircle, rounded
+       square, ...) crop right up to the edge of a maskable icon, so the artwork itself
+       must stay within a safe zone well inside the canvas (Google's guidance: keep
+       content within the centered ~80%-diameter circle) — favicon.svg's chair fills the
+       viewBox edge-to-edge and would get clipped badly used as-is. Same source shapes,
+       scaled to 0.55x (the chair's unscaled corner-to-center diagonal is ~11 units, so
+       0.55x keeps every corner inside the 6.4-unit-radius safe circle with margin to
+       spare) around the artwork's own center, given an opaque full-canvas
+       background (required for maskable icons — a transparent margin looks like a hole
+       once a mask shape is applied), using the homepage's bg brand color (CSS var "bg")
+       so the icon reads consistently across every page's shared manifest. -->
+  <rect x="0" y="0" width="16" height="16" fill="#171310"/>
+  <g transform="translate(8,7.5) scale(0.55) translate(-8,-7.5)">
+    <!-- chair back frame -->
+    <rect x="1" y="0" width="14" height="6" fill="#4a1a08"/>
+    <!-- chair back cushion -->
+    <rect x="2" y="1" width="12" height="4" fill="#8a3020"/>
+    <!-- left armrest -->
+    <rect x="0" y="5" width="3" height="5" fill="#5c1e0e"/>
+    <!-- right armrest -->
+    <rect x="13" y="5" width="3" height="5" fill="#5c1e0e"/>
+    <!-- seat -->
+    <rect x="2" y="7" width="12" height="4" fill="#702818"/>
+    <!-- seat front face -->
+    <rect x="2" y="11" width="12" height="1" fill="#501808"/>
+    <!-- left leg -->
+    <rect x="3" y="12" width="2" height="3" fill="#3a1008"/>
+    <!-- right leg -->
+    <rect x="11" y="12" width="2" height="3" fill="#3a1008"/>
+  </g>
+</svg>
