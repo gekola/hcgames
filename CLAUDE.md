@@ -2,6 +2,13 @@
 
 Rust workspace of small games targeting native and WASM via macroquad. Each game lives in `games/<name>/` as a separate crate.
 
+This file covers conventions shared across the whole workspace. Game- or crate-specific
+architecture (types, algorithms, solver tuning, rendering approach, gotchas) lives in
+that game/crate's own `CLAUDE.md` instead — e.g. `games/tetris/CLAUDE.md`,
+`games/match-3/CLAUDE.md`, `lib/beam_solver/CLAUDE.md` — check there before re-deriving
+a game's design from scratch. Not every crate has one yet; add one once a game has
+enough non-obvious design to be worth writing down (most do, past the first few).
+
 ## Workspace layout
 
 ```
@@ -86,6 +93,7 @@ config core.hooksPath .githooks` once per clone/worktree to activate it.
 4. Wire `control::Control` into the main loop (see "In-game controls" below)
 5. If `window_width`/`window_height` in `Conf` isn't 900×720, add a case to `xtask::native_size`
 6. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM (also generates `dist/<name>/index.html` — there's no separate dev HTML template to maintain)
+7. Once the game's design has settled, add `games/<name>/CLAUDE.md` documenting it — source layout table, key types/constants, algorithm/solver design, rendering notes, any real gotchas, a "Running" section. See `games/snake/CLAUDE.md` (terse) or `games/match-3/CLAUDE.md` (fuller) for the shape. Don't duplicate what's already covered in this root file (CLI flags, RenderCache, control/hotkeys, WASM caveats) — only game-specific content.
 
 ## Self-playing solver games (klondike, spider, and similar)
 
@@ -109,6 +117,18 @@ single, then hidden single, then locked-candidate elimination, then — only as 
 resort — a "guess" that's actually just reading the pre-generated solution). For that
 shape, skip `beam_solver` and write the escalation directly in `solver.rs`; see
 `games/sudoku/src/solver.rs`.
+
+A third shape doesn't need even a 1-ply lookahead: a board with many simultaneously legal
+moves (same as Klondike/Spider) but no "known next piece" to search a second ply into —
+what a swap reveals depends on where gravity happens to refill from, so a deeper search
+would just multiply the branching factor rather than sharpen a small candidate set. For
+that shape (match-3's swap-and-cascade), skip `beam_solver` entirely: enumerate
+`legal_moves()`, resolve each on a scratch clone via a pure `Game::simulate`, and pick the
+highest-scoring result — see `games/match-3/src/solver.rs`. Tune the scoring weights
+against measured win rate (`--no-ui --once` across a range of `HCG_SEED` values, per
+"Native CLI flags" above), not by inspection — `match-3`'s ingredient-collection goal
+initially won under 15% of the time because the greedy eval only rewarded a move that
+*completed* a collection, not one that made progress toward it.
 
 ## Native CLI flags (every game)
 
@@ -246,7 +266,11 @@ ending the turn:
 
 1. Save whatever's durably worth remembering to memory (per the memory-system instructions
    already in context) — project facts, feedback/corrections, and non-obvious lessons, not
-   things re-derivable by reading the code.
+   things re-derivable by reading the code. If what's worth keeping is actually a game's or
+   crate's architecture/design (not a process lesson or a cross-cutting fact), prefer
+   writing or updating that game's own `CLAUDE.md` over a memory file — checked-in and
+   automatically loaded when working in that directory, so it can't go stale the way a
+   memory file summarizing "current state" can.
 2. If the change is the kind this file should reflect (a new convention, a new shared crate,
    a new standard pattern future work should follow — not a one-off bugfix or tuning pass),
    either update this file directly or explicitly ask whether it should be updated. Don't
