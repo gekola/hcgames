@@ -320,19 +320,45 @@ fn draw_board_frame() {
     }
 }
 
+/// A flat low-alpha tint here used to read as barely-there — a gem's own silhouette
+/// covers most of the cell, so only a thin sliver near the corners ever showed the
+/// underlay at all, and the pale, low-opacity fill made even that sliver easy to miss.
+/// Two changes fix that: a much smaller inset (more of the cell's own footprint left
+/// exposed around the gem) and a darker-rim/lighter-fill/gloss-highlight treatment —
+/// the same layering `draw_gem` gives every gem — so jelly reads as its own distinct,
+/// wet-looking shape instead of a faint background tint, in a teal/green hue no gem
+/// color uses (can't be mistaken for a gem's own shading). Now that `board_cache` uses
+/// `RenderCache::with_backdrop` (see its own doc comment), the near-opaque alpha here
+/// composites correctly through the cache too, not just live.
 fn draw_jelly_underlay(board: &Board) {
     for r in 0..H {
         for c in 0..W {
-            if board.jelly[r][c] > 0 {
-                let (x, y) = cell_xy(r as f32, c as f32);
-                draw_rectangle(
-                    x + 3.0,
-                    y + 3.0,
-                    CELL - 6.0,
-                    CELL - 6.0,
-                    Color::new(0.55, 0.85, 0.95, 0.28),
-                );
+            if board.jelly[r][c] == 0 {
+                continue;
             }
+            let (x, y) = cell_xy(r as f32, c as f32);
+            let inset = 1.5;
+            let size = CELL - inset * 2.0;
+            draw_rectangle(
+                x + inset,
+                y + inset,
+                size,
+                size,
+                Color::new(0.12, 0.47, 0.42, 0.92),
+            );
+            draw_rectangle(
+                x + inset + 3.0,
+                y + inset + 3.0,
+                size - 6.0,
+                size - 6.0,
+                Color::new(0.24, 0.78, 0.65, 0.88),
+            );
+            draw_circle(
+                x + size * 0.34,
+                y + size * 0.32,
+                size * 0.13,
+                Color::new(0.62, 0.95, 0.88, 0.55),
+            );
         }
     }
 }

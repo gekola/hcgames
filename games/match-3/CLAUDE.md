@@ -466,6 +466,22 @@ gloss-streak/stripe fixes' rigor — the fix itself doesn't depend on that mecha
 exactly nailed down (see `RenderCache::with_backdrop`'s doc comment for why it's safe
 regardless).
 
+**Jelly's underlay redesigned for recognizability, not just correctness — the fix above
+made it render its *intended* color, but that intended design (a flat, pale, low-alpha
+tint mostly hidden behind the gem's own silhouette) was still hard to actually notice.**
+Two changes: a much smaller inset (`1.5px` vs. the old `3px`, so more of the cell's own
+footprint stays exposed around whatever gem sits on it) and the same darker-rim /
+lighter-fill / gloss-highlight layering `draw_gem` gives every gem, instead of one flat
+`draw_rectangle`. Picked a teal/green hue (rim `(0.12, 0.47, 0.42)`, fill `(0.24, 0.78,
+0.65)`) no gem color uses, so it reads as its own thing rather than a gem-shading
+artifact. Near-opaque alpha (`0.88`-`0.92`) rather than the old `0.28` — safe to do now
+that `board_cache`'s `with_backdrop` fix (above) means high-alpha content composites
+correctly through the cache too, not just live. This is meant to set the visual
+precedent for future per-cell overlays too (todo backlog #3's blocker tiles — Frozen,
+Locked, etc.): a colored rim + lighter fill + gloss highlight, picking a hue that reads
+as distinct from both the 6 gem colors and any other overlay already in play, rather than
+a flat tint that competes with whatever gem happens to be sitting on top of it.
+
 **RenderCache usage differs from every other game here**: match-3's board animates
 almost continuously (swap/flash/fall chase each other with no real idle gap *during* a
 move), so caching only pays off in the `Idle` beat between moves and the `GameOver`
