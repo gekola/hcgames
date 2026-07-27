@@ -411,7 +411,15 @@ extending this pattern elsewhere.
 
 Bonus-tile overlays (row/col-clear stripes, the wrapped ring) are shape-agnostic —
 stripes read as a band across any silhouette; the wrapped ring is a circular halo, not
-a square outline.
+a square outline. **They hit the exact same gray-under-`RenderCache` bug as the gloss
+streak above, reported later** (translucent white faded by `alpha`, drawn regardless of
+`highlight`) — fixed identically: `lighten(color_rgb(color), 0.55)`, opaque, gated on
+`highlight` rather than scaled by `alpha`. Safe because every call site that passes
+`highlight: true` already draws at `alpha: 1.0` (a settled, non-animating tile — see the
+call sites in `draw_board_static`/the `else` branches of `draw_flash_live`/
+`draw_fall_live`), so nothing fades that needs to. Verified by sampling a live stripe
+pixel in a headless-browser screenshot against its gem's base color — matched
+`lighten(base, 0.55)` exactly, not the muddy near-gray the bug produced.
 
 **RenderCache usage differs from every other game here**: match-3's board animates
 almost continuously (swap/flash/fall chase each other with no real idle gap *during* a
