@@ -249,14 +249,31 @@ game2048 looking oversized and pixelated on a 3200×2000 2x-scaled monitor.
 ## WASM caveats
 
 - `std::time::SystemTime::now()` **panics on WASM** — use `macroquad::miniquad::date::now() as u64` for timestamps/seeds.
-- No filesystem access in WASM — avoid `std::fs`. (`screenshot::handle_hotkey`'s `S` capture is native-only for this reason; the browser build handles `S` entirely in page JS instead, reading pixels off the canvas with `toBlob()`.)
+- No filesystem access in WASM — avoid `std::fs`. `screenshot::handle_hotkey`'s `S`
+  capture writes straight to a file on native for this reason; on WASM it reads pixels
+  via `get_screen_data()` (synchronous, inside the same Rust frame) and hands the raw
+  RGBA bytes to a JS plugin (`xtask::screenshot_bridge`) that builds a 2D canvas and
+  triggers a download instead. **Don't go back to a page-level `canvas.toBlob()` on the
+  WebGL canvas itself** — that was the original design, and it reliably captured
+  fully transparent/black frames (reproduced both mid-play and with the game paused, so
+  it wasn't about content still changing). Cause: `canvas.toBlob()`/`toDataURL()` on a
+  WebGL canvas needs `preserveDrawingBuffer: true` on the context to survive past the
+  browser's next composite, `mq_js_bundle.js` (fetched, not checked in — see "Site
+  generation" above) doesn't set it, and by the time an async `keydown`-triggered
+  `toBlob()` callback ran, the drawing buffer was reliably already gone. Reading pixels
+  from Rust with `get_screen_data()` sidesteps the timing entirely, same mechanism
+  `lib/screenshot::Capture` (the build's own `HCG_SCREENSHOT` preview-image step) already
+  relied on.
 - `rand::srand(...)` must be called at startup to seed the RNG; quad-rand's default seed is fixed.
 - Calling arbitrary JS from Rust (no wasm-bindgen here) goes through miniquad's plugin
   system: a page-level `<script>` calls the global `miniquad_add_plugin({register_plugin,
   ...})` (provided by `mq_js_bundle.js`) to add a function onto `importObject.env` *before*
   `load(...)` instantiates the module; Rust then declares a matching `unsafe extern "C"`
   fn. `control::ga_event` / `xtask::analytics_bridge` is the reference example — strings
-  cross as `(ptr, len)` pairs, decoded JS-side with the bundle's own global `UTF8ToString`.
+  cross as `(ptr, len)` pairs, decoded JS-side with the bundle's own global `UTF8ToString`;
+  `xtask::screenshot_bridge` is the reference example for a raw byte buffer instead of a
+  string — `new Uint8ClampedArray(wasm_memory.buffer.slice(ptr, ptr + len))` copies it out
+  before use, since the passed pointer is only valid for the duration of the call.
 
 ## After a significant change
 

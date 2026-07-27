@@ -405,23 +405,44 @@ pub fn stream_mode_query_bridge() -> Markup {
     }
 }
 
-/// `S` hotkey: grabs the current frame straight off the canvas (`toBlob`, no Rust
-/// involvement — WASM has no filesystem, so `screenshot::handle_hotkey` is a native-only
-/// no-op) and prompts the browser's own download flow for it.
+/// `S` hotkey: registers a miniquad plugin exposing `env.hcg_save_screenshot`, called
+/// from `screenshot::handle_hotkey` (Rust detects the keypress and reads pixels via
+/// `get_screen_data()`, synchronously inside its own frame — see that function's doc
+/// comment for why, replacing an earlier page-level `canvas.toBlob()` design that
+/// reliably captured blank/transparent frames). Rust hands over raw RGBA8 bytes plus
+/// `width`/`height`, already flipped to top-row-first, and a timestamp-based base name;
+/// this prepends `name` (the game, baked in at generation time — matches the old
+/// filename shape, `{name}-screenshot-<ts>.png`, since multiple games' downloads can
+/// land in the same folder) and builds a 2D canvas from the pixels (a `<canvas>` 2D
+/// context has no `preserveDrawingBuffer` pitfall — it isn't WebGL), doing the PNG
+/// encoding + download entirely with browser APIs, no image-decoding dependency needed
+/// on the Rust side. Must run before `load(...)`, same ordering constraint as
+/// `analytics_bridge`.
 pub fn screenshot_bridge(name: &str) -> Markup {
     html! {
         script {
             (PreEscaped(format!(
-                "document.addEventListener('keydown', function(e) {{\n\
-                 \x20 if (e.key !== 's' && e.key !== 'S') return;\n\
-                 \x20 document.querySelector('canvas').toBlob(function(blob) {{\n\
-                 \x20   var url = URL.createObjectURL(blob);\n\
-                 \x20   var a = document.createElement('a');\n\
-                 \x20   a.href = url;\n\
-                 \x20   a.download = '{name}-screenshot.png';\n\
-                 \x20   a.click();\n\
-                 \x20   URL.revokeObjectURL(url);\n\
-                 \x20 }});\n\
+                "miniquad_add_plugin({{\n\
+                 \x20 register_plugin: function(importObject) {{\n\
+                 \x20   importObject.env.hcg_save_screenshot = function(rgbaPtr, rgbaLen, width, height, namePtr, nameLen) {{\n\
+                 \x20     var base = UTF8ToString(namePtr, nameLen);\n\
+                 \x20     var rgba = new Uint8ClampedArray(wasm_memory.buffer.slice(rgbaPtr, rgbaPtr + rgbaLen));\n\
+                 \x20     var c = document.createElement('canvas');\n\
+                 \x20     c.width = width;\n\
+                 \x20     c.height = height;\n\
+                 \x20     c.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);\n\
+                 \x20     c.toBlob(function(blob) {{\n\
+                 \x20       var url = URL.createObjectURL(blob);\n\
+                 \x20       var a = document.createElement('a');\n\
+                 \x20       a.href = url;\n\
+                 \x20       a.download = '{name}-' + base + '.png';\n\
+                 \x20       a.click();\n\
+                 \x20       URL.revokeObjectURL(url);\n\
+                 \x20     }});\n\
+                 \x20   }};\n\
+                 \x20 }},\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_screenshot\"\n\
                  }});"
             )))
         }

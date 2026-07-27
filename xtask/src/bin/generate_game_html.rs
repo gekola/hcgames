@@ -51,12 +51,12 @@ fn main() {
                 (analytics_bridge())
                 (sw_register_bridge("../sw.js"))
                 (stream_mode_query_bridge())
+                (screenshot_bridge(&name))
                 @if name == "minesweeper" {
                     (variant_query_bridge())
                 }
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
                 (hotkey_popup(&name))
-                (screenshot_bridge(&name))
                 (fullscreen_bridge())
                 (orientation_hint(&name))
             }

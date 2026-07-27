@@ -1,5 +1,23 @@
 use macroquad::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+unsafe extern "C" {
+    /// `rgba_ptr`/`rgba_len` is raw, top-row-first RGBA8 pixel data (`width * height * 4`
+    /// bytes, already flipped from `get_screen_data()`'s bottom-up GL readback order —
+    /// see `handle_hotkey`) ready to hand straight to `new ImageData(...)`. No encoding
+    /// done in Rust at all — the JS side (`xtask::screenshot_bridge`) builds a 2D canvas
+    /// from it and does the PNG encoding + download there, so this crate stays
+    /// dependency-free.
+    fn hcg_save_screenshot(
+        rgba_ptr: *const u8,
+        rgba_len: u32,
+        width: u32,
+        height: u32,
+        name_ptr: *const u8,
+        name_len: u32,
+    );
+}
+
 /// RNG seed: `HCG_SEED` env override for reproducible screenshots, else wall-clock.
 /// `std::time::SystemTime::now()` panics on WASM, so this always goes through miniquad's clock.
 pub fn seed() -> u64 {
@@ -46,16 +64,58 @@ impl Capture {
     }
 }
 
-/// `S` hotkey: save a screenshot of the current frame. Native only — writes a
-/// timestamped PNG to the working directory via `std::fs`, which doesn't exist on WASM.
-/// In the browser the page itself handles `S` (see `xtask::screenshot_bridge`) by reading
-/// pixels straight off the canvas with `toBlob()` and prompting a download, which needs no
-/// Rust involvement at all.
+/// `S` hotkey: save a screenshot of the current frame. Native writes a timestamped PNG
+/// straight to the working directory via `std::fs`.
+///
+/// WASM has no filesystem, so it hands raw pixel bytes to a JS plugin
+/// (`xtask::screenshot_bridge`) that encodes and downloads them instead — reading pixels
+/// via `get_screen_data()` here (synchronously, inside this same Rust frame) rather than
+/// the page listening for `S` itself and reading the canvas with `canvas.toBlob()`, which
+/// this replaced. That approach depended on `preserveDrawingBuffer: true` on the WebGL
+/// context, which `mq_js_bundle.js` (fetched, not ours to patch — see root CLAUDE.md's
+/// "Site generation" section) doesn't set; without it the browser is free to discard the
+/// drawing buffer as soon as it composites a frame, and by the time an async
+/// `keydown`-triggered `toBlob()` callback ran, the buffer was reliably already gone —
+/// every capture came back fully transparent/black (reproduced both mid-play and with
+/// the game paused, so it wasn't about content still changing). `get_screen_data()`
+/// reads pixels before any browser-side compositing/clearing can happen, sidestepping
+/// the timing issue entirely — the same mechanism `Capture` (this file, used by the
+/// build's own screenshot step) already relied on, just never wired to the live hotkey
+/// on WASM before.
 pub fn handle_hotkey() {
+    if !is_key_pressed(KeyCode::S) {
+        return;
+    }
+    let name = format!("screenshot-{}", macroquad::miniquad::date::now() as u64);
     #[cfg(not(target_arch = "wasm32"))]
-    if is_key_pressed(KeyCode::S) {
-        let filename = format!("screenshot-{}.png", macroquad::miniquad::date::now() as u64);
+    {
+        let filename = format!("{name}.png");
         get_screen_data().export_png(&filename);
         println!("Saved screenshot to {filename}");
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let img = get_screen_data();
+        let (w, h) = (img.width as usize, img.height as usize);
+        // `get_screen_data()` reads bottom-row-first (OpenGL's native order) — flip to
+        // top-row-first, same as `Image::export_png` does before writing a file, so the
+        // JS side can hand this straight to `new ImageData(...)` without its own flip.
+        let mut flipped = vec![0u8; img.bytes.len()];
+        let row_bytes = w * 4;
+        for y in 0..h {
+            let src = (h - y - 1) * row_bytes;
+            let dst = y * row_bytes;
+            flipped[dst..dst + row_bytes].copy_from_slice(&img.bytes[src..src + row_bytes]);
+        }
+        unsafe {
+            hcg_save_screenshot(
+                flipped.as_ptr(),
+                flipped.len() as u32,
+                w as u32,
+                h as u32,
+                name.as_ptr(),
+                name.len() as u32,
+            );
+        }
     }
 }
