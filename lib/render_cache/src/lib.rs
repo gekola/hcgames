@@ -25,41 +25,59 @@ pub struct RenderCache {
     rect: Rect,
     dirty: bool,
     backdrop: Color,
+    supersample: u32,
 }
 
 impl RenderCache {
-    /// `rect` is the screen-space region this cache covers, in the same absolute pixel
-    /// coordinates the game already draws in — the texture is sized 1:1 to it, and the
-    /// `draw` closure passed to `draw()` should keep using those same absolute
-    /// coordinates unchanged (no need to offset by `rect`'s origin).
-    pub fn new(rect: Rect) -> Self {
-        // `render_target()` defaults to `sample_count: 1`, but macroquad's
-        // `render_target_ex` branches on `sample_count != 0` (not `> 1`) to decide
-        // whether to build an MSAA resolve pass — so the "no multisampling" default
-        // still takes that path and asserts `glCheckFramebufferStatus(...) != 0` on an
-        // extra resolve framebuffer we don't need. On browsers/GPUs whose WebGL glue
-        // only wires that GL function up for WebGL2 contexts, the call returns 0, the
-        // assert fails, and `panic = "abort"` turns it into a wasm `unreachable` trap
-        // (`Uncaught RuntimeError: unreachable executed` in the browser console).
-        // `sample_count: 0` skips the resolve path entirely — this cache only ever
-        // blits a static texture, so there's nothing to resolve anyway.
+    // `render_target()` defaults to `sample_count: 1`, but macroquad's
+    // `render_target_ex` branches on `sample_count != 0` (not `> 1`) to decide whether
+    // to build an MSAA resolve pass — so the "no multisampling" default still takes
+    // that path and asserts `glCheckFramebufferStatus(...) != 0` on an extra resolve
+    // framebuffer we don't need. On browsers/GPUs whose WebGL glue only wires that GL
+    // function up for WebGL2 contexts, the call returns 0, the assert fails, and
+    // `panic = "abort"` turns it into a wasm `unreachable` trap (`Uncaught
+    // RuntimeError: unreachable executed` in the browser console). `sample_count: 0`
+    // skips the resolve path entirely — this cache only ever blits a static texture,
+    // so there's nothing to resolve anyway. See `with_supersample` for the tradeoff
+    // this creates (no hardware antialiasing on cached content) and how it's worked
+    // around without touching `sample_count`.
+    fn build(rect: Rect, factor: u32) -> (RenderTarget, Camera2D) {
         let target = render_target_ex(
-            rect.w.round().max(1.0) as u32,
-            rect.h.round().max(1.0) as u32,
+            (rect.w * factor as f32).round().max(1.0) as u32,
+            (rect.h * factor as f32).round().max(1.0) as u32,
             RenderTargetParams {
                 sample_count: 0,
                 ..Default::default()
             },
         );
-        target.texture.set_filter(FilterMode::Nearest);
+        // `Nearest` for an exact 1:1 blit (the `factor == 1` default) — no filtering
+        // wanted when source and destination pixel grids match exactly. `Linear` for
+        // a supersampled target instead, so shrinking it back down during `blit`
+        // actually averages the extra pixels instead of just picking one — see
+        // `with_supersample`.
+        target.texture.set_filter(if factor > 1 {
+            FilterMode::Linear
+        } else {
+            FilterMode::Nearest
+        });
         let mut camera = Camera2D::from_display_rect(rect);
         camera.render_target = Some(target.clone());
+        (target, camera)
+    }
+
+    /// `rect` is the screen-space region this cache covers, in the same absolute pixel
+    /// coordinates the game already draws in — the texture is sized 1:1 to it, and the
+    /// `draw` closure passed to `draw()` should keep using those same absolute
+    /// coordinates unchanged (no need to offset by `rect`'s origin).
+    pub fn new(rect: Rect) -> Self {
+        let (target, camera) = Self::build(rect, 1);
         Self {
             target,
             camera,
             rect,
             dirty: true,
             backdrop: Color::new(0.0, 0.0, 0.0, 0.0),
+            supersample: 1,
         }
     }
 
@@ -89,6 +107,35 @@ impl RenderCache {
     /// whatever's really behind them on screen, not a solid `color`-filled patch.
     pub fn with_backdrop(mut self, color: Color) -> Self {
         self.backdrop = color;
+        self
+    }
+
+    /// Renders into a texture `factor`x the size of `rect` in each dimension and
+    /// shrinks it back down on every `blit` — approximates antialiasing for cached
+    /// content without touching `sample_count` (real MSAA needs the resolve pass
+    /// `new`'s doc comment explains this cache deliberately avoids).
+    ///
+    /// Without this, cached content rasterizes with hard, single-sample edges while
+    /// live (uncached) draws land on the default framebuffer, which typically *does*
+    /// get real antialiasing from the browser's WebGL context — so a straight edge
+    /// (jelly's rim, say) looks crisp when cached and ~1-2px softer when live,
+    /// alternating as the game switches between the two. Reads as the edge visibly
+    /// shifting, not just changing sharpness. Confirmed by screenshotting the same
+    /// unmoving cell mid-animation (live) vs. settled (cached): live's edge transition
+    /// spans two pixels of blended color where cached's is a single hard pixel.
+    /// Supersampling and downscaling with a `Linear`-filtered blit (see `build`)
+    /// re-introduces that softening for the cached path so it matches.
+    ///
+    /// `factor: 2` (quadruples the pixels actually rendered, only on a dirty redraw —
+    /// i.e. once per solver tick at most, not once per frame, so the cost is the same
+    /// "rare event" `RenderCache` exists to make rare in the first place) is enough to
+    /// visibly soften a hard axis-aligned edge; there was no need to measure higher
+    /// factors against real MSAA once the visible symptom was gone.
+    pub fn with_supersample(mut self, factor: u32) -> Self {
+        self.supersample = factor.max(1);
+        let (target, camera) = Self::build(self.rect, self.supersample);
+        self.target = target;
+        self.camera = camera;
         self
     }
 

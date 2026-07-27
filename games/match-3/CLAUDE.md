@@ -500,6 +500,23 @@ composite left at draw time to be inconsistent about, cached or not. Confirmed b
 re-running the same live-vs-cached screenshot diff: every sampled frame (live and
 cached alike) now reads the identical `(30, 112, 100)`.
 
+**Jelly's rim still read as "shifting by a pixel" between cache and live after the color
+fix above — turned out to be a real hard-edge-vs-antialiased-edge mismatch, not a
+position bug.** Same live-vs-cached screenshot-diff methodology, this time comparing the
+full pixel *sequence* across the rim/fill boundary rather than a single sample point:
+cached rendering transitioned bg→rim in exactly one pixel every time, live rendering
+spread the same transition across two pixels of blended color
+(`(24,22,30)→(27,67,65)→(30,112,100)`) — a soft, antialiased edge. Root cause:
+`board_cache`'s render target uses `sample_count: 0` (deliberately — see
+`RenderCache::new`'s doc comment, real MSAA there trips a WASM crash on some
+browsers/GPUs), so cached content rasterizes with zero antialiasing, while live draws
+land on the default framebuffer, whose WebGL context (`mq_js_bundle.js`, not ours to
+edit) has antialiasing on by default. Fixed with `RenderCache::with_supersample(2)`:
+renders into a 2x-sized texture and lets a `Linear`-filtered `blit` shrink it back down,
+approximating antialiasing without touching `sample_count` at all — sidesteps the crash
+risk entirely rather than trying to work around it. Confirmed by re-running the same
+diff: live and cached pixel sequences are now byte-identical across every sampled cell.
+
 **Triangle/Pentagon gems sit visibly high in their cell — a pre-existing bug, unrelated
 to jelly, that jelly's new visible rim just made obvious** (reported as "grid
 misalignment," but it's per-shape, not per-cell — every gem is drawn at the same `(cx,

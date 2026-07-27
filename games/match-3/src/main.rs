@@ -1021,14 +1021,18 @@ async fn amain(cli: CliArgs) {
     // comment for why this is the general fix for every translucent draw inside
     // `draw_board_static` (gem gloss streak, bonus-tile stripes/ring, jelly underlay)
     // rather than the opaque-precompute workaround each of those needed individually
-    // before this existed.
+    // before this existed. `with_supersample(2)` fixes a separate symptom reported
+    // against the same cached/live split — jelly's rim reading as "shifted by a pixel"
+    // between the two — see `RenderCache::with_supersample`'s doc comment for why that's
+    // really a hard-vs-antialiased-edge mismatch, not an actual position change.
     let mut board_cache = RenderCache::new(Rect::new(
         BOARD_X - 1.0,
         BOARD_Y - 1.0,
         BOARD_W + 2.0,
         BOARD_H + 2.0,
     ))
-    .with_backdrop(rgb(60, 60, 75));
+    .with_backdrop(rgb(60, 60, 75))
+    .with_supersample(2);
     board_cache.mark_dirty();
 
     loop {
