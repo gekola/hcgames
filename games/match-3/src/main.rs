@@ -939,12 +939,19 @@ async fn amain(cli: CliArgs) {
     // animation. The `Idle` beat between moves (and the `GameOver` overlay) *is* fully
     // static, though, so those are the only phases that actually draw through the
     // cache — see the `animating` branch below, mirroring game2048's split exactly.
+    // `with_backdrop` matches `draw_board_frame`'s own border fill (the first thing its
+    // closure draws, covering this exact rect) — see `RenderCache::with_backdrop`'s doc
+    // comment for why this is the general fix for every translucent draw inside
+    // `draw_board_static` (gem gloss streak, bonus-tile stripes/ring, jelly underlay)
+    // rather than the opaque-precompute workaround each of those needed individually
+    // before this existed.
     let mut board_cache = RenderCache::new(Rect::new(
         BOARD_X - 1.0,
         BOARD_Y - 1.0,
         BOARD_W + 2.0,
         BOARD_H + 2.0,
-    ));
+    ))
+    .with_backdrop(rgb(60, 60, 75));
     board_cache.mark_dirty();
 
     loop {

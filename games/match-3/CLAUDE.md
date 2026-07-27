@@ -444,6 +444,28 @@ than the board background) instead of one near-invisible fill. Verified in a hea
 browser: a live `ColorBomb` (needs a 5-in-a-row match, caught after ~30s of autoplay)
 reads as a cohesive dark orb with a visible rim, not scattered dots.
 
+**`board_cache` now clears to an opaque backdrop instead of transparent
+(`RenderCache::with_backdrop`), generalizing the gray-under-`RenderCache` fix instead of
+hand-patching a fourth translucent draw** — jelly's underlay (`draw_jelly_underlay`,
+`Color::new(0.55, 0.85, 0.95, 0.28)`, drawn straight after `draw_board_frame` inside the
+same cached `draw_board_static` closure) hit the same bug class as the gloss streak and
+bonus stripes above, reported independently as "the slime background" flickering. Rather
+than adding a third `lighten()`-and-gate-on-a-bool workaround, `RenderCache` itself
+gained a `with_backdrop(color)` builder (see `lib/render_cache`'s doc comment and the
+`project_render_cache` memory) — `board_cache` passes `rgb(60, 60, 75)`, matching
+`draw_board_frame`'s own border fill (the first thing its closure draws, covering this
+exact rect), so every translucent draw layered on top within that one closure composites
+correctly with no further per-draw-call fixes. The gloss-streak/bonus-stripe fixes were
+left as they were rather than reverted back to translucent — still correct, just
+redundant-but-harmless now. Verified: a live jelly-tinted cell's corner pixel matched the
+hand-computed `translucent-over-(24,22,30)` blend exactly (`(56,76,89)`) after the fix,
+consistent across many sampled frames; a clean isolated before/after (cached vs. live)
+pair specifically for jelly proved hard to pin down via automated play (variant cycling
+in a headless browser is timing-flaky), so this is one measurement short of the
+gloss-streak/stripe fixes' rigor — the fix itself doesn't depend on that mechanism being
+exactly nailed down (see `RenderCache::with_backdrop`'s doc comment for why it's safe
+regardless).
+
 **RenderCache usage differs from every other game here**: match-3's board animates
 almost continuously (swap/flash/fall chase each other with no real idle gap *during* a
 move), so caching only pays off in the `Idle` beat between moves and the `GameOver`

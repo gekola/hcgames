@@ -24,6 +24,7 @@ pub struct RenderCache {
     camera: Camera2D,
     rect: Rect,
     dirty: bool,
+    backdrop: Color,
 }
 
 impl RenderCache {
@@ -58,7 +59,37 @@ impl RenderCache {
             camera,
             rect,
             dirty: true,
+            backdrop: Color::new(0.0, 0.0, 0.0, 0.0),
         }
+    }
+
+    /// Opts this cache into clearing to an **opaque** `color` before each dirty redraw,
+    /// instead of the default fully-transparent clear — use when the `draw` closure
+    /// passed to `draw()` always paints its *entire* `rect` opaquely as its first draw
+    /// call anyway (a solid board/panel background, say), so `color` should just be
+    /// whatever that first draw call already fills with.
+    ///
+    /// For that kind of closure, this doesn't change how the fully-covered pixels turn
+    /// out — they get overwritten by that first opaque draw regardless. What it fixes is
+    /// any *translucent* draw layered on top within the same closure (a highlight, an
+    /// underlay tint, a bonus-tile marker): alpha-blending onto a starting-transparent
+    /// render target — which is what this cache's offscreen texture is, unlike the
+    /// opaque screen framebuffer every live (uncached) draw call blends onto — composites
+    /// visibly grayer than the identical draw made live. Reported independently three
+    /// times in match-3 (a gem's gloss streak, its bonus-tile stripes/ring, its jelly
+    /// underlay) before this got generalized instead of hand-fixed a fourth time; see
+    /// `games/match-3/CLAUDE.md` for the specific measurements. Clearing to the same
+    /// solid color the closure was about to paint over anyway sidesteps the whole
+    /// class of bug in one place, with no more per-draw-call opaque-precompute tricks
+    /// needed for *this* cache.
+    ///
+    /// Don't reach for this on a closure whose content doesn't fully cover `rect` (a
+    /// shape that leaves gaps or corners — e.g. minesweeper's hex grid) — those still
+    /// need the default transparent clear so the untouched pixels show through to
+    /// whatever's really behind them on screen, not a solid `color`-filled patch.
+    pub fn with_backdrop(mut self, color: Color) -> Self {
+        self.backdrop = color;
+        self
     }
 
     /// Forces the next `draw()` call to actually re-run its closure instead of reusing
@@ -78,16 +109,17 @@ impl RenderCache {
     /// internally (`flip_y: true` on the blit) — get this wrong and cached content
     /// renders upside down; callers never need to think about it.
     ///
-    /// Clears the texture to fully transparent before each re-render, so `draw`'s
-    /// output is exactly this frame's content rather than accumulating on top of
-    /// whatever the last dirty pass left behind. Without this, content that doesn't
-    /// draw over the exact same pixels every time it's marked dirty (e.g. a board
-    /// whose cell layout/footprint changes shape) leaves stale pixels ghosting behind
-    /// the new content — see minesweeper's Square/Hex variant switch.
+    /// Clears the texture to `backdrop` (fully transparent by default, or an opaque
+    /// color via `with_backdrop`) before each re-render, so `draw`'s output is exactly
+    /// this frame's content rather than accumulating on top of whatever the last dirty
+    /// pass left behind. Without this, content that doesn't draw over the exact same
+    /// pixels every time it's marked dirty (e.g. a board whose cell layout/footprint
+    /// changes shape) leaves stale pixels ghosting behind the new content — see
+    /// minesweeper's Square/Hex variant switch.
     pub fn draw(&mut self, mut draw: impl FnMut()) {
         if self.dirty {
             set_camera(&self.camera);
-            clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+            clear_background(self.backdrop);
             draw();
             set_default_camera();
             self.dirty = false;
