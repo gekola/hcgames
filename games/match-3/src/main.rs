@@ -67,6 +67,27 @@ fn lighten(c: Color, amt: f32) -> Color {
     )
 }
 
+/// `fg` at alpha `a` blended over `bg`, returned fully opaque — for precomputing a
+/// translucent-looking color to draw at `alpha: 1.0` instead of actually drawing
+/// translucent. See `draw_jelly_underlay`'s use of this for why: `RenderCache`'s
+/// `with_backdrop` fixes the *drastic* gray-under-cache bug, but a small (~5-7/255 per
+/// channel), fully reproducible residual gap remained between the cached and live
+/// renders of the same near-opaque (`alpha` 0.88-0.92) translucent draw — measured by
+/// screenshotting the same jelly cell mid-animation (live) vs. settled (cached) and
+/// diffing. Root cause not pinned down (some deeper render-target color precision/blend
+/// quirk, past what `with_backdrop` addresses), but an opaque draw sidesteps it
+/// entirely the same way it did for the gloss streak/bonus stripes before
+/// `with_backdrop` existed — there's no alpha composite left at draw time to be
+/// inconsistent about.
+fn blend(fg: Color, bg: Color, a: f32) -> Color {
+    Color::new(
+        fg.r * a + bg.r * (1.0 - a),
+        fg.g * a + bg.g * (1.0 - a),
+        fg.b * a + bg.b * (1.0 - a),
+        1.0,
+    )
+}
+
 /// One silhouette per color — not just a color-coded fill, so the board reads even
 /// without color perception (or at a glance/small size). Low-side polygons (triangle,
 /// diamond, pentagon) look visually smaller than a hexagon/circle at the same
@@ -103,6 +124,26 @@ impl GemShape {
             // A hexagram (two overlapping triangles) rather than a true 5-point star —
             // macroquad has no star primitive, and this reads as a star at tile scale.
             GemShape::Star => draw_hexagram(cx, cy, r * 1.2, color),
+        }
+    }
+
+    /// Downward correction (in units of `r`, `draw_gem`'s base radius before each shape's
+    /// own per-shape multiplier above) for shapes whose *bounding box* isn't symmetric
+    /// around the `(cx, cy)` they're drawn at — reads as "sitting high" in the cell
+    /// otherwise, barely visible against a plain background but obvious once something
+    /// gives the cell its own visible frame (jelly's rim — see `draw_jelly_underlay`,
+    /// reported against it but really a pre-existing bug independent of jelly).
+    /// `Triangle`/`Pentagon` are drawn "point up" (an odd vertex count, one vertex
+    /// straight up), so the top point extends further from center than the flatter
+    /// bottom edge does; every other shape here is already symmetric top-to-bottom
+    /// (`Diamond`/`Hexagon` have an even, mirrored vertex count, `Circle` trivially,
+    /// `Star`'s hexagram construction too) and needs no correction. Derived from each
+    /// polygon's actual vertex geometry, not eyeballed — see git history for the math.
+    fn vertical_bias(self) -> f32 {
+        match self {
+            GemShape::Triangle => 0.3,
+            GemShape::Pentagon => 0.1032,
+            _ => 0.0,
         }
     }
 }
@@ -145,6 +186,9 @@ fn draw_gem(cx: f32, cy: f32, size: f32, color: game::Color, alpha: f32, highlig
     let base = color_rgb(color);
     let shape = GemShape::for_color(color);
     let r = size * 0.5;
+    // Recentered once here (not per-call) so the backing/inset shapes and the gloss
+    // streak below all shift together — see `vertical_bias`'s doc comment.
+    let cy = cy + r * shape.vertical_bias();
     shape.draw(cx, cy, r, a(darken(base, 0.12)));
     shape.draw(cx, cy - size * 0.02, r * 0.9, a(base));
     // A soft diagonal gloss streak — three small overlapping, fading circles along a
@@ -324,12 +368,24 @@ fn draw_board_frame() {
 /// covers most of the cell, so only a thin sliver near the corners ever showed the
 /// underlay at all, and the pale, low-opacity fill made even that sliver easy to miss.
 /// Two changes fix that: a much smaller inset (more of the cell's own footprint left
-/// exposed around the gem) and a darker-rim/lighter-fill/gloss-highlight treatment —
-/// the same layering `draw_gem` gives every gem — so jelly reads as its own distinct,
-/// wet-looking shape instead of a faint background tint, in a teal/green hue no gem
-/// color uses (can't be mistaken for a gem's own shading). Now that `board_cache` uses
-/// `RenderCache::with_backdrop` (see its own doc comment), the near-opaque alpha here
-/// composites correctly through the cache too, not just live.
+/// exposed around the gem) and a darker-rim/lighter-fill treatment — the same
+/// backing/inset layering `draw_gem` gives every gem — so jelly reads as its own
+/// distinct shape instead of a faint background tint, in a teal/green hue no gem color
+/// uses (can't be mistaken for a gem's own shading).
+///
+/// Colors are precomputed via `blend` and drawn at `alpha: 1.0`, not drawn translucent
+/// directly — see `blend`'s own doc comment for why: `RenderCache::with_backdrop` fixes
+/// `board_cache`'s drastic cache-vs-live gray mismatch, but left a small, fully
+/// reproducible residual gap for this cell specifically. An opaque draw has no
+/// composite left to be inconsistent about, cached or not.
+///
+/// A third layer — a gloss highlight circle, matching `draw_gem`'s own — was tried and
+/// dropped: whatever gem sits on the cell already draws its own highlight in roughly
+/// the same upper-left area, and since a gem's silhouette covers most of the cell, the
+/// two ended up sitting right on top of each other at the shape's edge — half inside
+/// the gem (clashing with its highlight), half spilling onto the rim. Reported as
+/// looking broken rather than additive; the rim/fill alone already reads clearly as
+/// jelly without it.
 fn draw_jelly_underlay(board: &Board) {
     for r in 0..H {
         for c in 0..W {
@@ -339,25 +395,20 @@ fn draw_jelly_underlay(board: &Board) {
             let (x, y) = cell_xy(r as f32, c as f32);
             let inset = 1.5;
             let size = CELL - inset * 2.0;
+            let board_bg = rgb(24, 22, 30);
             draw_rectangle(
                 x + inset,
                 y + inset,
                 size,
                 size,
-                Color::new(0.12, 0.47, 0.42, 0.92),
+                blend(Color::new(0.12, 0.47, 0.42, 1.0), board_bg, 0.92),
             );
             draw_rectangle(
                 x + inset + 3.0,
                 y + inset + 3.0,
                 size - 6.0,
                 size - 6.0,
-                Color::new(0.24, 0.78, 0.65, 0.88),
-            );
-            draw_circle(
-                x + size * 0.34,
-                y + size * 0.32,
-                size * 0.13,
-                Color::new(0.62, 0.95, 0.88, 0.55),
+                blend(Color::new(0.24, 0.78, 0.65, 1.0), board_bg, 0.88),
             );
         }
     }

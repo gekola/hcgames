@@ -470,17 +470,49 @@ regardless).
 made it render its *intended* color, but that intended design (a flat, pale, low-alpha
 tint mostly hidden behind the gem's own silhouette) was still hard to actually notice.**
 Two changes: a much smaller inset (`1.5px` vs. the old `3px`, so more of the cell's own
-footprint stays exposed around whatever gem sits on it) and the same darker-rim /
-lighter-fill / gloss-highlight layering `draw_gem` gives every gem, instead of one flat
-`draw_rectangle`. Picked a teal/green hue (rim `(0.12, 0.47, 0.42)`, fill `(0.24, 0.78,
-0.65)`) no gem color uses, so it reads as its own thing rather than a gem-shading
-artifact. Near-opaque alpha (`0.88`-`0.92`) rather than the old `0.28` — safe to do now
-that `board_cache`'s `with_backdrop` fix (above) means high-alpha content composites
-correctly through the cache too, not just live. This is meant to set the visual
-precedent for future per-cell overlays too (todo backlog #3's blocker tiles — Frozen,
-Locked, etc.): a colored rim + lighter fill + gloss highlight, picking a hue that reads
-as distinct from both the 6 gem colors and any other overlay already in play, rather than
-a flat tint that competes with whatever gem happens to be sitting on top of it.
+footprint stays exposed around whatever gem sits on it) and a darker-rim/lighter-fill
+treatment — the same backing/inset layering `draw_gem` gives every gem, instead of one
+flat `draw_rectangle`. Picked a teal/green hue (rim `(0.12, 0.47, 0.42)`, fill `(0.24,
+0.78, 0.65)`) no gem color uses, so it reads as its own thing rather than a gem-shading
+artifact. This is meant to set the visual precedent for future per-cell overlays too
+(todo backlog #3's blocker tiles — Frozen, Locked, etc.): a colored rim + lighter fill,
+picking a hue distinct from both the 6 gem colors and any other overlay already in play,
+rather than a flat tint that competes with whatever gem happens to be sitting on top of
+it.
+
+A third layer — a gloss highlight circle matching `draw_gem`'s own — was tried and
+dropped: since a gem's silhouette covers most of the cell, jelly's own highlight ended
+up sitting right at the gem's edge, half clashing with the gem's own highlight, half
+spilling onto the rim. Reported as looking broken rather than additive; rim/fill alone
+already reads clearly as jelly.
+
+**`with_backdrop` fixed the *drastic* cache-vs-live gray mismatch, but left a small
+(~5-7/255 per channel), fully reproducible residual gap specifically for jelly's
+near-opaque (`0.88`-`0.92` alpha) fill/rim — root cause not pinned down (some deeper
+render-target color precision/blend quirk past what `with_backdrop` addresses), found by
+screenshotting the *same* jelly cell mid-animation (live) vs. settled (cached) with the
+now-fixed `S` hotkey (see "WASM caveats" in root CLAUDE.md) and diffing — every jelly
+cell read a uniform, reproducible `(30, 111-112, 100)` when cached vs. `(29, 104, 95)`
+live, not noise.** Fixed the same way the gloss streak/bonus stripes were before
+`with_backdrop` existed: `blend(fg, board_bg, alpha)` precomputes the color in Rust and
+draws it at `alpha: 1.0` instead of actually drawing translucent — an opaque draw has no
+composite left at draw time to be inconsistent about, cached or not. Confirmed by
+re-running the same live-vs-cached screenshot diff: every sampled frame (live and
+cached alike) now reads the identical `(30, 112, 100)`.
+
+**Triangle/Pentagon gems sit visibly high in their cell — a pre-existing bug, unrelated
+to jelly, that jelly's new visible rim just made obvious** (reported as "grid
+misalignment," but it's per-shape, not per-cell — every gem is drawn at the same `(cx,
+cy)`). Root cause: both are drawn "point up" via `draw_poly` with an odd vertex count,
+so the top point extends further from the true polygon center than the flatter bottom
+edge does — the shape's *bounding box* isn't symmetric around `(cx, cy)` the way
+`Diamond`/`Hexagon`/`Circle`/`Star` (all even-vertex-count or otherwise symmetric) are.
+Measured directly: cropping a rendered gem and finding its bounding box put `Pentagon`
+~2.75px and `Triangle` (by the same geometry, larger since it's a sharper point) further
+off than that, matching the derived correction almost exactly. Fixed with
+`GemShape::vertical_bias`, a downward correction (derived from each polygon's actual
+vertex geometry, not eyeballed) applied once to `cy` in `draw_gem` before any of the
+backing/inset/highlight draws, so everything shifts together consistently.
 
 **RenderCache usage differs from every other game here**: match-3's board animates
 almost continuously (swap/flash/fall chase each other with no real idle gap *during* a
