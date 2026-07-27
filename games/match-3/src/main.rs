@@ -190,25 +190,37 @@ fn draw_tile(row: f32, col: f32, tile: Tile, alpha: f32, scale: f32, highlight: 
         }
         Tile::Bonus(color, special) => {
             draw_gem(cx, cy, size, color, alpha, highlight);
-            // Subtler than the gem itself — this is a marker, not the main event.
-            let stripe = a(Color::new(1.0, 1.0, 1.0, 0.55));
-            match special {
-                Special::RowClear => {
-                    for i in [0.32, 0.68] {
-                        draw_rectangle(x + pad, y + pad + size * i - 1.5, size, 3.0, stripe);
+            // Gated on `highlight` and drawn *opaque* (pre-blended in Rust, same
+            // `lighten` trick `draw_gem`'s gloss streak uses — see its doc comment) rather
+            // than a translucent white faded by `alpha`: this region gets cached by
+            // `RenderCache` (an offscreen target that starts transparent, not the opaque
+            // screen framebuffer everything else draws to), and a translucent stripe/ring
+            // drawn into it composited visibly grayer than the identical live draw —
+            // reported as the bonus tile markers flickering gray between moves, i.e. only
+            // while the cached `Idle`-phase texture (not the live Swap/Flash/Fall draws)
+            // was on screen, the same symptom the gloss streak had. Every call site that
+            // passes `highlight: true` already draws at `alpha: 1.0` (a settled,
+            // non-animating tile), so gating on `highlight` loses no fade that mattered.
+            if highlight {
+                let stripe = lighten(color_rgb(color), 0.55);
+                match special {
+                    Special::RowClear => {
+                        for i in [0.32, 0.68] {
+                            draw_rectangle(x + pad, y + pad + size * i - 1.5, size, 3.0, stripe);
+                        }
                     }
-                }
-                Special::ColClear => {
-                    for i in [0.32, 0.68] {
-                        draw_rectangle(x + pad + size * i - 1.5, y + pad, 3.0, size, stripe);
+                    Special::ColClear => {
+                        for i in [0.32, 0.68] {
+                            draw_rectangle(x + pad + size * i - 1.5, y + pad, 3.0, size, stripe);
+                        }
                     }
-                }
-                Special::Wrapped => {
-                    // A circular halo rather than a square ring — reads cleanly around
-                    // any of `GemShape`'s silhouettes, not just the square it used to
-                    // be drawn as.
-                    draw_poly_lines(cx, cy, 28, size * 0.52, 0.0, 3.0, stripe);
-                    draw_poly_lines(cx, cy, 28, size * 0.36, 0.0, 1.5, stripe);
+                    Special::Wrapped => {
+                        // A circular halo rather than a square ring — reads cleanly
+                        // around any of `GemShape`'s silhouettes, not just the square it
+                        // used to be drawn as.
+                        draw_poly_lines(cx, cy, 28, size * 0.52, 0.0, 3.0, stripe);
+                        draw_poly_lines(cx, cy, 28, size * 0.36, 0.0, 1.5, stripe);
+                    }
                 }
             }
         }
