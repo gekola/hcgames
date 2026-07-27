@@ -45,10 +45,13 @@ per-goal instead of singular. `gen_mystery_goals` (called from `Game::new`) roll
 distinct colors (`MYSTERY_MAX_COLORS`, clamped to however many colors are actually
 available — see below) each with its *own* randomly-picked target from
 `MYSTERY_TARGET_RANGES[count - 1]` — "various targets" per design, not one shared number.
-Win condition (`update_phase`) is a plain `.all(|g| g.collected >= g.target)`. Not part of
-`LEVELS` (yet) — `Game::new_level` sets `mystery_goals: Vec::new()` for every level, same
-"carried but unused" shape as `ingredients_target` outside `Variant::Ingredients`. No
-`Variant`-to-struct architecture change was needed for this (the todo doc's harder
+Win condition (`update_phase`) is a plain `.all(|g| g.collected >= g.target)`. Wired into
+`LEVELS` too (`Color Search`/`Rainbow Hunt`/`Color Storm`, one per color-count tier) —
+`Game::new_level` rolls `mystery_goals` the same way `Game::new` does (a `let
+mystery_goals = gen_mystery_goals(&board.active_colors)` before the `Self { .. }` literal,
+since goals are rolled fresh per episode rather than stored on `LevelParams` — a `Mystery`
+level only needed the `color_count`/`move_limit` fields every other variant already has,
+no dedicated goal-list field). No `Variant`-to-struct architecture change was needed for this (the todo doc's harder
 "multi-goal-level" idea — combining goals *across different variants*, e.g. jelly AND
 ingredients in one level — is a different, still-unbuilt ask; a `Mystery` episode's
 multiple goals are all the same kind, just different colors/targets, which fits inside
@@ -90,13 +93,25 @@ once `LevelParams::color_count` (see "Board color count scales with level" below
 possible for a board to not generate every color at all; picking a goal color the board
 never spawns would be a silently-unwinnable episode, not just a hard one. `count` is also
 clamped to `active_colors.len()` so a hypothetical very-narrow palette can't roll more
-distinct goal colors than actually exist. `Mystery` isn't wired into `LEVELS` yet, so this
-had no effect on today's numbers (`Game::new`'s free-cycling path always passes the full
-`Color::ALL`, confirmed bit-identical to the pre-fix win rates above) — it's a
-correctness-by-construction fix for whenever `Mystery` does get a level, not a balance
-change. Computed via a `let mystery_goals = ...` *before* the `Self { .. }` literal in
-`Game::new` (needs `&board.active_colors`, and `board` itself moves into that literal) —
-don't move the call inline into the struct literal without re-threading the borrow.
+distinct goal colors than actually exist. This was landed *before* `Mystery` was wired
+into `LEVELS`, specifically so that wiring couldn't introduce an unwinnable level by
+construction — confirmed bit-identical to the pre-fix free-cycling win rates at the time
+(color_count 6 there == `Color::ALL`, no behavior change), and validated for real once
+`Mystery` levels existed via the usual floor-check soak test. Computed via a `let
+mystery_goals = ...` *before* the `Self { .. }` literal in both `Game::new` and
+`Game::new_level` (needs `&board.active_colors`, and `board` itself moves into that
+literal) — don't move either call inline into its struct literal without re-threading
+the borrow.
+
+**`Mystery` levels needed no new `LevelParams` field** — `Color Search`
+(color_count 4, move_limit 20), `Rainbow Hunt` (5, 22), and `Color Storm` (6, 24) reuse
+`variant`/`move_limit`/`color_count` exactly like any other level; `score_target`/
+`jelly_cell_count`/`ingredients_target`/`time_limit` are simply dead for them, same
+"only meaningful for the corresponding variant" pattern the doc comment on `LevelParams`
+already established. Floor-checked in the same soak test as every other level: 100%,
+97%, 73% respectively (n=60 each) — consistent with their tier siblings (Warm-Up/Sticky
+Start also 100% at color_count 4; Deep Jelly/Full Batch 63%/53% at color_count 6), so no
+separate tuning pass was needed beyond confirming the floor holds.
 
 Constants live at the top of `game.rs`. Win rate must be checked empirically, not
 assumed from the heuristic weights — `--no-ui --once --variant X` across a range of

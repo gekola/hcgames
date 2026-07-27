@@ -289,6 +289,16 @@ pub const LEVELS: &[LevelParams] = &[
         color_count: 4,
     },
     LevelParams {
+        name: "Color Search",
+        variant: Variant::Mystery,
+        score_target: 0,
+        move_limit: 20,
+        jelly_cell_count: 0,
+        ingredients_target: 0,
+        time_limit: 0.0,
+        color_count: 4,
+    },
+    LevelParams {
         name: "Building Up",
         variant: Variant::Score,
         score_target: 1800,
@@ -315,6 +325,16 @@ pub const LEVELS: &[LevelParams] = &[
         move_limit: 22,
         jelly_cell_count: 0,
         ingredients_target: 2,
+        time_limit: 0.0,
+        color_count: 5,
+    },
+    LevelParams {
+        name: "Rainbow Hunt",
+        variant: Variant::Mystery,
+        score_target: 0,
+        move_limit: 22,
+        jelly_cell_count: 0,
+        ingredients_target: 0,
         time_limit: 0.0,
         color_count: 5,
     },
@@ -355,6 +375,16 @@ pub const LEVELS: &[LevelParams] = &[
         move_limit: 26,
         jelly_cell_count: 0,
         ingredients_target: 3,
+        time_limit: 0.0,
+        color_count: 6,
+    },
+    LevelParams {
+        name: "Color Storm",
+        variant: Variant::Mystery,
+        score_target: 0,
+        move_limit: 24,
+        jelly_cell_count: 0,
+        ingredients_target: 0,
         time_limit: 0.0,
         color_count: 6,
     },
@@ -467,6 +497,15 @@ impl Game {
             &Color::ALL[..params.color_count],
         );
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
+        // Same "compute from a borrow of `board` before it moves into the struct literal"
+        // shape as `Game::new` — goals are rolled fresh per episode (not stored on
+        // `LevelParams`) same as the free-cycling variant, so a `Mystery` level just needs
+        // `color_count`/`move_limit` like any other field, not a dedicated goal list.
+        let mystery_goals = if variant == Variant::Mystery {
+            gen_mystery_goals(&board.active_colors)
+        } else {
+            Vec::new()
+        };
         Self {
             board,
             variant,
@@ -482,9 +521,7 @@ impl Game {
             ingredients_target: params.ingredients_target,
             ingredients_collected: 0,
             time_remaining: params.time_limit,
-            // `Mystery` isn't part of `LEVELS` (yet) — no `LevelParams` field for it, same
-            // "carried but unused" shape as `ingredients_target` outside `Ingredients`.
-            mystery_goals: Vec::new(),
+            mystery_goals,
             phase: Phase::Playing,
             reshuffles: 0,
         }
@@ -1148,8 +1185,8 @@ fn gen_plain_tiles(active_colors: &[Color]) -> Tiles {
 /// that goal count (`MYSTERY_TARGET_RANGES`) — "various targets," not one shared number,
 /// per design. Draws from `active_colors` rather than always `Color::ALL` for the same
 /// reason: picking a goal color the board never generates would be an unwinnable episode,
-/// not just a hard one — `Mystery` isn't part of `LEVELS` yet (see `Game::new_level`), but
-/// this keeps it correct-by-construction if it ever is.
+/// not just a hard one — matters in practice now that `Variant::Mystery` levels in
+/// `LEVELS` can have a narrowed `color_count` (see `Game::new_level`).
 fn gen_mystery_goals(active_colors: &[Color]) -> Vec<MysteryGoal> {
     debug_assert!(
         !active_colors.is_empty(),
