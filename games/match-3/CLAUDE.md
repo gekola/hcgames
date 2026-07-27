@@ -390,9 +390,9 @@ Swap → (Flash → Fall) per wave → Idle, matching the already-decided outcom
 
 ## Rendering
 
-`GemShape::for_color`: Red=circle, Orange=triangle, Yellow=star (two overlapping
-triangles — macroquad has no star primitive), Green=pentagon, Blue=hexagon,
-Purple=diamond. `draw_gem` layers: darker backing shape, base-color shape inset, then
+`GemShape::for_color`: Red=circle, Orange=triangle, Yellow=star (a hexagram — macroquad
+has no star primitive), Green=pentagon, Blue=hexagon, Purple=diamond. `draw_gem` layers:
+darker backing shape, base-color shape inset, then
 (if `highlight`) a soft diagonal gloss streak (3 small circles of decreasing size/alpha
 toward the upper-left) — kept conservatively inside even a triangle/star's tight
 inradius (~0.3 × size) so it can't spill onto the dark cell background outside the
@@ -420,6 +420,29 @@ call sites in `draw_board_static`/the `else` branches of `draw_flash_live`/
 `draw_fall_live`), so nothing fades that needs to. Verified by sampling a live stripe
 pixel in a headless-browser screenshot against its gem's base color — matched
 `lighten(base, 0.55)` exactly, not the muddy near-gray the bug produced.
+
+**Yellow's hexagram used to be two overlapping `draw_poly` triangles (±90° rotated) —
+a different translucency artifact from the two above, not a `RenderCache` one.** Opaque,
+the overlap is invisible (paint over paint). At `alpha < 1` (any flash/fade), the shared
+hexagonal core gets alpha-blended *twice*, which reads as a visibly brighter patch at the
+star's center than the rest of the gem — reported as "the yellow gem looks transparent
+with a brighter overlap." Fixed for real, not with an opaque-precompute workaround (this
+one hits every alpha<1 draw, cached or not, so precomputing one blended color doesn't fit
+— the affected region isn't the whole shape): `draw_hexagram` fills the same 12-vertex
+star outline as one non-overlapping triangle fan from the center instead. The 6 outer
+tips sit exactly where the two triangles' own vertices already were (30°+60°k); the 6
+inner concave points are at 60°k, radius `r / sqrt(3)` — the standard hexagram
+inradius/circumradius ratio. A single fill has nothing left to double-blend, at any alpha.
+Verified in a headless browser: idle hexagram has no seams between the 12 triangles.
+
+**`ColorBomb`'s backing circle (20,20,26) was nearly indistinguishable from the board's
+own cell background (24,22,30)** — with no gem shape underneath and only 6 small sparkle
+dots on top, the "orb" itself was essentially invisible, so the tile read as a loose
+scatter of dots rather than a solid bomb ("crumbling"). Two-toned it the same way every
+colored gem already is (rim `(48,45,62)`, inset fill `(66,62,84)` — both clearly lighter
+than the board background) instead of one near-invisible fill. Verified in a headless
+browser: a live `ColorBomb` (needs a 5-in-a-row match, caught after ~30s of autoplay)
+reads as a cohesive dark orb with a visible rim, not scattered dots.
 
 **RenderCache usage differs from every other game here**: match-3's board animates
 almost continuously (swap/flash/fall chase each other with no real idle gap *during* a
