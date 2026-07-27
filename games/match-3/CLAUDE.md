@@ -42,7 +42,8 @@ color, generalized to a small *combination* of simultaneous color targets) neede
 so `Game::apply` just loops `self.mystery_goals` adding `res.color_cleared[goal.color
 .index()]` to each — same mechanism as `Ingredients` reading `ingredients_collected`, just
 per-goal instead of singular. `gen_mystery_goals` (called from `Game::new`) rolls 1-3
-distinct colors (`MYSTERY_MAX_COLORS`) each with its *own* randomly-picked target from
+distinct colors (`MYSTERY_MAX_COLORS`, clamped to however many colors are actually
+available — see below) each with its *own* randomly-picked target from
 `MYSTERY_TARGET_RANGES[count - 1]` — "various targets" per design, not one shared number.
 Win condition (`update_phase`) is a plain `.all(|g| g.collected >= g.target)`. Not part of
 `LEVELS` (yet) — `Game::new_level` sets `mystery_goals: Vec::new()` for every level, same
@@ -83,6 +84,19 @@ line, since the count itself is randomly rolled per episode): count=1 53.0% (224
 count=2 49.4% (238/482), count=3 54.8% (244/445) — all inside the 45-55% band. Don't
 re-derive the naive proportional-split approach without re-checking this; it's a real,
 measured trap, not a hunch.
+
+**`gen_mystery_goals` draws from `board.active_colors`, not always `Color::ALL`** — added
+once `LevelParams::color_count` (see "Board color count scales with level" below) made it
+possible for a board to not generate every color at all; picking a goal color the board
+never spawns would be a silently-unwinnable episode, not just a hard one. `count` is also
+clamped to `active_colors.len()` so a hypothetical very-narrow palette can't roll more
+distinct goal colors than actually exist. `Mystery` isn't wired into `LEVELS` yet, so this
+had no effect on today's numbers (`Game::new`'s free-cycling path always passes the full
+`Color::ALL`, confirmed bit-identical to the pre-fix win rates above) — it's a
+correctness-by-construction fix for whenever `Mystery` does get a level, not a balance
+change. Computed via a `let mystery_goals = ...` *before* the `Self { .. }` literal in
+`Game::new` (needs `&board.active_colors`, and `board` itself moves into that literal) —
+don't move the call inline into the struct literal without re-threading the borrow.
 
 Constants live at the top of `game.rs`. Win rate must be checked empirically, not
 assumed from the heuristic weights — `--no-ui --once --variant X` across a range of

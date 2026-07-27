@@ -410,6 +410,14 @@ impl Game {
     pub fn new(variant: Variant, generation: u32) -> Self {
         let board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET, &Color::ALL);
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
+        // Computed from `board.active_colors` (a borrow) before `board` moves into the
+        // struct literal below — see `gen_mystery_goals`' doc comment for why it can't
+        // just default to `Color::ALL`.
+        let mystery_goals = if variant == Variant::Mystery {
+            gen_mystery_goals(&board.active_colors)
+        } else {
+            Vec::new()
+        };
         Self {
             board,
             variant,
@@ -435,11 +443,7 @@ impl Game {
             ingredients_target: INGREDIENTS_TARGET,
             ingredients_collected: 0,
             time_remaining: TIME_LIMIT,
-            mystery_goals: if variant == Variant::Mystery {
-                gen_mystery_goals()
-            } else {
-                Vec::new()
-            },
+            mystery_goals,
             phase: Phase::Playing,
             reshuffles: 0,
         }
@@ -1137,12 +1141,22 @@ fn gen_plain_tiles(active_colors: &[Color]) -> Tiles {
     tiles
 }
 
-/// Rolls a fresh `Variant::Mystery` goal set: 1-3 distinct colors (`MYSTERY_MAX_COLORS`),
-/// each with its own randomly rolled target in the range for that goal count
-/// (`MYSTERY_TARGET_RANGES`) — "various targets," not one shared number, per design.
-fn gen_mystery_goals() -> Vec<MysteryGoal> {
-    let count = macroquad::rand::gen_range(1, MYSTERY_MAX_COLORS + 1);
-    let mut colors = Color::ALL.to_vec();
+/// Rolls a fresh `Variant::Mystery` goal set: 1-3 distinct colors (`MYSTERY_MAX_COLORS`,
+/// clamped to however many `active_colors` the board actually has, so a level with a
+/// narrowed palette — see `LevelParams::color_count` — can never roll a goal color that
+/// literally can't ever spawn) each with its own randomly rolled target in the range for
+/// that goal count (`MYSTERY_TARGET_RANGES`) — "various targets," not one shared number,
+/// per design. Draws from `active_colors` rather than always `Color::ALL` for the same
+/// reason: picking a goal color the board never generates would be an unwinnable episode,
+/// not just a hard one — `Mystery` isn't part of `LEVELS` yet (see `Game::new_level`), but
+/// this keeps it correct-by-construction if it ever is.
+fn gen_mystery_goals(active_colors: &[Color]) -> Vec<MysteryGoal> {
+    debug_assert!(
+        !active_colors.is_empty(),
+        "no active colors to pick a goal from"
+    );
+    let count = macroquad::rand::gen_range(1, MYSTERY_MAX_COLORS + 1).min(active_colors.len());
+    let mut colors = active_colors.to_vec();
     shuffle(&mut colors);
     let (min, max) = MYSTERY_TARGET_RANGES[count - 1];
     colors
