@@ -101,13 +101,39 @@ impl GemShape {
             GemShape::Pentagon => draw_poly(cx, cy, 5, r * 1.08, -90.0, color),
             GemShape::Hexagon => draw_poly(cx, cy, 6, r, 90.0, color),
             // A hexagram (two overlapping triangles) rather than a true 5-point star —
-            // macroquad has no star primitive, and this reads as a star at tile scale
-            // with two cheap `draw_poly` calls instead of a hand-built vertex list.
-            GemShape::Star => {
-                draw_poly(cx, cy, 3, r * 1.2, -90.0, color);
-                draw_poly(cx, cy, 3, r * 1.2, 90.0, color);
-            }
+            // macroquad has no star primitive, and this reads as a star at tile scale.
+            GemShape::Star => draw_hexagram(cx, cy, r * 1.2, color),
         }
+    }
+}
+
+/// Fills a hexagram (two equilateral triangles, ±90° rotated — the same shape
+/// `GemShape::Star` used to draw as two separate overlapping `draw_poly` calls) as one
+/// non-overlapping 12-vertex fan instead. Two alpha-blended triangles double-blend their
+/// shared hexagonal core, which reads as a visibly *brighter* patch at the star's center
+/// whenever `color` is translucent (any tile fade/flash) — reported as "the yellow gem
+/// looks transparent with a bright overlap." A single fill has no overlap to double-blend
+/// regardless of alpha, so this is a real fix, not a `RenderCache`-style opaque-precompute
+/// workaround (this bug hits every draw at alpha<1, cached or not).
+///
+/// The 12 boundary vertices alternate the outer star tips (radius `r`, at 30°+60°k — where
+/// the two triangles' own vertices already sit, see the rotations above) with the inner
+/// concave points where their edges cross (radius `r / sqrt(3)`, the standard hexagram
+/// inradius/circumradius ratio, at 60°k). A center-to-boundary triangle fan fills this
+/// correctly in one pass because a hexagram is star-shaped (every boundary point is
+/// visible from the center along a straight line inside the shape).
+fn draw_hexagram(cx: f32, cy: f32, r: f32, color: Color) {
+    let inner = r / 3f32.sqrt();
+    let verts: Vec<Vec2> = (0..12)
+        .map(|k| {
+            let ang = k as f32 * std::f32::consts::PI / 6.0;
+            let rad = if k % 2 == 0 { inner } else { r };
+            vec2(cx + ang.cos() * rad, cy + ang.sin() * rad)
+        })
+        .collect();
+    let center = vec2(cx, cy);
+    for i in 0..12 {
+        draw_triangle(center, verts[i], verts[(i + 1) % 12], color);
     }
 }
 
@@ -225,7 +251,14 @@ fn draw_tile(row: f32, col: f32, tile: Tile, alpha: f32, scale: f32, highlight: 
             }
         }
         Tile::ColorBomb => {
-            draw_circle(cx, cy, size * 0.5, a(rgb(20, 20, 26)));
+            // The old single-tone fill (20,20,26) was nearly indistinguishable from the
+            // board's own cell background (24,22,30) — with no gem shape and only 6 small
+            // sparkle dots on top, the "orb" itself was essentially invisible, so the tile
+            // read as a loose scatter of dots rather than a solid bomb ("crumbling").
+            // Two-toned the same way every colored gem already is (a darker rim, a
+            // distinctly lighter inset) instead of one near-invisible fill.
+            draw_circle(cx, cy, size * 0.5, a(rgb(48, 45, 62)));
+            draw_circle(cx, cy, size * 0.42, a(rgb(66, 62, 84)));
             let sparkle_colors = game::Color::ALL;
             for (i, &c) in sparkle_colors.iter().enumerate() {
                 let ang = i as f32 / sparkle_colors.len() as f32 * std::f32::consts::TAU;
