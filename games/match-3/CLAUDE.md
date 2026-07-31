@@ -1,6 +1,6 @@
 # Match-3
 
-Self-playing match-3 (Candy Crush-style swap-and-cascade), greedy 1-ply AI. Board 8x8,
+Self-playing match-3 (Candy Crush-style swap-and-cascade), beam-search AI (depth 2). Board 8x8,
 6 colors, each color with its own silhouette (not just a color-coded fill). Directory/
 package name has the dash; `xtask::title` renders it "Match 3".
 
@@ -9,18 +9,63 @@ package name has the dash; `xtask::title` renders it "Match 3".
 | File | Contents |
 |------|----------|
 | `src/game.rs` | `Board`/`Tile`/`Special`/`Color`, `Game`, `resolve()` (swap → cascade), board gen |
-| `src/solver.rs` | `choose_move` — greedy 1-ply eval over `Game::simulate` |
+| `src/solver.rs` | `choose_move` — `beam_solver`-backed depth-2 search scored by `score_resolution`'s tuned eval over `Game::simulate` |
 | `src/main.rs` | `GemShape`/`draw_gem`/`draw_tile`, `View`/`StepPhase` animation state machine, CLI |
 
-## Why no `beam_solver`
+## Solver: beam search, not greedy — promoted from an opt-in experiment
 
-Unlike Klondike/Spider/Tetris, there's no "known next piece" to search a second ply
-into — what a swap reveals depends on where gravity happens to refill from, and an 8x8
-board already offers ~100 legal swaps per move, so a second ply multiplies branching
-factor rather than sharpening a small candidate set. `solver::choose_move` enumerates
-`Game::legal_moves()`, resolves each via `Game::simulate` (pure, doesn't mutate `Game`),
-and picks the highest-scoring `Resolution` by `solver::score_resolution`. See CLAUDE.md
-(root)'s "Self-playing solver games" section for this as a named 3rd solver shape.
+Unlike Klondike/Spider/Tetris, there's no "known next piece" to search a second ply into
+— what a swap reveals depends on where gravity happens to refill from, and an 8x8 board
+already offers ~100 legal swaps per move, so on paper a second ply multiplies branching
+factor rather than sharpening a small candidate set (root CLAUDE.md's "Self-playing
+solver games" section names this as a 3rd solver shape that *defaults* to a cheap 1-ply
+eval). match-3 was originally built exactly that way: a plain greedy `choose_move`
+enumerating `Game::legal_moves()`, resolving each via `Game::simulate`, and picking the
+highest-scoring `Resolution` by `solver::score_resolution`.
+
+**A direct measurement disproved the theoretical objection.** `lib/beam_solver` (width 6,
+depth 2, ~800-node budget) was wired in as an opt-in `--solver beam|hybrid` experiment and
+A/B'd against greedy at n=500 (`HCG_SEED=1..500`, `--no-ui --once`, release), RNG-confound
+fixed (see the preview-oracle note below). Beam won across every variant: Score
+56.9%→66.4%, Jelly 59.1%→73.1%, Mystery 49.9%→62.7%, Ingredients 44.9%→51.3%, Timed mean
+score 10061→10886 — +6-14pp, at ~1.5ms/move (nowhere near a per-tick budget problem, even
+on mobile). See `.notes/match3_solver_beam_todo.md` for the full table. As of this change,
+beam is the *default and only* solver: both greedy and the throttled `hybrid` were deleted
+(hybrid was worst-of-both — its every-3rd-move throttle cost more than the already-cheap
+full beam saved). `solver::choose_move` is now the sole entry point, a `beam_solver` search
+scored by the same tuned `score_resolution`.
+
+**Building the beam solver surfaced a real, subtle bug worth knowing about before touching
+`Game::simulate`/`resolve`/anything RNG-related in this file: a hypothetical-scoring
+clone must never let its RNG carry forward the real board's actual future stream.**
+`Board` carries its own `Rng` (SplitMix64) rather than drawing from the ambient global
+`macroquad::rand` — necessary because two solvers that call `simulate` a different
+number of times per real move (beam vs. greedy) would otherwise perturb the *real*
+game's future refills by different amounts at the same `HCG_SEED`, breaking any A/B
+between them. The naive version of this fix — reseed a board's own `Rng` once per board
+from the global RNG, then let clones simply *carry forward* whatever state the source
+board's `rng` was already in — is not just insufficiently isolated, it's actively worse:
+since nothing else touches the real board between a `Game::simulate` scoring call and a
+same-move real `Game::apply`, carrying the real state forward makes the "preview" a
+**perfect oracle** for whatever move actually gets applied next, not an unbiased
+estimate of a hypothetical. Measured directly: every variant's win rate jumped to
+85-100% (from a healthy 45-65% band) the first time this was tried, which is what caught
+it — re-run the seed sweep after any change here and treat near-100% as a bug signal,
+not a win. The actual fix, `game::preview_seed(board, mv)`: reseed every
+hypothetical-resolve clone's `rng` from a **deterministic hash of the pre-move board
+content + the move** (a hand-rolled `DeterministicHasher`, not
+`std::collections::hash_map::DefaultHasher` — see "`HCG_SEED` reproducibility gotcha"
+below for why `std`'s default hasher specifically can't be used for anything that
+affects which move gets chosen) instead of carrying the real stream forward. This keeps
+previews fully decorrelated from the real future (no oracle) while staying deterministic
+given `(board, move)` and independent of caller/call-count (the original fairness
+requirement). Two call sites need this, not one: `Game::simulate` itself, and
+`beam_solver::SearchState::apply`'s impl for `Game` in `solver.rs` — the beam engine's
+own line-advancing `apply` (used to generate later-ply candidates, not just to score a
+move) is a second, separate leak of the exact same bug, reached via a different call
+path. Only real gameplay (`Game::apply` called on `self.board` directly, never a clone)
+still continues a board's actual running stream, uninterrupted by however much scoring
+happens around it.
 
 ## Goal variants
 
@@ -69,6 +114,22 @@ mode), an ordinary 3-match of a *target color specifically* already scores `3 ×
 MYSTERY_WEIGHT = 900` in one shot — close enough to `COMBO_BONUS` (1200) that the
 near-miss-losing-the-comparison pattern `Jelly` had just doesn't arise here. Dropped
 rather than shipped as inert complexity; don't re-add without new evidence.
+
+**Re-tried under the beam solver + multi-goal `Mystery` — still doesn't help, now with a
+measurable *regression*.** The old ablation above was under the greedy solver and a single
+fixed goal, so beam's different eval landscape + the multi-goal shape counted as genuinely
+new conditions worth a re-test (per this file's "don't re-add without new evidence" rule
+cutting both ways). Implemented as a `MYSTERY_ENDGAME_*` bonus aimed at the single
+*bottleneck* goal (least-complete still-open goal, `min` remaining need) rather than
+blanket across every open goal, same `remaining≤4`/`bonus 5000` shape as `JELLY_ENDGAME_*`.
+Ablation on a fresh disjoint range (`HCG_SEED=301..600`, n=300, `--variant mystery`,
+bonus-zeroed baseline vs. active), bucketed by goal count: overall 61.3%→**59.0%**, and
+every bucket regressed (g1 65.0%→62.5%, g2 61.7%→59.1%, g3 58.1%→56.2%). Reverted (consts
++ logic deleted). Same root cause as the greedy finding still holds under beam: a 3-match
+of the target color already scores ~900, close enough to `COMBO_BONUS` (1200) that there's
+no near-miss-loses-to-combo pattern to fix; forcing dominance just perturbs move choice
+slightly the wrong way. A second, independent "didn't help" data point — don't re-attempt
+without new evidence beyond "beam is new."
 
 **Multi-goal balance surprised expectations going in — naive "split the single-goal
 target across N colors" made 2-3 goal episodes trivially easy, not harder.** First pass
@@ -178,6 +239,45 @@ overfitting: 90→97/150 (tuning range), 85→88/150 (held-out range) — both p
 holdout gain smaller than tuning gain as expected, not a fluke. `Score`/`Ingredients`
 win rates confirmed unchanged (this bonus is gated to `Variant::Jelly` only).
 
+**`JELLY_ENDGAME_BONUS` alone still leaks jelly-endgame near-misses under the depth-2
+beam — the *path-additive* bonus lets the beam defer the winning clear onto a phantom
+refill. Fixed with a root-ply-only companion (`solver::JELLY_ENDGAME_ROOT_BONUS`).** L11
+"Deep Jelly" (`LEVELS[10]`, 22 jelly / 24 moves / 6 colors) was losing ~28% (n=150),
+100% near-miss, almost all ending `jelly_remaining=1`. Instrumented every losing episode's
+endgame turns (`jr≤4`, disjoint seeds 151-300): **33 of 38 losses had ≥1 turn where a
+legal move would clear jelly immediately but the beam picked one that didn't — and the
+passed-up alternative frequently cleared *more* jelly AND scored *more* raw points**,
+which a 1-ply eval structurally cannot do, so the culprit had to be the depth-2 search.
+Root cause: `beam_solver` scores whole lines by *cumulative sum* and `JELLY_ENDGAME_BONUS`
+is path-additive, so a plan that clears the last jelly at ply 2 earns the same 5000/cell
+at ply 2 *plus* banks ply-0's incidental `score_gained` on top — out-scoring the "win now"
+line by that incidental margin. But ply 2 rides a `preview_seed`-decorrelated phantom
+refill (see the RNG note above) that won't materialize, so the deferred win evaporates.
+Fix: an extra `JELLY_ENDGAME_ROOT_BONUS` (4000/cell, `jr≤JELLY_ENDGAME_REMAINING`,
+`Variant::Jelly` only) applied in `score_root` but **not** `score_step` — only the root
+move is ever actually applied, so crediting real immediate jelly progress over a
+hypothetical later clear is exactly correct. `choose_move` now passes a distinct
+`beam_score_root` (= `beam_score` + this bonus) for ply 0; `beam_score` still scores every
+later ply. Measured across five disjoint 150-seed ranges (151-900): 533→616/750 overall
+(71.1%→82.1%, +11pp), four ranges +19/+21/+19/+25, one flat (-1) — robustly past the
+"~5pp is noise" bar, not one lucky range. Floor test unregressed (Jelly levels 2/6 stay
+100%/97%; every level ≥ floor; Score/Timed/Ingredients/Mystery untouched, gated).
+
+**L14 "Against the Clock" (`LEVELS[13]`, `Timed`, target 8200 / 55s = 55 moves) near-miss
+losses are board-luck/pacing, *not* an eval miss — no fix, mirrors the `Score`-variant
+"cascade-starved variance" finding.** Diagnosis (seeds 151-300): replayed every episode a
+second time with a *pure highest-`score_gained` 1-ply* policy and compared final scores.
+Beam wins 123/150 (82%); pure-score greedy wins only 94/150 — **beam already beats raw
+score-chasing in aggregate**, so it isn't leaving points on the table. Greedy scores
+higher *only* on the subset of beam's own 27 losses (would-win 19 of them, +560 median
+score), but that policy loses far more elsewhere — you can't capture the subset benefit
+without the aggregate cost unless the eval becomes score-gap/time-aware (a much bigger
+change, not a weight tweak). Losers use all 55 moves (winners finish in ~44), median
+shortfall only 510 pts (~94% of target) — a smooth near-miss distribution, the signature
+of variance, not a solver blind spot. L14 also isn't below floor (82% on 151-300, 63% on
+1-60), so no balance lever needed either. Left as-is; don't reweight `Timed` blind — moving
+toward greedy would regress the aggregate.
+
 **`Ingredients` has no *reweighting* fix, but does have a *different-mechanism* fix that
 works.** Re-tried the same low-remaining/dominance idea there and it didn't move the
 needle (61-62/150 vs baseline 61) — reweighting genuinely can't help here: an ingredient
@@ -215,6 +315,16 @@ native release build (150-episode batch: 0.445s→1.799s baseline vs. lookahead)
 against the fixed tick interval a solver runs at, including on WASM/mobile, since this
 isn't a per-frame cost.
 
+**Superseded and removed once beam search shipped as the default** (see "Solver: beam
+search, not greedy" above). This whole `best_next_move_ingredient_gain`/
+`INGREDIENT_LOOKAHEAD_*` hand-rolled top-12-candidates lookahead is gone — beam's genuine
+depth-2 search across the *full* candidate set outperforms it *without* the hack being
+ported into beam's eval at all: beam still beat greedy on `Ingredients` (44.9%→51.3% at
+n=500), the one variant this lookahead was built for, which is the evidence it wasn't
+needed. Kept the writeup above because the tuning story (setup-heuristic vs. reweighting
+vs. narrow lookahead, and the board-gen lever that was rejected as noise) is still a real
+lesson worth not re-deriving.
+
 A *board-gen* lever was also tried and rejected: spawning ingredients 2 rows lower
 (`gen_range` in `gen_board`'s `Ingredients` arm, rows 2-3 instead of 0-1) to shorten the
 required descent. Looked promising on one seed range (+12) but was *worse* on the other
@@ -224,6 +334,54 @@ noise, not signal; don't ship a change on the strength of one favorable range wi
 checking at least two more — `Ingredients`' baseline win rate alone swings ~7 points
 range to range (34%-41% across three 150-seed samples with *no* code change), so a
 single-range "+8pts" can easily be nothing.
+
+**A *deeper beam* (depth 3) for `Ingredients` only was tried under the beam solver and
+rejected — the gravity-gated stall is structural, not search-depth-reachable.** Rationale
+going in: unlike a *weight* change (which can't touch a turn where no legal move advances
+the goal), a deeper search *could* score a 3-move column-clearing plan above a shallower
+alternative even when step 1 does nothing for the ingredient this turn; `BEAM_NODE_BUDGET`
+bounds cost so depth 3 stays cheap (measured 4.1ms/move, trivial vs. tick). Measured on
+disjoint ranges vs. same-range depth-2 baseline, every measurement flat-to-worse:
+free-cycle `Ingredients` `HCG_SEED=301..600` 48.3%→51.0% (+2.7pp, *under* the ~5pp noise
+floor — and 140 of 300 episodes flipped outcome for a net +8, the churn signature of
+noise, not a systematic gain: deeper search just picks different moves → different
+`preview_seed`-reseeded refill futures → near-coin-flip different outcomes); L7 Two-by-Two
+`151..=300` 73.3%→**57.3%** (-16pp); L12 Full Batch 57.3%→53.3% (-4pp). Reverted to a
+single global `BEAM_DEPTH` (2). Confirms this section's standing `Ingredients` diagnosis:
+"no legal move can advance the goal this turn" is *actually true* on the stalled turns, so
+more plies have nothing better to find — the loss is gravity/board-gen-gated, not skill.
+Don't re-attempt a depth bump here without evidence that changes.
+
+**Two remaining `.notes/match3_solver_beam_todo.md` beam levers (#3 step-scoring, #5
+`is_pointless`) investigated and both ruled out — nothing shipped.** Fresh disjoint range
+`HCG_SEED=1000..1200` (n=200 free-cycle each + L7/L11/L12/L14/L15), baseline confirmed
+healthy first (Jelly 83.5%, L11 79.5%, Score 58.5%, Mystery 64.0%, Ingredients 48.5%).
+- **`is_pointless` (#5): no meaningful category exists here.** Every legal swap clears
+  cells — `is_legal_swap` only admits a `Normal` two-plain swap when it forms a match, and
+  `Combo`/`SoloTrigger` swaps always fire a bonus effect — so there's no legal-but-useless
+  move to filter (unlike Klondike/Spider's empty-effect stock draws). A "prune the
+  worst-scoring fraction" filter is also provably output-neutral: `beam_solver` already
+  sorts root candidates by `score_root` and truncates to `width`, so a score-floor filter
+  can't change which `width` survive; and match-3's ~100-move branching × width 6 × depth
+  2 stays under `BEAM_NODE_BUDGET` (800), so it never exhausts budget where a step-ply
+  filter could matter. Left `|_, _| false`.
+- **General step-ply goal-progress discount (#3b): flat-to-negative.** Multiplied only the
+  goal terms (jelly/ingredient/mystery clears + progress + setup, *not* raw
+  `score_gained`/combo/bonus-spawn) by a factor <1 in `score_step` while leaving
+  `score_root` full — the general version of the `JELLY_ENDGAME_ROOT_BONUS` lesson (later
+  plies ride a `preview_seed` phantom refill). d=0.75: Jelly 83.5→80.0, Mystery 64.0→64.5,
+  Ingredients 48.5→45.5, L11 79.5→80.5, L12 48.5→45.5. d=0.5: Jelly 82.5, Mystery 61.0,
+  Ingredients 44.5, L11 78.0, L12 44.5. Score/L14/L15 identical by construction (no goal
+  terms). No metric beat baseline past noise; Ingredients/L12 regressed. The L11 jelly
+  case the root bonus already handles didn't want generalizing — reverted.
+- **Redundant `resolve()` per node (#3a): real but not worth fixing.** `SearchState::apply`
+  (solver.rs) resolves + discards the `Resolution`, then `beam_score`/`beam_score_root`
+  re-`simulate` the same `(board, move)` (identical `preview_seed`) to score it — every
+  node resolves twice. But the closures only get `&Game`, so removing the second resolve
+  needs a `Resolution` stored on `Game`, which every beam clone would then deep-clone
+  (waves `Vec`s) — likely adding clone cost, not net-saving. Perf is already trivial
+  (2.65ms/move release across the 9-config sweep, vs. tens-of-ms tick), so not worth the
+  complexity. Left as-is.
 
 **`Score`'s "chain-of-bonuses planning" gap (todo backlog bullet 3) has no real
 headroom**: instrumented actual play and found combos fire in **7 of ~1200 moves across
@@ -309,6 +467,34 @@ Run it after touching `LEVELS` or the solver's weights:
 ```
 cargo test --release -p match-3 level_line_win_rates -- --ignored --nocapture
 ```
+
+**L12 "Full Batch" and L15 "Grand Finale" were both above-floor but outlier-low next to
+their color_count=6 siblings (50%/35% vs. Deep Jelly 85%/Color Storm 85%/Against the
+Clock 63%) — re-swept post beam-promotion and fixed via level params, not the solver.**
+A dedicated instrumented sweep (n≈450 each, disjoint from the floor test's own range)
+found the two losses are different shapes, matching this section's existing
+per-variant diagnoses exactly:
+- **L12 (`Ingredients`, target 3/move_limit 26): 152/222 losses (68%) were short by
+  exactly 1 ingredient** — the same "gravity-gated stall" this file already documents
+  as *not* fixable by reweighting or deeper search (see "`Ingredients` has no
+  *reweighting* fix" above). Since the block is structural per-turn, not a solver
+  blind spot, the fix is a level-param one: **`move_limit` 26→28**, giving a stalled
+  board more chances for gravity to eventually deliver the last ingredient. Not a
+  solver change.
+- **L15 (`Score`, target 3400/move_limit 18): only 20/279 losses (7%) were near-miss**
+  (median shortfall 790/3400, ~23% short) — a broad scoring deficit, the same
+  "target set too high for the move budget" shape that already justified lowering the
+  free-cycling module constant (`SCORE_TARGET` 3400→3100, see "Follow-up, same
+  broad-deficit diagnosis" above). That fix didn't touch `LEVELS` (each level's own
+  `score_target` is independent by design), so L15 was left sitting at the same 3400
+  value the free-cycling variant was already measured too high at, on a *tighter*
+  budget (18 moves vs. the free variant's 20). Fix: **`score_target` 3400→3000**.
+
+Both candidates were swept over two disjoint 150-seed ranges before shipping (this
+file's usual bar): L12 move_limit=28 → 54.7%/58.7%; L15 target=3000 → 53.3%/48.7% —
+both landed in the healthy ~45-60% band on both ranges, not one lucky range. Re-running
+the real floor test confirmed it end to end: L12 50%→57%, L15 35%→53% (n=60), every
+other level unchanged, still all ≥ floor.
 
 **Board color count scales with level** (todo backlog item #2): `LevelParams::color_count`
 (4-6, only meaningful for `Levels` — every free-cycling variant always uses the full
@@ -542,8 +728,11 @@ frame while animating, `board_cache.draw()` only when settled) rather than Tetri
 
 `game.rs`'s `#[cfg(test)]` module includes `full_playthrough_terminates_for_every_variant`
 — a soak test (10 episodes/variant via the real `crate::solver::choose_move`) asserting
-termination and that every applied move came from `legal_moves()`. Worth this shape of
-test for any new self-playing game, not just this one.
+termination and that every applied move came from `legal_moves()`. Since `choose_move` is
+now the `beam_solver`-backed entry point, each episode constructs a fresh
+`solver::new_beam_search()` and passes `&mut beam` in — same per-episode `Beam` lifetime
+`Session` follows (a stale `visited` set must never carry across episodes). Worth this
+shape of test for any new self-playing game, not just this one.
 
 ## Running
 

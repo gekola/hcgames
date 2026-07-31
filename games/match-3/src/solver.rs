@@ -1,4 +1,4 @@
-use crate::game::{Board, Game, H, Move, Resolution, Tile, Variant, W};
+use crate::game::{Board, Game, H, Move, Phase, Resolution, Rng, Tile, Variant, W, preview_seed};
 
 /// Extra weight per bonus tile consumed (colored bonus or `ColorBomb`) — encourages the
 /// bot to actually chain into/detonate specials rather than only chasing raw `score_gained`,
@@ -31,6 +31,21 @@ const INGREDIENT_PROGRESS_WEIGHT: i64 = 180;
 /// disjoint from the one used to pick this threshold/magnitude, to rule out overfitting.
 const JELLY_ENDGAME_REMAINING: u32 = 4;
 const JELLY_ENDGAME_BONUS: i64 = 5000;
+
+/// Root-only (ply-0) extra emphasis on *immediately* clearing jelly in the endgame,
+/// applied in `score_root` but **not** `score_step`. `JELLY_ENDGAME_BONUS` alone isn't
+/// enough under the depth-2 beam: the beam scores whole lines by cumulative sum, and that
+/// bonus is path-additive, so a plan that defers the winning jelly-clear to ply 2 earns
+/// the *same* endgame bonus at ply 2 while also banking ply-0's incidental `score_gained`
+/// on top — out-scoring "clear the last jelly now" by that incidental margin. But ply 2
+/// rides a `preview_seed`-decorrelated phantom refill (see the RNG note in CLAUDE.md) that
+/// won't materialize in real play, so the deferred win evaporates and the episode is lost
+/// with 1-2 jelly left (L11 "Deep Jelly" near-miss losses — 33 of 38 losing episodes on a
+/// seed sweep had the bot pass up an available immediate jelly-clear whose alternative
+/// *also* scored higher, which a 1-ply eval structurally cannot do; only the depth-2
+/// deferral can). Only the *root* move is ever actually applied, so crediting real
+/// immediate jelly progress above a hypothetical later clear is correct, not a hack.
+const JELLY_ENDGAME_ROOT_BONUS: i64 = 4000;
 
 /// A `Mystery` move is scored by how many cells of `game.mystery_color` it clears.
 /// `Jelly`'s dominance-threshold trick (`JELLY_ENDGAME_*`) was tried here too on the
@@ -78,58 +93,6 @@ fn ingredient_setup_score(board: &Board) -> i64 {
     primed
 }
 
-/// Narrow 2-ply lookahead for `Ingredients`, scoped to *only* moves near an
-/// uncollected ingredient's column — not a general 2-ply (root CLAUDE.md's "Self-playing
-/// solver games" section already rules that out: ~100 legal swaps squared multiplies
-/// branching rather than sharpening a candidate set). Only examines the top
-/// `INGREDIENT_LOOKAHEAD_TOPK` first-ply candidates by 1-ply score, and within each,
-/// only second-ply moves touching a column adjacent to a still-uncollected ingredient —
-/// bounded cost even on a low-end mobile CPU. Rewards realized (deterministically
-/// simulated, not just "primed") completion one move further out than
-/// `ingredient_setup_score` can see.
-const INGREDIENT_LOOKAHEAD_TOPK: usize = 12;
-const INGREDIENT_LOOKAHEAD_WEIGHT: i64 = 450;
-
-fn ingredient_columns(board: &Board) -> Vec<usize> {
-    let mut cols = Vec::new();
-    for row in &board.tiles {
-        for (c, tile) in row.iter().enumerate() {
-            if matches!(tile, Tile::Ingredient) && !cols.contains(&c) {
-                cols.push(c);
-            }
-        }
-    }
-    cols
-}
-
-/// Best `ingredients_collected` achievable by a single legal move restricted to columns
-/// within 1 of `cols` — the only moves that can plausibly affect one of these ingredients'
-/// fall path next turn.
-fn best_next_move_ingredient_gain(board: &Board, cols: &[usize]) -> i64 {
-    let touches = |p: (usize, usize)| cols.iter().any(|&c| p.1.abs_diff(c) <= 1);
-    let mut best = 0i64;
-    for r in 0..H {
-        for c in 0..W {
-            for &(dr, dc) in &[(0i32, 1i32), (1, 0)] {
-                let (nr, nc) = (r as i32 + dr, c as i32 + dc);
-                if nr < 0 || nc < 0 || nr as usize >= H || nc as usize >= W {
-                    continue;
-                }
-                let (nr, nc) = (nr as usize, nc as usize);
-                let (a, b) = ((r, c), (nr, nc));
-                if !(touches(a) || touches(b)) || !crate::game::is_legal_swap(&board.tiles, a, b) {
-                    continue;
-                }
-                let mut scratch = board.clone();
-                let gained =
-                    crate::game::resolve(&mut scratch, Move { a, b }).ingredients_collected;
-                best = best.max(gained as i64);
-            }
-        }
-    }
-    best
-}
-
 fn score_resolution(game: &Game, res: &Resolution) -> i64 {
     let mut s = res.score_gained as i64;
     s += res.jelly_cleared as i64 * JELLY_WEIGHT;
@@ -168,44 +131,112 @@ fn score_resolution(game: &Game, res: &Resolution) -> i64 {
     s
 }
 
-/// Enumerates every legal move, resolves each on a scratch clone of the board, and picks
-/// the highest-scoring one — a plain greedy 1-ply eval rather than `beam_solver`'s
-/// depth-2 lookahead (unlike Tetris's single known-next-piece, there's no equivalent
-/// "next" to look ahead into here: the tile a swap reveals depends on where gravity
-/// happens to refill from, and an 8x8 board already offers on the order of 100 legal
-/// swaps per move, so a second ply would multiply that branching factor rather than
-/// sharpen a small candidate set). `None` only if `legal_moves()` is empty, which
-/// `Game::apply`'s reshuffle-on-deadlock keeps from happening during normal play.
-pub fn choose_move(game: &Game) -> Option<Move> {
-    let mut candidates: Vec<(Move, i64, Board)> = game
-        .legal_moves()
-        .into_iter()
-        .map(|mv| {
-            let res = game.simulate(mv);
-            let score = score_resolution(game, &res);
-            let board_after = res
-                .waves
-                .last()
-                .map(|w| w.board_after.clone())
-                .unwrap_or_else(|| game.board.clone());
-            (mv, score, board_after)
-        })
-        .collect();
+// ── `beam_solver`-backed move selection (the default and only solver). Root CLAUDE.md's
+// "Self-playing solver games" section notes match-3 doesn't obviously fit `beam_solver`'s
+// shape — no known-next-tile to search a second real ply into, since the tile a swap
+// reveals depends on where gravity refills from — but a direct measurement disproved that
+// theoretical objection: depth-2 beam beat the old greedy 1-ply eval by 6-14pp win rate
+// across every variant at ~1.5ms/move, so it was promoted to the default and greedy/hybrid
+// were deleted. See `.notes/match3_solver_beam_todo.md` and this crate's `CLAUDE.md` for
+// the full numbers.
 
-    if game.variant == Variant::Ingredients {
-        candidates.sort_by_key(|&(_, score, _)| std::cmp::Reverse(score));
-        for (_, score, board_after) in candidates.iter_mut().take(INGREDIENT_LOOKAHEAD_TOPK) {
-            let cols = ingredient_columns(board_after);
-            if cols.is_empty() {
-                continue;
-            }
-            *score +=
-                best_next_move_ingredient_gain(board_after, &cols) * INGREDIENT_LOOKAHEAD_WEIGHT;
-        }
+impl beam_solver::SearchState for Game {
+    type Move = Move;
+
+    fn legal_moves(&self) -> Vec<Move> {
+        // Resolves to the inherent `Game::legal_moves` (inherent methods always win
+        // over trait methods in call-site resolution, even from inside this same impl),
+        // not infinite recursion into this trait method.
+        self.legal_moves()
     }
 
-    candidates
-        .into_iter()
-        .max_by_key(|&(_, score, _)| score)
-        .map(|(mv, _, _)| mv)
+    fn apply(&mut self, m: Move) {
+        // `beam_solver`'s engine only ever calls this on a scratch clone (never the
+        // real session's `Game` — see its own `choose_move`, which clones before every
+        // `apply`), so it's exploratory the same way `Game::simulate` is, and needs the
+        // exact same fix: reseed from `preview_seed` before resolving for real, rather
+        // than letting the clone continue the real board's inherited rng stream. Without
+        // this, the beam's own line-advancing `apply` calls (used to generate each
+        // further ply's candidates, not just to score one) would leak an oracle preview
+        // of the actual future for whichever first move the search settles on — the
+        // same bug `Game::simulate` had before `preview_seed` existed, just reached via
+        // a different call path (this trait's `apply`, not `Game::simulate`). Also
+        // discards the `Resolution` `Game::apply` returns — the beam engine only wants
+        // the mutated state, not a persistent animation-ready world.
+        self.board.rng = Rng::seeded(preview_seed(&self.board, m));
+        self.apply(m);
+    }
+
+    fn state_hash(&self) -> u64 {
+        state_hash(self)
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.phase != Phase::Playing
+    }
+}
+
+fn state_hash(game: &Game) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    game.board.tiles.hash(&mut h);
+    game.board.jelly.hash(&mut h);
+    game.board.active_colors.hash(&mut h);
+    game.score.hash(&mut h);
+    game.moves_used.hash(&mut h);
+    game.jelly_remaining.hash(&mut h);
+    game.ingredients_collected.hash(&mut h);
+    for goal in &game.mystery_goals {
+        goal.color.hash(&mut h);
+        goal.target.hash(&mut h);
+        goal.collected.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Beam width/depth/node-budget. Measured against the old greedy 1-ply eval on
+/// `HCG_SEED=1..500` (see the note above `SearchState`'s impl); re-tune here rather than
+/// assuming these transfer from Klondike/Spider (which have a very different branching
+/// profile — see `lib/beam_solver`'s CLAUDE.md).
+const BEAM_WIDTH: usize = 6;
+const BEAM_DEPTH: u32 = 2;
+const BEAM_NODE_BUDGET: usize = 800;
+
+pub type Beam = beam_solver::BeamSearch<Game>;
+
+pub fn new_beam_search() -> Beam {
+    beam_solver::BeamSearch::new(BEAM_WIDTH, BEAM_DEPTH, BEAM_NODE_BUDGET, |_| false)
+}
+
+/// Scores a single move by resolving it against `before` and running it through the same
+/// tuned `score_resolution` used for both root and per-step beam scoring — the eval that
+/// defines what "good" means move-to-move.
+fn beam_score(before: &Game, mv: &Move) -> i32 {
+    let res = before.simulate(*mv);
+    score_resolution(before, &res) as i32
+}
+
+/// Root-ply scorer: `beam_score` plus the root-only jelly-endgame emphasis
+/// (`JELLY_ENDGAME_ROOT_BONUS`) that makes an *immediate* winning jelly-clear dominate a
+/// depth-2 plan that defers it onto a phantom refill. Used for the real, immediately-legal
+/// first move only; `beam_score` (no root bonus) still scores every later ply.
+fn beam_score_root(before: &Game, mv: &Move) -> i32 {
+    let res = before.simulate(*mv);
+    let mut s = score_resolution(before, &res);
+    if before.variant == Variant::Jelly && before.jelly_remaining <= JELLY_ENDGAME_REMAINING {
+        s += res.jelly_cleared as i64 * JELLY_ENDGAME_ROOT_BONUS;
+    }
+    s as i32
+}
+
+/// The sole move-selection entry point: a depth-2 `beam_solver` search scored by
+/// `score_resolution`. `None` only if `legal_moves()` is empty, which `Game::apply`'s
+/// reshuffle-on-deadlock keeps from happening during normal play.
+pub fn choose_move(search: &mut Beam, game: &Game) -> Option<Move> {
+    search.choose_move(
+        game,
+        |_, _| false,
+        |before, _after, mv| beam_score_root(before, mv),
+        |before, _after, mv| beam_score(before, mv),
+    )
 }

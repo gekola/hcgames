@@ -1,5 +1,103 @@
 use std::collections::{HashSet, VecDeque};
 
+/// A tiny board-local PRNG (SplitMix64), used instead of the ambient global
+/// `macroquad::rand` for every draw that happens *after* a board exists (refill,
+/// reshuffle, mystery-goal rolls). `macroquad::rand`/quad-rand is one process-global
+/// generator with no public snapshot/restore API — any code that draws from it (even
+/// `Game::simulate`, called purely to score a hypothetical move on a scratch clone)
+/// permanently advances the *real* game's future randomness as a side effect. That
+/// silently broke A/B comparisons between solvers that call `simulate` a different
+/// number of times per real move (e.g. a beam search vs. plain greedy): at the same
+/// `HCG_SEED`, the two would face different real refills, despite the fixed seed —
+/// see `feedback_solver_rng_confound` memory / `.notes/match3_solver_beam_todo.md`.
+///
+/// Living on `Board` (already `Clone`, and already cloned freely for scratch/lookahead
+/// use) is only half the fix, though. The first version of this change simply let a
+/// clone's `rng` carry forward from whatever state the real board's `rng` was in —
+/// which stopped scoring from *perturbing* the real game's future, but had a much
+/// worse side effect: since nothing else touches the real board (or its `rng`) between
+/// a `simulate` call and a same-move real `apply`, the "preview" became a **perfect
+/// oracle** for whichever move actually gets chosen next, not an unbiased estimate —
+/// measured as every variant's win rate jumping to 85-100% (up from a healthy
+/// 45-65% band) on re-running the seed sweep, which is what caught it. See
+/// `preview_seed` for the actual fix: every hypothetical resolve (`Game::simulate`,
+/// and the beam solver's own scratch-line `apply`, see `solver.rs`) reseeds from a
+/// deterministic hash of the pre-move board + move instead of carrying the real
+/// stream forward, so a preview is decorrelated from whatever the real future
+/// refill will actually be, while still being fully independent of caller/call-count
+/// (still fixes the original confound). Only real gameplay (`Game::apply`, called on
+/// `self.board` directly, never a clone) continues the board's *actual* running
+/// stream, uninterrupted by however much scoring happened around it.
+#[derive(Clone, Copy)]
+pub(crate) struct Rng(u64);
+
+impl Rng {
+    pub(crate) fn seeded(seed: u64) -> Self {
+        // XOR by a fixed odd constant so an all-zero incoming seed still produces a
+        // well-mixed initial state (SplitMix64, like most xorshift-derived PRNGs, is
+        // degenerate at state 0).
+        Self(seed ^ 0x9E37_79B9_7F4A_7C15)
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform-ish integer in `[low, high)`, matching `quad_rand::gen_range`'s
+    /// half-open convention. Every call site here only ever needs a small range (board
+    /// coordinates, a handful of colors, a goal count/target), so the modulo bias this
+    /// introduces is negligible.
+    fn gen_range(&mut self, low: u64, high: u64) -> u64 {
+        debug_assert!(low < high);
+        low + self.next_u64() % (high - low)
+    }
+}
+
+/// A `std::hash::Hasher` backed by the same SplitMix64 avalanche step as `Rng`, but
+/// XORing each incoming byte into the state *before* mixing (rather than just adding a
+/// fixed constant, as `Rng::next_u64`'s own counter-style advance does) so the output
+/// actually depends on the bytes written, not just how many. Deliberately **not**
+/// `std::collections::hash_map::DefaultHasher` — this file already documents (see
+/// `find_matches_with_spawns`' tie-break) that `std`'s default hasher is randomly
+/// reseeded per *process*, which would silently break the "same `HCG_SEED` reproduces
+/// the same run" contract if used for anything that affects which move gets chosen.
+struct DeterministicHasher(u64);
+
+impl std::hash::Hasher for DeterministicHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            let mut z = self.0 ^ (b as u64);
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            self.0 = z ^ (z >> 31);
+        }
+    }
+}
+
+/// Deterministic seed for a hypothetical resolve — hashes the board's visible content
+/// (`tiles`/`jelly`, both already `Hash`-derived) plus the candidate move, *not*
+/// `board.rng`'s own current state. See `Rng`'s doc comment for why: this is what
+/// keeps every `Game::simulate`/beam-search preview decorrelated from the real board's
+/// actual future stream while staying fully deterministic (same board+move always
+/// previews identically) and independent of how many other candidates get scored
+/// around it.
+pub(crate) fn preview_seed(board: &Board, mv: Move) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = DeterministicHasher(0x2545_F491_4F6C_DD1D);
+    board.tiles.hash(&mut h);
+    board.jelly.hash(&mut h);
+    mv.hash(&mut h);
+    h.finish()
+}
+
 pub const W: usize = 8;
 pub const H: usize = 8;
 
@@ -28,8 +126,8 @@ impl Color {
     /// a level with fewer active colors never has one sneak back in via a fresh tile.
     /// Every caller currently passes either `Color::ALL` (free-cycling variants) or a
     /// `LevelParams::color_count`-sized prefix of it (`Variant::Mode::Levels`).
-    fn random_from(colors: &[Color]) -> Color {
-        colors[macroquad::rand::gen_range(0, colors.len())]
+    fn random_from(colors: &[Color], rng: &mut Rng) -> Color {
+        colors[rng.gen_range(0, colors.len() as u64) as usize]
     }
 
     /// Index into `Color::ALL` / `Resolution::color_cleared` — used by `Variant::Mystery`
@@ -106,6 +204,11 @@ pub struct Board {
     /// consistent automatically across every clone this game already makes —
     /// `simulate`'s scratch boards, each wave's `board_before`/`board_after`, etc.
     pub active_colors: Vec<Color>,
+    /// This board's own randomness stream — see `Rng`'s doc comment for why it lives
+    /// here rather than going through the ambient global `macroquad::rand`. `pub(crate)`
+    /// so `solver.rs`'s `beam_solver::SearchState::apply` impl can also reseed it via
+    /// `preview_seed` — see that impl for why it needs to.
+    pub(crate) rng: Rng,
 }
 
 /// A tile arriving at `to_row` in `col`, animated by the renderer from `from_row`
@@ -372,7 +475,7 @@ pub const LEVELS: &[LevelParams] = &[
         name: "Full Batch",
         variant: Variant::Ingredients,
         score_target: 0,
-        move_limit: 26,
+        move_limit: 28,
         jelly_cell_count: 0,
         ingredients_target: 3,
         time_limit: 0.0,
@@ -401,7 +504,7 @@ pub const LEVELS: &[LevelParams] = &[
     LevelParams {
         name: "Grand Finale",
         variant: Variant::Score,
-        score_target: 3400,
+        score_target: 3000,
         move_limit: 18,
         jelly_cell_count: 0,
         ingredients_target: 0,
@@ -438,13 +541,15 @@ pub struct Game {
 
 impl Game {
     pub fn new(variant: Variant, generation: u32) -> Self {
-        let board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET, &Color::ALL);
+        let mut board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET, &Color::ALL);
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
         // Computed from `board.active_colors` (a borrow) before `board` moves into the
         // struct literal below — see `gen_mystery_goals`' doc comment for why it can't
-        // just default to `Color::ALL`.
+        // just default to `Color::ALL`. Draws from the board's own `rng` (not the
+        // global RNG) to stay part of that board's isolated stream — see `Rng`'s doc
+        // comment.
         let mystery_goals = if variant == Variant::Mystery {
-            gen_mystery_goals(&board.active_colors)
+            gen_mystery_goals(&board.active_colors.clone(), &mut board.rng)
         } else {
             Vec::new()
         };
@@ -490,7 +595,7 @@ impl Game {
             params.name,
             params.color_count
         );
-        let board = gen_board(
+        let mut board = gen_board(
             variant,
             params.jelly_cell_count,
             params.ingredients_target,
@@ -502,7 +607,7 @@ impl Game {
         // `LevelParams`) same as the free-cycling variant, so a `Mystery` level just needs
         // `color_count`/`move_limit` like any other field, not a dedicated goal list.
         let mystery_goals = if variant == Variant::Mystery {
-            gen_mystery_goals(&board.active_colors)
+            gen_mystery_goals(&board.active_colors.clone(), &mut board.rng)
         } else {
             Vec::new()
         };
@@ -556,9 +661,13 @@ impl Game {
     }
 
     /// Resolves `mv` against a clone of the board without touching `self` — used by the
-    /// solver to score every candidate move before committing to one.
+    /// solver to score every candidate move before committing to one. The clone's `rng`
+    /// is reseeded from `preview_seed` rather than carrying over `self.board.rng`'s
+    /// current state — see `Rng`'s doc comment for why a straight carry-over would make
+    /// this an oracle for whatever move the caller actually applies next.
     pub fn simulate(&self, mv: Move) -> Resolution {
         let mut board = self.board.clone();
+        board.rng = Rng::seeded(preview_seed(&board, mv));
         resolve(&mut board, mv)
     }
 
@@ -1036,7 +1145,7 @@ fn compact_and_refill(
             }
         }
         for (i, slot) in new_col.iter_mut().enumerate().take(deficit) {
-            let tile = Tile::Plain(Color::random_from(&active_colors));
+            let tile = Tile::Plain(Color::random_from(&active_colors, &mut board.rng));
             *slot = tile;
             falls.push(FallEntry {
                 col,
@@ -1156,12 +1265,12 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
 
 // ── Board generation ────────────────────────────────────────────────────────────────
 
-fn gen_plain_tiles(active_colors: &[Color]) -> Tiles {
+fn gen_plain_tiles(active_colors: &[Color], rng: &mut Rng) -> Tiles {
     let mut tiles = [[Tile::Plain(Color::Red); W]; H];
     for r in 0..H {
         for c in 0..W {
             loop {
-                let color = Color::random_from(active_colors);
+                let color = Color::random_from(active_colors, rng);
                 let left_two = c >= 2
                     && tiles[r][c - 1].color() == Some(color)
                     && tiles[r][c - 2].color() == Some(color);
@@ -1187,21 +1296,22 @@ fn gen_plain_tiles(active_colors: &[Color]) -> Tiles {
 /// reason: picking a goal color the board never generates would be an unwinnable episode,
 /// not just a hard one — matters in practice now that `Variant::Mystery` levels in
 /// `LEVELS` can have a narrowed `color_count` (see `Game::new_level`).
-fn gen_mystery_goals(active_colors: &[Color]) -> Vec<MysteryGoal> {
+fn gen_mystery_goals(active_colors: &[Color], rng: &mut Rng) -> Vec<MysteryGoal> {
     debug_assert!(
         !active_colors.is_empty(),
         "no active colors to pick a goal from"
     );
-    let count = macroquad::rand::gen_range(1, MYSTERY_MAX_COLORS + 1).min(active_colors.len());
+    let count =
+        (rng.gen_range(1, (MYSTERY_MAX_COLORS + 1) as u64) as usize).min(active_colors.len());
     let mut colors = active_colors.to_vec();
-    shuffle(&mut colors);
+    shuffle(&mut colors, rng);
     let (min, max) = MYSTERY_TARGET_RANGES[count - 1];
     colors
         .into_iter()
         .take(count)
         .map(|color| MysteryGoal {
             color,
-            target: macroquad::rand::gen_range(min, max + 1),
+            target: rng.gen_range(min as u64, max as u64 + 1) as u32,
             collected: 0,
         })
         .collect()
@@ -1213,15 +1323,20 @@ fn gen_board(
     ingredients_target: u32,
     active_colors: &[Color],
 ) -> Board {
-    let mut tiles = gen_plain_tiles(active_colors);
+    // Seeded once here, drawing a single value from the ambient global RNG — every
+    // draw after this point (initial fill, jelly/ingredient placement, reshuffle, and
+    // later gravity refills across the board's whole lifetime) comes from this
+    // board-local stream instead. See `Rng`'s doc comment for why.
+    let mut rng = Rng::seeded(macroquad::rand::gen_range(0u64, u64::MAX));
+    let mut tiles = gen_plain_tiles(active_colors, &mut rng);
     let mut jelly = [[0u8; W]; H];
 
     match variant {
         Variant::Jelly => {
             let mut placed = 0;
             while placed < jelly_cell_count {
-                let r = macroquad::rand::gen_range(0, H);
-                let c = macroquad::rand::gen_range(0, W);
+                let r = rng.gen_range(0, H as u64) as usize;
+                let c = rng.gen_range(0, W as u64) as usize;
                 if jelly[r][c] == 0 {
                     jelly[r][c] = 1;
                     placed += 1;
@@ -1230,9 +1345,9 @@ fn gen_board(
         }
         Variant::Ingredients => {
             let mut cols: Vec<usize> = (0..W).collect();
-            shuffle(&mut cols);
+            shuffle(&mut cols, &mut rng);
             for &c in cols.iter().take(ingredients_target as usize) {
-                let r = macroquad::rand::gen_range(0, 2);
+                let r = rng.gen_range(0, 2) as usize;
                 tiles[r][c] = Tile::Ingredient;
             }
         }
@@ -1243,14 +1358,15 @@ fn gen_board(
         tiles,
         jelly,
         active_colors: active_colors.to_vec(),
+        rng,
     };
     reshuffle(&mut board); // guarantees at least one legal move exists, same as any fresh board
     board
 }
 
-fn shuffle<T>(items: &mut [T]) {
+fn shuffle<T>(items: &mut [T], rng: &mut Rng) {
     for i in (1..items.len()).rev() {
-        let j = macroquad::rand::gen_range(0, i + 1);
+        let j = rng.gen_range(0, (i + 1) as u64) as usize;
         items.swap(i, j);
     }
 }
@@ -1266,9 +1382,12 @@ fn reshuffle(board: &mut Board) {
         for row in board.tiles.iter_mut() {
             for tile in row.iter_mut() {
                 match *tile {
-                    Tile::Plain(_) => *tile = Tile::Plain(Color::random_from(&active_colors)),
+                    Tile::Plain(_) => {
+                        *tile = Tile::Plain(Color::random_from(&active_colors, &mut board.rng))
+                    }
                     Tile::Bonus(_, special) => {
-                        *tile = Tile::Bonus(Color::random_from(&active_colors), special)
+                        *tile =
+                            Tile::Bonus(Color::random_from(&active_colors, &mut board.rng), special)
                     }
                     Tile::ColorBomb | Tile::Ingredient => {}
                 }
@@ -1354,6 +1473,7 @@ mod tests {
         ] {
             for episode in 0..10 {
                 let mut game = Game::new(variant, episode);
+                let mut beam = crate::solver::new_beam_search();
                 let mut steps = 0;
                 loop {
                     if variant == Variant::Timed {
@@ -1363,7 +1483,7 @@ mod tests {
                         break;
                     }
                     let legal = game.legal_moves();
-                    let mv = crate::solver::choose_move(&game)
+                    let mv = crate::solver::choose_move(&mut beam, &game)
                         .unwrap_or_else(|| panic!("{variant:?} ep{episode} had no legal move"));
                     assert!(legal.contains(&mv));
                     game.apply(mv);
@@ -1454,6 +1574,7 @@ mod tests {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
             active_colors: Color::ALL.to_vec(),
+            rng: Rng::seeded(42),
         };
         board.tiles[0][0] = Tile::ColorBomb;
         board.tiles[0][1] = Tile::Plain(Color::Red);
@@ -1485,6 +1606,7 @@ mod tests {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
             active_colors: Color::ALL.to_vec(),
+            rng: Rng::seeded(42),
         };
         board.tiles[0][0] = Tile::Bonus(Color::Red, Special::RowClear);
         board.tiles[1][0] = Tile::Plain(Color::Blue);
@@ -1520,6 +1642,7 @@ mod tests {
             for seed in 1..=SEEDS {
                 macroquad::rand::srand(seed);
                 let mut game = Game::new_level(*level, 0);
+                let mut beam = crate::solver::new_beam_search();
                 loop {
                     if level.variant == Variant::Timed {
                         game.tick_time(1.0);
@@ -1527,7 +1650,7 @@ mod tests {
                     if game.phase != Phase::Playing {
                         break;
                     }
-                    let mv = crate::solver::choose_move(&game).expect("legal move");
+                    let mv = crate::solver::choose_move(&mut beam, &game).expect("legal move");
                     game.apply(mv);
                 }
                 if matches!(game.phase, Phase::Over(Outcome::Won)) {
@@ -1559,6 +1682,7 @@ mod tests {
             tiles: checkerboard(),
             jelly: [[0; W]; H],
             active_colors: Color::ALL.to_vec(),
+            rng: Rng::seeded(42),
         };
         board.tiles[0][0] = Tile::ColorBomb;
         board.tiles[0][1] = Tile::Bonus(Color::Red, Special::Wrapped);

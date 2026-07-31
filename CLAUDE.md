@@ -118,17 +118,23 @@ resort — a "guess" that's actually just reading the pre-generated solution). F
 shape, skip `beam_solver` and write the escalation directly in `solver.rs`; see
 `games/sudoku/src/solver.rs`.
 
-A third shape doesn't need even a 1-ply lookahead: a board with many simultaneously legal
-moves (same as Klondike/Spider) but no "known next piece" to search a second ply into —
-what a swap reveals depends on where gravity happens to refill from, so a deeper search
-would just multiply the branching factor rather than sharpen a small candidate set. For
-that shape (match-3's swap-and-cascade), skip `beam_solver` entirely: enumerate
-`legal_moves()`, resolve each on a scratch clone via a pure `Game::simulate`, and pick the
-highest-scoring result — see `games/match-3/src/solver.rs`. Tune the scoring weights
-against measured win rate (`--no-ui --once` across a range of `HCG_SEED` values, per
-"Native CLI flags" above), not by inspection — `match-3`'s ingredient-collection goal
-initially won under 15% of the time because the greedy eval only rewarded a move that
-*completed* a collection, not one that made progress toward it.
+A third shape doesn't need even a 1-ply lookahead — in theory: a board with many
+simultaneously legal moves (same as Klondike/Spider) but no "known next piece" to search
+a second ply into, since what a swap reveals depends on where gravity happens to refill
+from, so a deeper search seemed like it would just multiply the branching factor rather
+than sharpen a small candidate set. match-3 was originally built this way (enumerate
+`legal_moves()`, resolve each on a scratch clone via a pure `Game::simulate`, pick the
+highest-scoring result) — but a direct measurement disproved the theory: `beam_solver`
+(width 6, depth 2, ~800-node budget) beat the 1-ply eval by 6-14pp win rate across every
+variant at ~1.5ms/move, cheap enough to ship as the actual default. See
+`games/match-3/CLAUDE.md`'s solver section for the full numbers and the RNG-preview-oracle
+bug this surfaced along the way. Lesson for a new game that looks like this shape: the
+branching-factor argument is a reason to *default to* a cheap 1-ply eval, not a reason to
+skip *measuring* `beam_solver` against it — tune/validate either way against measured win
+rate (`--no-ui --once` across a range of `HCG_SEED` values, per "Native CLI flags" above),
+not by inspection — match-3's ingredient-collection goal initially won under 15% of the
+time because the eval only rewarded a move that *completed* a collection, not one that
+made progress toward it.
 
 ## Native CLI flags (every game)
 

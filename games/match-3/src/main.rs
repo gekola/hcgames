@@ -634,6 +634,10 @@ struct Session {
     level_index: usize,
     level_attempts: u32,
     game: Game,
+    /// Fresh per episode (not just per `Session`) — same lifetime `beam_solver`'s own
+    /// docs prescribe ("a fresh `BeamSearch` per game"), so a stale `visited` set from
+    /// a finished episode never suppresses a move in the next one.
+    beam: solver::Beam,
 }
 
 impl Session {
@@ -644,6 +648,7 @@ impl Session {
                 level_index: 0,
                 level_attempts: 0,
                 game: Game::new_level(game::LEVELS[0], generation),
+                beam: solver::new_beam_search(),
             };
         }
         Self {
@@ -651,6 +656,7 @@ impl Session {
             level_index: 0,
             level_attempts: 0,
             game: Game::new(mode.variant(generation), generation),
+            beam: solver::new_beam_search(),
         }
     }
 
@@ -673,6 +679,7 @@ impl Session {
                 level_index,
                 level_attempts,
                 game: Game::new_level(game::LEVELS[level_index], generation),
+                beam: solver::new_beam_search(),
             };
         }
         Self::new(self.mode, generation)
@@ -680,6 +687,11 @@ impl Session {
 
     fn switch_variant(&self) -> Self {
         Self::new(self.mode.next(), self.game.generation + 1)
+    }
+
+    fn choose_move(&mut self) -> game::Move {
+        solver::choose_move(&mut self.beam, &self.game)
+            .expect("Phase::Playing guarantees a legal move")
     }
 }
 
@@ -738,8 +750,7 @@ impl View {
         }
 
         let pre = session.game.board.clone();
-        let mv =
-            solver::choose_move(&session.game).expect("Phase::Playing guarantees a legal move");
+        let mv = session.choose_move();
         let res = session.game.apply(mv);
         if debug {
             eprintln!(
@@ -947,8 +958,7 @@ fn run_headless(cli: CliArgs) -> ! {
     loop {
         match session.game.phase {
             Phase::Playing => {
-                let mv = solver::choose_move(&session.game)
-                    .expect("Phase::Playing guarantees a legal move");
+                let mv = session.choose_move();
                 let res = session.game.apply(mv);
                 if session.game.variant == Variant::Timed {
                     session.game.tick_time(HEADLESS_SECONDS_PER_MOVE);

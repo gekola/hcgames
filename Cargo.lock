@@ -263,6 +263,7 @@ dependencies = [
 name = "match-3"
 version = "0.1.0"
 dependencies = [
+ "beam_solver",
  "control",
  "game_common",
  "macroquad",
