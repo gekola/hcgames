@@ -43,6 +43,21 @@ const ADJACENT_PAIR_BONUS: i64 = 10;
 /// Per color left with exactly one bubble on the board — clutters the board without
 /// being reachable as a real 3-match target most turns.
 const ORPHAN_COLOR_PENALTY: i64 = 60;
+/// Root-only (ply-0) extra penalty on top of `ISOLATED_SINGLETON_PENALTY`, applied in
+/// `beam_score_root` but **not** `beam_score`/`score_step` — same "path-additive score
+/// leaks under a cumulative-sum beam" shape match-3's `JELLY_ENDGAME_ROOT_BONUS` fixes
+/// (see that crate's CLAUDE.md). Diagnosed 2026-08-06 via a temporary instrumented
+/// `--no-ui --debug` run (`HCG_SEED=3`, shot 12): root candidates scored
+/// `[13, 13, 13, 13, -162, -162]` after width-6 truncation (four sane non-isolated
+/// placements vs. two isolated singletons), but the chosen 2-ply line total was `-194`
+/// — one of the *isolated* lines' ply-2 continuation happened to outscore every "13"
+/// line's own continuation, so the beam picked the immediately-worse move. `-120` alone
+/// isn't enough margin to survive being summed against a ply-2 step score that can swing
+/// by more than that; this constant makes the root-level isolation penalty large enough
+/// (`120 + 1000 = 1120`, comfortably past every observed ply-2 swing in the sweep below)
+/// that no ply-2 continuation can buy back an immediately-isolated placement, without
+/// touching `LOSE_PENALTY`'s status as the dominant term overall.
+const ISOLATED_SINGLETON_ROOT_BONUS: i64 = 1000;
 
 fn is_isolated(board: &Board, pos: (i32, i32), color: Color) -> bool {
     const NEIGHBOR_OFFSETS: [(i32, i32); 6] = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)];
@@ -170,14 +185,23 @@ fn beam_score(before: &Game, mv: &Move) -> i32 {
     score_resolution(&res, &after) as i32
 }
 
-/// No root-only bonus term (yet) — unlike match-3's jelly-endgame case, there's no
-/// measured near-miss pattern here to justify one; see this crate's CLAUDE.md. Root and
-/// step plies share the same scorer for now.
+/// Root-ply scorer: `beam_score` plus `ISOLATED_SINGLETON_ROOT_BONUS` — see that
+/// constant's doc comment for why an immediately-isolated placement needs extra
+/// root-only weight to survive being summed against a ply-2 step score.
+fn beam_score_root(before: &Game, mv: &Move) -> i32 {
+    let (after, res) = before.simulate(*mv);
+    let mut s = score_resolution(&res, &after);
+    if res.popped.is_empty() && is_isolated(&after.board, mv.target, res.color) {
+        s -= ISOLATED_SINGLETON_ROOT_BONUS;
+    }
+    s as i32
+}
+
 pub fn choose_move(search: &mut Beam, game: &Game) -> Option<Move> {
     search.choose_move(
         game,
         |_, _| false,
-        |before, _after, mv| beam_score(before, mv),
+        |before, _after, mv| beam_score_root(before, mv),
         |before, _after, mv| beam_score(before, mv),
     )
 }

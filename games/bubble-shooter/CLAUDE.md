@@ -126,6 +126,33 @@ once picked a move that popped/floated less than the best move actually availabl
 The AI's apparent "suboptimal decisions" symptom traced entirely to the pacing bug
 described below, not to move selection.
 
+**Fixed 2026-08-06: an isolated-singleton root move could still win over a better one via
+depth-2 cumulative-sum leakage — same class of bug as match-3's `JELLY_ENDGAME_ROOT_BONUS`
+fix.** Reported via a real screenshot: the AI fired a shot into empty space, landing a
+bubble with zero same-color neighbors, while a shot toward an existing same-color bubble
+was legal and clearly better by eye. `ISOLATED_SINGLETON_PENALTY` (-120) already existed
+specifically to score that landing worse — the bug was that it wasn't *big enough* to
+survive being summed against a ply-2 step score. Root-caused with a temporary
+`HCG_DIAG`-gated instrumentation pass (both in this crate's `choose_move` and in
+`lib/beam_solver`'s `choose_move`, reverted after): `HCG_SEED=3`, shot 12 logged root
+candidates `[13, 13, 13, 13, -162, -162]` after width-6 truncation (four sane
+non-isolated placements vs. two isolated singletons — nothing scored in between), but the
+final chosen 2-ply line totaled `-194`, coming from one of the *isolated* lines: its
+ply-2 continuation (scored against a `preview_seed`-simulated, not real, next-shot color —
+see "RNG decorrelation" above) happened to outscore every "13" line's own continuation.
+`ISOLATED_SINGLETON_ROOT_BONUS` (1000, `solver.rs`) is an additional penalty applied only
+in `beam_score_root` (not `score_step`), making an immediately-isolated placement's total
+penalty (1120) large enough that no realistic ply-2 swing observed in the sweep below can
+buy it back — same "give the root-only term enough margin to dominate the sum" shape as
+match-3's jelly fix, applied to a penalty instead of a bonus. Measured via the same
+`--no-ui` `HCG_SEED` sweep methodology as "Balance" below (n=10-20 episodes/level, 12
+seeds): total loss rate 12.6% → 10.3%, no regressions on any level, biggest improvement
+on the hardest tier (Overflow, 6 colors: 54.5% → 40.0% lost) — consistent with an
+isolated-singleton mistake costing the most exactly where match opportunities are already
+scarce and height margin is already tight. Sample size is in the same ballpark as
+"Balance"'s own table, not large enough for a tight confidence interval; re-measure with
+more seeds before trusting the Overflow number precisely.
+
 ## Episode structure
 
 Decided with the user up front: **row-descend survival**, not static clear-the-board — a
