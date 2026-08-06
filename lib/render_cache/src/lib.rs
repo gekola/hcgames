@@ -111,26 +111,39 @@ impl RenderCache {
     }
 
     /// Renders into a texture `factor`x the size of `rect` in each dimension and
-    /// shrinks it back down on every `blit` — approximates antialiasing for cached
-    /// content without touching `sample_count` (real MSAA needs the resolve pass
-    /// `new`'s doc comment explains this cache deliberately avoids).
+    /// shrinks it back down on every `blit` — gives cached content its own antialiasing
+    /// (the downscale averages the extra samples) without touching `sample_count` (real
+    /// MSAA needs the resolve pass `new`'s doc comment explains this cache deliberately
+    /// avoids).
     ///
     /// Without this, cached content rasterizes with hard, single-sample edges while
     /// live (uncached) draws land on the default framebuffer, which typically *does*
     /// get real antialiasing from the browser's WebGL context — so a straight edge
     /// (jelly's rim, say) looks crisp when cached and ~1-2px softer when live,
     /// alternating as the game switches between the two. Reads as the edge visibly
-    /// shifting, not just changing sharpness. Confirmed by screenshotting the same
-    /// unmoving cell mid-animation (live) vs. settled (cached): live's edge transition
-    /// spans two pixels of blended color where cached's is a single hard pixel.
-    /// Supersampling and downscaling with a `Linear`-filtered blit (see `build`)
-    /// re-introduces that softening for the cached path so it matches.
+    /// shifting, not just changing sharpness.
     ///
-    /// `factor: 2` (quadruples the pixels actually rendered, only on a dirty redraw —
-    /// i.e. once per solver tick at most, not once per frame, so the cost is the same
-    /// "rare event" `RenderCache` exists to make rare in the first place) is enough to
-    /// visibly soften a hard axis-aligned edge; there was no need to measure higher
-    /// factors against real MSAA once the visible symptom was gone.
+    /// **Important caveat on what `factor` alone does and does not fix.** Supersampling
+    /// makes the cached path *antialiased*, but it does **not** make it *match the live
+    /// path*, because the live path's AA comes from the browser's default framebuffer —
+    /// an external, undocumented, platform-dependent source (whether the WebGL context
+    /// antialiases at all, and how, varies across browsers/GPUs and their defaults). No
+    /// value of `factor` reliably reproduces that; tuning `factor` until cached "looks
+    /// like" live in one test browser is chasing a moving target. Measured directly on
+    /// match-3: `factor: 2` overshoots a diagonal/pointed edge (a star tip) — the cached
+    /// path spreads the transition over ~2 px where the live browser-AA path uses ~1 px —
+    /// even though it was a good match for the shallow axis-aligned edge (jelly's rim) it
+    /// was originally tuned against. The real fix for cached-vs-live *identity* is to run
+    /// the live path through the same offscreen pipeline via `draw_fresh` (see its doc
+    /// comment): then both paths supersample-and-downscale identically and the `factor`
+    /// value stops mattering for identity — it's purely an aesthetic AA-quality knob,
+    /// applied equally to both. `factor: 2` is retained on that basis (cheap, visibly
+    /// smooth); it is no longer load-bearing for matching live.
+    ///
+    /// `factor: 2` quadruples the pixels rendered per redraw. For content only redrawn on
+    /// a dirty `draw()` (once per solver tick at most) that's a rare event; for content
+    /// driven every frame through `draw_fresh` it's a per-animating-frame cost — still
+    /// only on frames already doing a full redraw (see `draw_fresh`).
     pub fn with_supersample(mut self, factor: u32) -> Self {
         self.supersample = factor.max(1);
         let (target, camera) = Self::build(self.rect, self.supersample);
@@ -172,6 +185,49 @@ impl RenderCache {
             self.dirty = false;
         }
         self.blit();
+    }
+
+    /// Renders `draw` through the exact same offscreen pipeline `draw()` uses (the
+    /// `sample_count: 0` render target, `with_backdrop` clear, `with_supersample`
+    /// downscale-on-blit, Y-flip) but **never caches** — it re-runs `draw` every single
+    /// call. Use it for content that genuinely animates every frame, in the *same*
+    /// `RenderCache` whose `draw()` you call for that content's static/idle state.
+    ///
+    /// Why this exists rather than "just draw the animated part live on top": cached
+    /// content lives in an offscreen `sample_count: 0` target, which — see `new`'s doc
+    /// comment — physically *cannot* receive the browser's default-framebuffer
+    /// antialiasing (and real MSAA on the target is off-limits, it trips a WASM trap).
+    /// `with_supersample` gives that cached content its own supersample-downscale AA
+    /// instead. But a game that draws its animated frames *directly* to the screen still
+    /// gets the browser's framebuffer AA on those — an external, undocumented,
+    /// platform-dependent source (on/off by default varies across browsers/GPUs) — so the
+    /// same unmoving edge is antialiased one way while animating (live, browser AA) and
+    /// another way while settled (cached, supersample AA), and switching between them
+    /// reads as the edge shifting. There is no way to make the *cached* path use the
+    /// browser's AA (it's an offscreen target), so the only way to make the two match
+    /// *by construction* — independent of whatever any given browser/GPU does — is to run
+    /// the live path through this same offscreen supersample pipeline too. Routed through
+    /// `draw_fresh`, an animating frame and the settled cached frame of the same content
+    /// rasterize through byte-for-byte identical machinery, so a static element (a cell a
+    /// swap didn't touch, say) is pixel-identical whether it's currently drawn live or
+    /// cached. See `games/match-3`'s render loop for the reference use.
+    ///
+    /// Cost: this re-renders into the (possibly supersampled) target every frame it's
+    /// called, so only use it for frames that were *already* doing a full redraw anyway
+    /// (match-3's board is genuinely mid-animation — nothing to cache — for those frames).
+    /// It is not a substitute for `draw()` on static content: that's the whole point of
+    /// the cache. The extra cost over drawing live-to-screen is the supersample fill
+    /// factor plus one downscale blit; the CPU-side draw-call count is unchanged, so it
+    /// doesn't reintroduce the per-frame *draw-call* overhead `RenderCache` exists to
+    /// avoid — it only pays more GPU fill on frames that redraw regardless.
+    ///
+    /// Leaves `dirty` set afterward, so the next `draw()` (e.g. the first settled frame
+    /// after animation stops) re-renders the cache rather than blitting this last
+    /// animated frame.
+    pub fn draw_fresh(&mut self, draw: impl FnMut()) {
+        self.dirty = true;
+        self.draw(draw);
+        self.dirty = true;
     }
 
     fn blit(&self) {
