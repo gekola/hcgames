@@ -142,18 +142,45 @@ fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Every other raw raymarch segment (`RAY_STEP`-sized, so already fine-grained) —
-/// cheap way to get a dashed look without tracking phase/remainder across segments of
-/// slightly different length (the final segment `snap_path_to_landing` appends can be
-/// longer than the rest).
+const DASH_LEN: f32 = 10.0;
+const DASH_GAP: f32 = 8.0;
+
+/// `path` is now sparse (a vertex only at the shooter, each wall bounce, and the
+/// landing pixel — see `game::raymarch`'s doc comment), so a whole leg is typically one
+/// long straight segment: alternating whole `path` segments (the old approach, back
+/// when every segment was one short `RAY_STEP`) would draw either one solid line or one
+/// gap with no dashing at all. Walk the polyline by actual on-screen distance instead,
+/// alternating `DASH_LEN`/`DASH_GAP`-sized draws across segment boundaries — the dash
+/// pattern no longer depends on how many vertices the underlying path happens to have.
 fn draw_dashed_path(path: &[(f32, f32)], color: Color32, thickness: f32) {
-    for (i, w) in path.windows(2).enumerate() {
-        if i % 2 != 0 {
+    if path.len() < 2 {
+        return;
+    }
+    let mut drawing = true;
+    let mut remaining = DASH_LEN;
+    for w in path.windows(2) {
+        let (mut x0, mut y0) = w[0];
+        let (x1, y1) = w[1];
+        let mut seg_left = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+        if seg_left <= f32::EPSILON {
             continue;
         }
-        let (x0, y0) = w[0];
-        let (x1, y1) = w[1];
-        draw_line(x0, y0, x1, y1, thickness, color);
+        let (ux, uy) = ((x1 - x0) / seg_left, (y1 - y0) / seg_left);
+        while seg_left > 0.0 {
+            let step = remaining.min(seg_left);
+            let (nx, ny) = (x0 + ux * step, y0 + uy * step);
+            if drawing {
+                draw_line(x0, y0, nx, ny, thickness, color);
+            }
+            x0 = nx;
+            y0 = ny;
+            seg_left -= step;
+            remaining -= step;
+            if remaining <= f32::EPSILON {
+                drawing = !drawing;
+                remaining = if drawing { DASH_LEN } else { DASH_GAP };
+            }
+        }
     }
 }
 

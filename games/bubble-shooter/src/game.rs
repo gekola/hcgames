@@ -613,9 +613,20 @@ type RaymarchResult = (Vec<(f32, f32)>, Option<(i32, i32)>);
 
 /// Raymarches a shot fired at `angle_deg` (0 = along +x, 90 = straight up) from the
 /// shooter, reflecting off the side walls, until it hits the ceiling or an existing
-/// bubble. Returns the full polyline (for animation) and the landing cell it snapped
-/// to, or `None` if it never lands (angle clamps + a bounce cap keep this rare/absent
-/// in practice — see `ANGLE_MIN`/`ANGLE_MAX`/`MAX_BOUNCES`).
+/// bubble. Returns the landing cell it snapped to (or `None` if it never lands — angle
+/// clamps + a bounce cap keep this rare/absent in practice, see
+/// `ANGLE_MIN`/`ANGLE_MAX`/`MAX_BOUNCES`) along with a **sparse** polyline for
+/// animation: the shooter, one vertex per wall bounce, and the true landing pixel —
+/// not one vertex per `RAY_STEP`. Every vertex-to-vertex segment is therefore a
+/// perfectly straight line at the ray's real angle, ending exactly on `landing`; the
+/// fine-grained internal march only decides *where* those vertices are, it isn't
+/// itself part of the returned path. (Recording every raw step used to be tried, twice
+/// — appending or blending the landing pixel onto that fine trail both still left a
+/// visible bend or a dash tip that missed the target, because the exact landing pixel
+/// is generally not collinear with the raw samples that happened to notice the
+/// collision. A sparse, exact-vertex path sidesteps that entirely: nothing to
+/// reconcile against, because there's nothing on the line except real direction
+/// changes.)
 fn raymarch(board: &Board, angle_deg: f32) -> RaymarchResult {
     let rad = angle_deg.to_radians();
     let mut x = SHOOTER_X;
@@ -633,41 +644,30 @@ fn raymarch(board: &Board, angle_deg: f32) -> RaymarchResult {
             x = BOARD_X + RADIUS;
             dx = -dx;
             bounces += 1;
+            path.push((x, y));
         } else if x + RADIUS > BOARD_X + BOARD_W {
             x = BOARD_X + BOARD_W - RADIUS;
             dx = -dx;
             bounces += 1;
+            path.push((x, y));
         }
         if bounces > MAX_BOUNCES {
             return (path, None);
         }
 
-        path.push((x, y));
-
         if y - RADIUS <= BOARD_Y {
             let landing = nearest_empty_in_row(board, x, 0);
-            snap_path_to_landing(&mut path, landing);
+            path.push(landing.map_or((x, y), |c| cell_pixel(c.0, c.1)));
             return (path, landing);
         }
         if let Some(hit) = nearest_occupied_cell(board, x, y) {
             let landing = nearest_empty_neighbor(board, hit, x, y);
-            snap_path_to_landing(&mut path, landing);
+            path.push(landing.map_or((x, y), |c| cell_pixel(c.0, c.1)));
             return (path, landing);
         }
     }
+    path.push((x, y));
     (path, None)
-}
-
-/// `path`'s last point is wherever the raymarch happened to notice a collision
-/// (`RAY_STEP`-sized steps, within `COLLISION_DIST` of the hit cell) — not the same
-/// point as `landing`'s actual cell center, which can be a full `RADIUS`-ish away on a
-/// diagonal approach. Appending the true landing pixel as one final waypoint makes
-/// `main.rs`'s flight animation arrive exactly where the bubble will actually settle,
-/// instead of visibly snapping to it the instant `Flying` ends.
-fn snap_path_to_landing(path: &mut Vec<(f32, f32)>, landing: Option<(i32, i32)>) {
-    if let Some(cell) = landing {
-        path.push(cell_pixel(cell.0, cell.1));
-    }
 }
 
 fn nearest_occupied_cell(board: &Board, x: f32, y: f32) -> Option<(i32, i32)> {
