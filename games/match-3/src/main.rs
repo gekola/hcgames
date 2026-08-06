@@ -341,6 +341,73 @@ fn draw_tile(row: f32, col: f32, tile: Tile, alpha: f32, scale: f32, highlight: 
                 a(rgb(150, 180, 190)),
             );
         }
+        Tile::Licorice => {
+            // A rounded-off dark block rather than a gem silhouette — it fills the
+            // whole cell, not just a shape inset into it, since it's a wall occupying
+            // the cell rather than a piece sitting on it. Same rim/fill layering every
+            // other tile in this file uses. Original hue was a near-black plum
+            // (14,10,18)/(28,20,34)) that read as barely distinguishable from the
+            // board's own cell background (24,22,30) — reported as "doesn't look good,
+            // not noticeable". A first fix (wine-red block + flat hazard-tape amber X)
+            // fixed the contrast problem but lost the licorice identity entirely — a
+            // second report asked for it to "still look a little more like licorice".
+            // Settled shape: true licorice-black backing (candy body) plus the X arms
+            // rendered as twisted red-licorice rope (body/core/ridge layering below)
+            // rather than a flat bar — reads as candy up close, still an unmistakable
+            // high-contrast X at a glance.
+            draw_rectangle(
+                x + pad * 0.4,
+                y + pad * 0.4,
+                size + pad * 1.2,
+                size + pad * 1.2,
+                a(rgb(16, 11, 13)),
+            );
+            draw_rectangle(x + pad, y + pad, size, size, a(rgb(32, 23, 25)));
+            let inset = size * 0.14;
+            let arms = [
+                (
+                    x + pad + inset,
+                    y + pad + inset,
+                    x + pad + size - inset,
+                    y + pad + size - inset,
+                ),
+                (
+                    x + pad + size - inset,
+                    y + pad + inset,
+                    x + pad + inset,
+                    y + pad + size - inset,
+                ),
+            ];
+            let rope_body = a(rgb(168, 30, 38));
+            let rope_core = a(rgb(222, 92, 92));
+            let rope_ridge = a(rgb(108, 16, 22));
+            let hw = size * 0.10;
+            for &(sx, sy, ex, ey) in &arms {
+                // Body + lighter core sheen, same two-tone rim/fill language every other
+                // tile in this file uses, just along a line instead of a shape.
+                draw_line(sx, sy, ex, ey, hw, rope_body);
+                draw_line(sx, sy, ex, ey, hw * 0.45, rope_core);
+                // Perpendicular ridge ticks along each arm — a twisted-rope texture
+                // (licorice's own visual signature, same idea the original diagonal
+                // twist stripe was going for) rather than a flat bar.
+                let (dx, dy) = (ex - sx, ey - sy);
+                let len = (dx * dx + dy * dy).sqrt();
+                let (ux, uy) = (dx / len, dy / len);
+                let (px, py) = (-uy, ux);
+                let tick_half = hw * 0.9;
+                for &t in &[0.2f32, 0.4, 0.6, 0.8] {
+                    let (cx2, cy2) = (sx + ux * len * t, sy + uy * len * t);
+                    draw_line(
+                        cx2 - px * tick_half,
+                        cy2 - py * tick_half,
+                        cx2 + px * tick_half,
+                        cy2 + py * tick_half,
+                        hw * 0.3,
+                        rope_ridge,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -560,9 +627,10 @@ enum VariantMode {
     Jelly,
     Ingredients,
     Mystery,
+    Licorice,
     Timed,
     /// Steps through the hand-tuned `game::LEVELS` line instead of one fixed `Variant`
-    /// — deliberately *not* one of `Auto`'s generation%4 rotation targets (see root
+    /// — deliberately *not* one of `Auto`'s `generation % 6` rotation targets (see root
     /// CLAUDE.md's "In-game controls" note on Auto never landing on an explicit-select
     /// mode by itself); only reachable via this cycle or `--variant levels`. `Session`
     /// special-cases this arm everywhere below rather than routing it through
@@ -578,7 +646,8 @@ impl VariantMode {
             VariantMode::Score => VariantMode::Jelly,
             VariantMode::Jelly => VariantMode::Ingredients,
             VariantMode::Ingredients => VariantMode::Mystery,
-            VariantMode::Mystery => VariantMode::Timed,
+            VariantMode::Mystery => VariantMode::Licorice,
+            VariantMode::Licorice => VariantMode::Timed,
             VariantMode::Timed => VariantMode::Levels,
             VariantMode::Levels => VariantMode::Auto,
             VariantMode::Auto => VariantMode::Score,
@@ -591,12 +660,14 @@ impl VariantMode {
             VariantMode::Jelly => Variant::Jelly,
             VariantMode::Ingredients => Variant::Ingredients,
             VariantMode::Mystery => Variant::Mystery,
+            VariantMode::Licorice => Variant::Licorice,
             VariantMode::Timed => Variant::Timed,
-            VariantMode::Auto => match generation % 5 {
+            VariantMode::Auto => match generation % 6 {
                 0 => Variant::Score,
                 1 => Variant::Jelly,
                 2 => Variant::Ingredients,
                 3 => Variant::Mystery,
+                4 => Variant::Licorice,
                 _ => Variant::Timed,
             },
             // Never actually read — `Session` builds `Levels` games via `Game::new_level`
@@ -611,6 +682,7 @@ impl VariantMode {
             Variant::Jelly => "jelly clear",
             Variant::Ingredients => "collection",
             Variant::Mystery => "color hunt",
+            Variant::Licorice => "blocker clear",
             Variant::Timed => "timed",
         }
     }
@@ -855,7 +927,7 @@ fn parse_cli_args() -> CliArgs {
                 i += 1;
                 let v = rest.get(i).unwrap_or_else(|| {
                     eprintln!(
-                        "--variant requires a value: score, jelly, ingredients, mystery, timed, levels, or auto"
+                        "--variant requires a value: score, jelly, ingredients, mystery, licorice, timed, levels, or auto"
                     );
                     std::process::exit(2);
                 });
@@ -864,12 +936,13 @@ fn parse_cli_args() -> CliArgs {
                     "jelly" => VariantMode::Jelly,
                     "ingredients" => VariantMode::Ingredients,
                     "mystery" => VariantMode::Mystery,
+                    "licorice" => VariantMode::Licorice,
                     "timed" => VariantMode::Timed,
                     "levels" => VariantMode::Levels,
                     "auto" => VariantMode::Auto,
                     other => {
                         eprintln!(
-                            "unknown --variant value '{other}': expected score, jelly, ingredients, mystery, timed, levels, or auto"
+                            "unknown --variant value '{other}': expected score, jelly, ingredients, mystery, licorice, timed, levels, or auto"
                         );
                         std::process::exit(2);
                     }
@@ -877,7 +950,7 @@ fn parse_cli_args() -> CliArgs {
             }
             other => {
                 eprintln!(
-                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <score|jelly|ingredients|mystery|timed|levels|auto>)"
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <score|jelly|ingredients|mystery|licorice|timed|levels|auto>)"
                 );
                 std::process::exit(2);
             }
@@ -928,13 +1001,14 @@ fn print_result(session: &Session) {
         .collect::<Vec<_>>()
         .join(",");
     println!(
-        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} mystery_goals=[{mystery_goals}] generation={} reshuffles={}{level_suffix}",
+        "result={outcome} variant={:?} score={} moves_used={} jelly_remaining={} ingredients_collected={}/{} licorice_remaining={} mystery_goals=[{mystery_goals}] generation={} reshuffles={}{level_suffix}",
         session.game.variant,
         session.game.score,
         session.game.moves_used,
         session.game.jelly_remaining,
         session.game.ingredients_collected,
         session.game.ingredients_target,
+        session.game.licorice_remaining,
         session.game.generation + 1,
         session.game.reshuffles
     );
@@ -1218,6 +1292,16 @@ fn draw_hud(session: &Session, view: &View, control: &control::Control) {
                 &mut y,
             );
             line("SCORE", &g.score.to_string(), text, &mut y);
+        }
+        Variant::Licorice => {
+            line(
+                "LICORICE LEFT",
+                &g.licorice_remaining.to_string(),
+                good,
+                &mut y,
+            );
+            line("MOVES LEFT", &g.remaining_moves().to_string(), text, &mut y);
+            line("SCORE", &g.score.to_string(), dim, &mut y);
         }
         Variant::Mystery => {
             for goal in &g.mystery_goals {

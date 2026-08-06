@@ -168,13 +168,41 @@ pub enum Tile {
     /// only moves via gravity, and is collected the instant it settles on the bottom
     /// row (see `compact_and_refill`).
     Ingredient,
+    /// A blocker wall, modeled on real match-3 games' "Licorice Swirl"-family obstacle
+    /// (verified against it directly, not assumed — see `games/match-3/CLAUDE.md`'s
+    /// "Blocker tiles" section for sources; an earlier version of this doc comment had
+    /// the clearing rule backwards). Colorless, can never be swapped (see
+    /// `classify_swap`) or join an ordinary color match (its `color()` is `None`, same
+    /// mechanism that already keeps `Ingredient` out of runs).
+    ///
+    /// **Cleared two ways, both real**: (1) an *adjacent* ordinary match — "each match
+    /// weakens it," the primary/iconic mechanic, implemented in
+    /// `find_matches_with_spawns` rather than here since it applies to every match
+    /// (including cascades), not just a swap's own triggering one; (2) a bonus effect's
+    /// geometric clear area — `RowClear`/`ColClear`/`Wrapped` don't filter by tile
+    /// identity, so a Licorice cell caught in one clears same as any other cell.
+    /// `ColorBomb` never clears it: its `effect_cells` filters by color, and Licorice has
+    /// none — a colorless bomb targeting a color has no reason to reach a colorless wall,
+    /// so this falls out of the existing filter rather than needing its own guard.
+    /// (Real Licorice also "resists" a striped/line effect specifically, stopping it from
+    /// propagating past — not replicated here as unneeded complexity for a first pass.)
+    ///
+    /// **Immune to gravity**: it neither falls nor lets anything fall past it, splitting
+    /// its column into independently-compacting segments above/below it (see
+    /// `compact_and_refill`). This *isn't* directly attested for the real "Swirl" object
+    /// specifically (a separate "Licorice Fence" object is the one explicitly documented
+    /// as gravity-blocking) — but any obstacle that fully occupies a cell and never moves
+    /// has to act as a local shelf for whatever's above it in the same column as a matter
+    /// of physical consequence, regardless of which of King's two licorice-family props
+    /// that behavior is nominally attached to, so this is kept.
+    Licorice,
 }
 
 impl Tile {
     fn color(self) -> Option<Color> {
         match self {
             Tile::Plain(c) | Tile::Bonus(c, _) => Some(c),
-            Tile::ColorBomb | Tile::Ingredient => None,
+            Tile::ColorBomb | Tile::Ingredient | Tile::Licorice => None,
         }
     }
 
@@ -248,6 +276,11 @@ pub struct Resolution {
     pub score_gained: u32,
     pub jelly_cleared: u32,
     pub ingredients_collected: u32,
+    /// How many `Tile::Licorice` cells this move's bonus-effect area(s) swept away —
+    /// computed unconditionally like the other goal counters, though no `Variant` reads
+    /// it as a win condition (Licorice is a pure obstacle, not a goal); the solver reads
+    /// it to bias toward moves that clear a path through blockers.
+    pub licorice_cleared: u32,
     /// How many cells of each `Color` (indexed via `Color::index`) this move cleared —
     /// computed unconditionally, same as `jelly_cleared`/`ingredients_collected`, since
     /// `resolve()` doesn't know which `Variant` is asking. Only `Variant::Mystery` reads
@@ -269,6 +302,11 @@ pub enum Variant {
     /// the plain `Score`-shaped board (no special board-gen needed) and counts cleared
     /// cells by color via `Resolution::color_cleared`.
     Mystery,
+    /// Clear every `Tile::Licorice` cell on the board (see that tile's own doc comment
+    /// for the clearing rule). `LevelParams::licorice_cell_count` is independent of
+    /// `variant` — this arm is what turns "some cells happen to be Licorice" into an
+    /// actual win condition, same relationship `Variant::Jelly` has to `Board::jelly`.
+    Licorice,
 }
 
 /// One color target within a `Variant::Mystery` episode — `Game::mystery_goals` holds
@@ -317,6 +355,11 @@ const MYSTERY_MAX_COLORS: usize = 3;
 /// not one shared number). Tuned via the standard three-disjoint-150-seed-range sweep
 /// per count; see CLAUDE.md's "Mystery" section for the measured win rates.
 const MYSTERY_TARGET_RANGES: [(u32, u32); MYSTERY_MAX_COLORS] = [(28, 34), (24, 30), (22, 28)];
+const LICORICE_MOVE_LIMIT: u32 = 17;
+/// How many `Tile::Licorice` cells a free-cycling `Variant::Licorice` board seeds —
+/// `LEVELS`' own "Licorice Lane" entry sets its own count via `LevelParams`, independent
+/// of this. Within `MAX_LEVEL_LICORICE`'s soft cap.
+const LICORICE_CELL_COUNT: usize = 24;
 
 /// One entry in the hand-authored level line `LEVELS` that `VariantMode::Levels` (see
 /// `main.rs`) steps through — reuses the same four `Variant` win-conditions as the
@@ -329,7 +372,10 @@ const MYSTERY_TARGET_RANGES: [(u32, u32); MYSTERY_MAX_COLORS] = [(28, 34), (24, 
 /// means more frequent incidental matches (real match-3 games' standard difficulty
 /// ramp), so early levels use a narrower palette and later ones widen back to the full
 /// `Color::ALL` (see `MIN_LEVEL_COLORS` for the floor `gen_plain_tiles`' avoid-immediate-
-/// match retry loop needs to still terminate).
+/// match retry loop needs to still terminate). `licorice_cell_count` also applies to
+/// every variant, same reasoning — a blocker wall (see `Tile::Licorice`) is an obstacle
+/// layered on top of whichever goal the level already has, not a goal of its own, so it
+/// isn't gated to one `variant` the way `jelly_cell_count`/`ingredients_target` are.
 #[derive(Clone, Copy)]
 pub struct LevelParams {
     pub name: &'static str,
@@ -340,6 +386,7 @@ pub struct LevelParams {
     pub ingredients_target: u32,
     pub time_limit: f32,
     pub color_count: usize,
+    pub licorice_cell_count: usize,
 }
 
 /// `gen_plain_tiles`' per-cell retry loop excludes at most 2 distinct colors (one to
@@ -348,6 +395,16 @@ pub struct LevelParams {
 /// spin forever. 3 is the hard floor; `LEVELS` stays at 4+ for actual difficulty
 /// headroom on top of that safety margin.
 const MIN_LEVEL_COLORS: usize = 3;
+
+/// Soft cap on `LevelParams::licorice_cell_count` — not a rigorously derived floor like
+/// `MIN_LEVEL_COLORS`, just a guard against an obviously-broken level: leaves at least
+/// five eighths of the board colorable so `reshuffle`'s "recolor everything, find a
+/// legal move" safety net stays trivially satisfiable regardless of where the blockers
+/// land. Raised from an initial `W*H/4` (16) once the free-cycling `Variant::Licorice`
+/// tuning sweep (`LICORICE_CELL_COUNT` = 24) showed that density plays fine — the real
+/// adjacent-match clearing rule (see `Tile::Licorice`) turned out to need noticeably more
+/// cells than the original guess to feel like a real obstacle, not less.
+const MAX_LEVEL_LICORICE: usize = W * H * 3 / 8;
 
 /// After this many consecutive losses on the same level, `Session::next_generation`
 /// (main.rs) advances to the next level anyway rather than replaying it forever — there's
@@ -370,6 +427,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 4,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Sticky Start",
@@ -380,6 +438,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 4,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "First Delivery",
@@ -390,6 +449,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 1,
         time_limit: 0.0,
         color_count: 4,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Color Search",
@@ -400,6 +460,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 4,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Building Up",
@@ -410,6 +471,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 4,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Jelly Patch",
@@ -420,6 +482,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 5,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Two by Two",
@@ -430,6 +493,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 2,
         time_limit: 0.0,
         color_count: 5,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Rainbow Hunt",
@@ -440,6 +504,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 5,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Quick Hands",
@@ -450,6 +515,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 45.0,
         color_count: 5,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Point Rush",
@@ -460,6 +526,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 5,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Deep Jelly",
@@ -470,6 +537,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 6,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Full Batch",
@@ -480,6 +548,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 3,
         time_limit: 0.0,
         color_count: 6,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Color Storm",
@@ -490,6 +559,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 6,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Against the Clock",
@@ -500,6 +570,7 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 55.0,
         color_count: 6,
+        licorice_cell_count: 0,
     },
     LevelParams {
         name: "Grand Finale",
@@ -510,6 +581,25 @@ pub const LEVELS: &[LevelParams] = &[
         ingredients_target: 0,
         time_limit: 0.0,
         color_count: 6,
+        licorice_cell_count: 0,
+    },
+    // First `Tile::Licorice` level — appended after "Grand Finale" rather than spliced
+    // into the ramp, so every existing level keeps its index (a lot of `CLAUDE.md`'s
+    // tuning history references levels by position, e.g. "L11 Deep Jelly"). `Variant::Licorice`
+    // (clear every Licorice cell), not `Score` — an obstacle-clearing level should make
+    // clearing the obstacle the actual point, not an incidental drag on an unrelated
+    // score target (see `games/match-3/CLAUDE.md`'s "Blocker tiles" section for the
+    // reconsideration that led here; the original `Score`-dressed version is superseded).
+    LevelParams {
+        name: "Licorice Lane",
+        variant: Variant::Licorice,
+        score_target: 0,
+        move_limit: 17,
+        jelly_cell_count: 0,
+        ingredients_target: 0,
+        time_limit: 0.0,
+        color_count: 6,
+        licorice_cell_count: 22,
     },
 ];
 
@@ -525,6 +615,12 @@ pub struct Game {
     pub jelly_remaining: u32,
     pub ingredients_target: u32,
     pub ingredients_collected: u32,
+    /// `Tile::Licorice` cells still on the board — computed from `board.tiles` at
+    /// generation time regardless of `variant` (same "always carried, only meaningful
+    /// for its own variant" pattern as `ingredients_target`), and only `Variant::Licorice`
+    /// reads it as a win condition. Decremented by `Resolution::licorice_cleared` in
+    /// `apply`, same as `jelly_remaining`.
+    pub licorice_remaining: u32,
     pub time_remaining: f32,
     /// Only meaningful for `Variant::Mystery` — 1-3 independent color goals, all of which
     /// must reach their `target` to win. Empty for every other variant, same pattern as
@@ -541,8 +637,29 @@ pub struct Game {
 
 impl Game {
     pub fn new(variant: Variant, generation: u32) -> Self {
-        let mut board = gen_board(variant, JELLY_CELL_COUNT, INGREDIENTS_TARGET, &Color::ALL);
+        // 0 licorice cells for every free-cycling variant except `Licorice` itself,
+        // which needs a real obstacle count to have a win condition at all — every other
+        // free-cycling variant stays obstacle-free, same relationship `color_count` has
+        // to those variants' always-full `Color::ALL`.
+        let licorice_cell_count = if variant == Variant::Licorice {
+            LICORICE_CELL_COUNT
+        } else {
+            0
+        };
+        let mut board = gen_board(
+            variant,
+            JELLY_CELL_COUNT,
+            INGREDIENTS_TARGET,
+            licorice_cell_count,
+            &Color::ALL,
+        );
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
+        let licorice_remaining = board
+            .tiles
+            .iter()
+            .flatten()
+            .filter(|t| matches!(t, Tile::Licorice))
+            .count() as u32;
         // Computed from `board.active_colors` (a borrow) before `board` moves into the
         // struct literal below — see `gen_mystery_goals`' doc comment for why it can't
         // just default to `Color::ALL`. Draws from the board's own `rng` (not the
@@ -565,6 +682,7 @@ impl Game {
                 Variant::Ingredients => INGREDIENTS_MOVE_LIMIT,
                 Variant::Timed => u32::MAX,
                 Variant::Mystery => MYSTERY_MOVE_LIMIT,
+                Variant::Licorice => LICORICE_MOVE_LIMIT,
             },
             // 0 for `Timed`: that variant has no win condition (see `update_phase`) —
             // its `score_target` is otherwise dead, kept at 0 rather than `SCORE_TARGET`
@@ -577,6 +695,7 @@ impl Game {
             jelly_remaining,
             ingredients_target: INGREDIENTS_TARGET,
             ingredients_collected: 0,
+            licorice_remaining,
             time_remaining: TIME_LIMIT,
             mystery_goals,
             phase: Phase::Playing,
@@ -595,13 +714,32 @@ impl Game {
             params.name,
             params.color_count
         );
+        debug_assert!(
+            params.licorice_cell_count <= MAX_LEVEL_LICORICE,
+            "level {} licorice_cell_count {} exceeds the {} soft cap",
+            params.name,
+            params.licorice_cell_count,
+            MAX_LEVEL_LICORICE
+        );
+        debug_assert!(
+            variant != Variant::Licorice || params.licorice_cell_count > 0,
+            "level {} is Variant::Licorice with licorice_cell_count 0 — unwinnable by construction",
+            params.name
+        );
         let mut board = gen_board(
             variant,
             params.jelly_cell_count,
             params.ingredients_target,
+            params.licorice_cell_count,
             &Color::ALL[..params.color_count],
         );
         let jelly_remaining = board.jelly.iter().flatten().filter(|&&j| j > 0).count() as u32;
+        let licorice_remaining = board
+            .tiles
+            .iter()
+            .flatten()
+            .filter(|t| matches!(t, Tile::Licorice))
+            .count() as u32;
         // Same "compute from a borrow of `board` before it moves into the struct literal"
         // shape as `Game::new` — goals are rolled fresh per episode (not stored on
         // `LevelParams`) same as the free-cycling variant, so a `Mystery` level just needs
@@ -625,6 +763,7 @@ impl Game {
             jelly_remaining,
             ingredients_target: params.ingredients_target,
             ingredients_collected: 0,
+            licorice_remaining,
             time_remaining: params.time_limit,
             mystery_goals,
             phase: Phase::Playing,
@@ -689,6 +828,9 @@ impl Game {
                 goal.collected += res.color_cleared[goal.color.index()];
             }
         }
+        if self.variant == Variant::Licorice {
+            self.licorice_remaining = self.licorice_remaining.saturating_sub(res.licorice_cleared);
+        }
         self.update_phase();
         if self.phase == Phase::Playing && self.legal_moves().is_empty() {
             reshuffle(&mut self.board);
@@ -726,6 +868,7 @@ impl Game {
                 !self.mystery_goals.is_empty()
                     && self.mystery_goals.iter().all(|g| g.collected >= g.target)
             }
+            Variant::Licorice => self.licorice_remaining == 0,
         };
         if won {
             self.phase = Phase::Over(Outcome::Won);
@@ -750,7 +893,9 @@ enum SwapKind {
 }
 
 fn classify_swap(a: Tile, b: Tile) -> SwapKind {
-    if matches!(a, Tile::Ingredient) || matches!(b, Tile::Ingredient) {
+    if matches!(a, Tile::Ingredient | Tile::Licorice)
+        || matches!(b, Tile::Ingredient | Tile::Licorice)
+    {
         return SwapKind::Illegal;
     }
     match (a.is_special(), b.is_special()) {
@@ -910,6 +1055,29 @@ fn find_matches_with_spawns(tiles: &Tiles, prefer: &[Pos]) -> (Cleared, Spawns) 
     for pos in &spawn_cells {
         matched.remove(pos);
     }
+
+    // Real match-3 "Licorice Swirl"-style blockers are cleared by an *adjacent* match,
+    // not (only) by a special effect passing through them — see `Tile::Licorice`'s doc
+    // comment. Checked against the final `matched` set (post spawn-cell removal, so a
+    // spawned bonus tile's own cell — never a Licorice cell, since a run can't include
+    // one — doesn't accidentally weaken a neighboring Licorice a second way), and folded
+    // into every call site uniformly: the initial swap-driven match and every cascade
+    // continuation alike, matching "each match weakens it," not just the triggering one.
+    let mut licorice_adjacent = Vec::new();
+    for &(r, c) in &matched {
+        for &(dr, dc) in &[(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+            let (nr, nc) = (r as i32 + dr, c as i32 + dc);
+            if nr < 0 || nc < 0 || nr as usize >= H || nc as usize >= W {
+                continue;
+            }
+            let (nr, nc) = (nr as usize, nc as usize);
+            if matches!(tiles[nr][nc], Tile::Licorice) {
+                licorice_adjacent.push((nr, nc));
+            }
+        }
+    }
+    matched.extend(licorice_adjacent);
+
     (matched, spawns)
 }
 
@@ -1096,6 +1264,14 @@ fn score_for(cleared: usize, wave_index: usize) -> u32 {
 /// instant it settles on the bottom row, and refills the vacated top cells with fresh
 /// random tiles — returning per-tile fall animations for the renderer and the count of
 /// ingredients collected this pass.
+///
+/// A column isn't necessarily compacted as one run top-to-bottom: a surviving
+/// `Tile::Licorice` cell is immune to gravity (it neither falls nor lets anything fall
+/// past it — see the tile's own doc comment), so it splits its column into independent
+/// segments that each compact/refill exactly like a short column of their own would. A
+/// Licorice cell that got cleared *this* wave (by a bonus effect passing through it —
+/// see `resolve`) is not a separator: the segments on either side of it simply merge for
+/// this pass, same as if any other obstacle had been removed.
 fn compact_and_refill(
     board: &mut Board,
     cleared: &HashSet<(usize, usize)>,
@@ -1108,58 +1284,114 @@ fn compact_and_refill(
     let active_colors = board.active_colors.clone();
 
     for col in 0..W {
-        let mut survivors: Vec<(usize, Tile)> = Vec::new(); // (original row, tile)
-        for row in 0..H {
-            if !cleared.contains(&(row, col)) {
-                survivors.push((row, board.tiles[row][col]));
+        let mut row = 0;
+        while row < H {
+            let is_separator = |r: usize| {
+                matches!(board.tiles[r][col], Tile::Licorice) && !cleared.contains(&(r, col))
+            };
+            if is_separator(row) {
+                row += 1;
+                continue;
             }
-        }
-
-        // An ingredient that just landed on the bottom row this pass is collected
-        // instead of settling there — it never actually gets drawn at row H-1. Guarded
-        // by "wasn't already the bottom occupant" so an ingredient that settled on a
-        // previous wave and simply has nothing new to fall onto it isn't re-collected
-        // every subsequent wave.
-        let just_landed_at_bottom = matches!(survivors.last(), Some(&(_, Tile::Ingredient)))
-            && !matches!(board.tiles[H - 1][col], Tile::Ingredient);
-        if just_landed_at_bottom {
-            survivors.pop();
-            collected += 1;
-        }
-
-        // Jelly belongs to the cell (a fixed goal layout drawn under whatever tile
-        // currently sits there), not to any particular tile — it must NOT travel with
-        // falling tiles, so `board.jelly` is left untouched here; only `tiles` moves.
-        let deficit = H - survivors.len();
-        let mut new_col = [Tile::Plain(Color::Red); H];
-        for (i, &(from_row, tile)) in survivors.iter().enumerate() {
-            let to_row = deficit + i;
-            new_col[to_row] = tile;
-            if from_row != to_row {
-                falls.push(FallEntry {
-                    col,
-                    from_row: from_row as i32,
-                    to_row,
-                    tile,
-                });
+            let start = row;
+            while row < H && !is_separator(row) {
+                row += 1;
             }
-        }
-        for (i, slot) in new_col.iter_mut().enumerate().take(deficit) {
-            let tile = Tile::Plain(Color::random_from(&active_colors, &mut board.rng));
-            *slot = tile;
-            falls.push(FallEntry {
+            collected += compact_and_refill_segment(
+                board,
                 col,
-                from_row: i as i32 - deficit as i32 - 1,
-                to_row: i,
-                tile,
-            });
-        }
-        for (row, &tile) in new_col.iter().enumerate() {
-            board.tiles[row][col] = tile;
+                start,
+                row, // exclusive end
+                cleared,
+                &active_colors,
+                &mut falls,
+            );
         }
     }
 
     (falls, collected)
+}
+
+/// Compacts and refills rows `start..end` of `col` in isolation, as if they were their
+/// own short column — see `compact_and_refill`'s doc comment for why a column can be
+/// more than one of these. Identical logic to the pre-Licorice single-segment
+/// implementation, just scoped to `start..end` instead of always `0..H`.
+fn compact_and_refill_segment(
+    board: &mut Board,
+    col: usize,
+    start: usize,
+    end: usize,
+    cleared: &HashSet<(usize, usize)>,
+    active_colors: &[Color],
+    falls: &mut Vec<FallEntry>,
+) -> u32 {
+    let mut collected = 0u32;
+    let mut survivors: Vec<(usize, Tile)> = Vec::new(); // (original row, tile)
+    for row in start..end {
+        if !cleared.contains(&(row, col)) {
+            survivors.push((row, board.tiles[row][col]));
+        }
+    }
+
+    // An ingredient is only ever collected off the board's true bottom row — a segment
+    // sitting above a surviving Licorice cell never reaches row `H-1` while the blocker
+    // stands, so this can only fire for the segment that actually owns it (`end == H`),
+    // same condition that was always implicitly true before Licorice existed.
+    let just_landed_at_bottom = end == H
+        && matches!(survivors.last(), Some(&(_, Tile::Ingredient)))
+        && !matches!(board.tiles[H - 1][col], Tile::Ingredient);
+    if just_landed_at_bottom {
+        survivors.pop();
+        collected += 1;
+    }
+
+    // Jelly belongs to the cell (a fixed goal layout drawn under whatever tile
+    // currently sits there), not to any particular tile — it must NOT travel with
+    // falling tiles, so `board.jelly` is left untouched here; only `tiles` moves.
+    let seg_len = end - start;
+    let deficit = seg_len - survivors.len();
+    let mut new_seg = vec![Tile::Plain(Color::Red); seg_len];
+    for (i, &(from_row, tile)) in survivors.iter().enumerate() {
+        let to_row = start + deficit + i;
+        new_seg[deficit + i] = tile;
+        if from_row != to_row {
+            falls.push(FallEntry {
+                col,
+                from_row: from_row as i32,
+                to_row,
+                tile,
+            });
+        }
+    }
+    for (i, slot) in new_seg.iter_mut().enumerate().take(deficit) {
+        let tile = Tile::Plain(Color::random_from(active_colors, &mut board.rng));
+        *slot = tile;
+        // `from_row` is an absolute board row the renderer lerps from — for the segment
+        // that owns the board's true top (`start == 0`), off-board negative rows still
+        // work exactly as before Licorice existed (unstaggered by any of this). A
+        // segment sitting below a Licorice shelf has no such off-board room: any row
+        // above `start` is either the shelf itself or the segment on its *other* side,
+        // and animating a fall from there would visibly clip straight through the
+        // shelf. Every fresh tile in that segment instead falls from `start - 1` (the
+        // shelf's own row) — no stagger between them, but a fall that reads as
+        // "emerging from beneath the shelf," not "through" it.
+        let from_row = if start == 0 {
+            i as i32 - deficit as i32 - 1
+        } else {
+            start as i32 - 1
+        };
+        falls.push(FallEntry {
+            col,
+            from_row,
+            to_row: start + i,
+            tile,
+        });
+    }
+    for (i, &tile) in new_seg.iter().enumerate() {
+        board.tiles[start + i][col] = tile;
+    }
+
+    collected
 }
 
 // ── Resolution driver ────────────────────────────────────────────────────────────────
@@ -1204,6 +1436,7 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
     let mut score_gained = 0u32;
     let mut jelly_cleared = 0u32;
     let mut ingredients_collected = 0u32;
+    let mut licorice_cleared = 0u32;
     let mut color_cleared = [0u32; Color::ALL.len()];
 
     loop {
@@ -1228,6 +1461,9 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
             }
             if let Some(color) = board_before.tiles[r][c].color() {
                 color_cleared[color.index()] += 1;
+            }
+            if matches!(board_before.tiles[r][c], Tile::Licorice) {
+                licorice_cleared += 1;
             }
         }
         for &(pos, tile) in &spawns {
@@ -1259,6 +1495,7 @@ pub(crate) fn resolve(board: &mut Board, mv: Move) -> Resolution {
         score_gained,
         jelly_cleared,
         ingredients_collected,
+        licorice_cleared,
         color_cleared,
     }
 }
@@ -1321,6 +1558,7 @@ fn gen_board(
     variant: Variant,
     jelly_cell_count: usize,
     ingredients_target: u32,
+    licorice_cell_count: usize,
     active_colors: &[Color],
 ) -> Board {
     // Seeded once here, drawing a single value from the ambient global RNG — every
@@ -1351,7 +1589,22 @@ fn gen_board(
                 tiles[r][c] = Tile::Ingredient;
             }
         }
-        Variant::Score | Variant::Timed | Variant::Mystery => {}
+        Variant::Score | Variant::Timed | Variant::Mystery | Variant::Licorice => {}
+    }
+
+    // Licorice placement is independent of `variant` (see `LevelParams::licorice_cell_count`'s
+    // doc comment) and runs after any variant-specific placement above, so it only ever
+    // overwrites a plain tile — never a just-placed `Ingredient`. `reshuffle` below fixes
+    // any accidental match this overwrite creates and re-guarantees a legal move exists,
+    // same safety net `Ingredient` placement already relies on.
+    let mut placed = 0;
+    while placed < licorice_cell_count {
+        let r = rng.gen_range(0, H as u64) as usize;
+        let c = rng.gen_range(0, W as u64) as usize;
+        if matches!(tiles[r][c], Tile::Plain(_)) {
+            tiles[r][c] = Tile::Licorice;
+            placed += 1;
+        }
     }
 
     let mut board = Board {
@@ -1389,7 +1642,7 @@ fn reshuffle(board: &mut Board) {
                         *tile =
                             Tile::Bonus(Color::random_from(&active_colors, &mut board.rng), special)
                     }
-                    Tile::ColorBomb | Tile::Ingredient => {}
+                    Tile::ColorBomb | Tile::Ingredient | Tile::Licorice => {}
                 }
             }
         }
@@ -1426,6 +1679,7 @@ mod tests {
             Variant::Ingredients,
             Variant::Timed,
             Variant::Mystery,
+            Variant::Licorice,
         ] {
             for _ in 0..20 {
                 let game = Game::new(variant, 0);
@@ -1470,6 +1724,7 @@ mod tests {
             Variant::Ingredients,
             Variant::Timed,
             Variant::Mystery,
+            Variant::Licorice,
         ] {
             for episode in 0..10 {
                 let mut game = Game::new(variant, episode);
@@ -1699,6 +1954,99 @@ mod tests {
             res.waves[0].cleared.contains(&(0, 1)),
             "a ColorBomb+Wrapped combo should clear the ColorBomb tile itself, not just the target color: {:?}",
             res.waves[0].cleared
+        );
+    }
+
+    #[test]
+    fn licorice_is_unswappable_and_splits_column_gravity() {
+        seed();
+        let mut board = Board {
+            tiles: checkerboard(),
+            jelly: [[0; W]; H],
+            active_colors: Color::ALL.to_vec(),
+            rng: Rng::seeded(42),
+        };
+        board.tiles[3][0] = Tile::Licorice;
+
+        assert!(!is_legal_swap(&board.tiles, (3, 0), (3, 1)));
+        assert!(!is_legal_swap(&board.tiles, (2, 0), (3, 0)));
+
+        // Clear every other cell in column 0 (but not the Licorice cell itself) and run
+        // gravity directly.
+        let cleared: HashSet<(usize, usize)> = (0..H).filter(|&r| r != 3).map(|r| (r, 0)).collect();
+        let (falls, _) = compact_and_refill(&mut board, &cleared);
+
+        // The shelf itself never moves and never appears in a FallEntry.
+        assert!(matches!(board.tiles[3][0], Tile::Licorice));
+        assert!(!falls.iter().any(|f| matches!(f.tile, Tile::Licorice)));
+
+        // Every fresh tile below the shelf falls in from the shelf's own row (3), never
+        // from a row belonging to the segment above it — a fall crossing the shelf would
+        // mean the "block/support tiles above it like a shelf" behavior regressed.
+        for f in falls.iter().filter(|f| f.col == 0 && f.to_row > 3) {
+            assert_eq!(
+                f.from_row,
+                3,
+                "a below-shelf fall should start at the shelf's own row: {:?}",
+                (f.from_row, f.to_row)
+            );
+        }
+        // The above-shelf segment's fresh tiles still spawn off-board, same as any
+        // ordinary column without a Licorice cell in it.
+        for f in falls.iter().filter(|f| f.col == 0 && f.to_row < 3) {
+            assert!(
+                f.from_row < 0,
+                "above-shelf falls should spawn off-board: from_row={} to_row={}",
+                f.from_row,
+                f.to_row
+            );
+        }
+    }
+
+    #[test]
+    fn licorice_never_matches_or_joins_a_run() {
+        seed();
+        let mut tiles = checkerboard();
+        // A run that would be 5-in-a-row if not for the Licorice cell breaking it up.
+        for cell in tiles[0].iter_mut().take(5) {
+            *cell = Tile::Plain(Color::Red);
+        }
+        tiles[0][2] = Tile::Licorice;
+        let (cleared, spawns) = find_matches_with_spawns(&tiles, &[]);
+        assert!(
+            cleared.is_empty() && spawns.is_empty(),
+            "a Licorice cell mid-run should prevent the run from matching at all: cleared={cleared:?} spawns={spawns:?}"
+        );
+    }
+
+    #[test]
+    fn licorice_is_cleared_by_an_adjacent_ordinary_match() {
+        seed();
+        // A plain 3-in-a-row at row 0, cols 0-2 — not blocked by Licorice this time — with
+        // a Licorice cell directly below its middle tile, at (1, 1). The real "Licorice
+        // Swirl" mechanic (see `Tile::Licorice`'s doc comment) is cleared by any match
+        // *adjacent* to it, not just one it happens to sit inside.
+        let mut tiles = checkerboard();
+        for cell in tiles[0].iter_mut().take(3) {
+            *cell = Tile::Plain(Color::Red);
+        }
+        tiles[1][1] = Tile::Licorice;
+        let (cleared, _) = find_matches_with_spawns(&tiles, &[]);
+        assert!(
+            cleared.contains(&(1, 1)),
+            "a match adjacent to a Licorice cell should clear it too: {cleared:?}"
+        );
+
+        // A Licorice cell with no matched neighbor at all is untouched.
+        let mut tiles = checkerboard();
+        for cell in tiles[0].iter_mut().take(3) {
+            *cell = Tile::Plain(Color::Red);
+        }
+        tiles[4][4] = Tile::Licorice;
+        let (cleared, _) = find_matches_with_spawns(&tiles, &[]);
+        assert!(
+            !cleared.contains(&(4, 4)),
+            "a Licorice cell with no adjacent match should survive: {cleared:?}"
         );
     }
 }

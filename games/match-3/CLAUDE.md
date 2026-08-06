@@ -70,7 +70,7 @@ happens around it.
 ## Goal variants
 
 `V`-cycles like Tetris's piece-gen modes (`VariantMode::Auto` rotates by
-`generation % 4`, see `main.rs`):
+`generation % 6`, see `main.rs`):
 
 | Variant | Goal | Paced by |
 |---|---|---|
@@ -78,6 +78,7 @@ happens around it.
 | `Jelly` | clear all `Board::jelly` layers | `JELLY_MOVE_LIMIT` moves |
 | `Ingredients` | get `INGREDIENTS_TARGET` `Tile::Ingredient` tiles to row `H-1` via gravity only | `INGREDIENTS_MOVE_LIMIT` moves |
 | `Mystery` | clear every goal in `Game::mystery_goals` (1-3 colors, each own target — "hit all to win"; HUD names it "color hunt") | `MYSTERY_MOVE_LIMIT` moves |
+| `Licorice` | clear every `Tile::Licorice` cell on the board (HUD names it "blocker clear") | `LICORICE_MOVE_LIMIT` moves |
 | `Timed` | no move limit | real countdown, `Game::tick_time(dt)` called from `amain` directly (time-paced, not move-paced — the only variant not driven through `Game::apply`) |
 
 **`Mystery`** (todo backlog item #4's "candy-order" goal — collect N of a specific
@@ -437,7 +438,7 @@ constants — `Game::new_level` is the level-aware sibling of `Game::new`, and `
 takes `jelly_cell_count`/`ingredients_target`/`active_colors` as parameters rather than
 reading the consts directly, for exactly this reason.
 
-Deliberately **not** one of `Auto`'s `generation % 4` rotation targets — per root
+Deliberately **not** one of `Auto`'s `generation % 6` rotation targets — per root
 CLAUDE.md's "In-game controls" note, `Auto` should never land on a mode only reachable
 by explicit select. Only reachable via the `V` cycle or `--variant levels`.
 
@@ -529,6 +530,137 @@ targets, move limits, etc.) downward to compensate and manufacture a tighter ear
 band was considered and deliberately not done — no floor violation to fix, and doing so
 would be re-tuning 8 levels' worth of already-shipped, already-floor-checked numbers on
 taste alone rather than in response to a measured problem.
+
+## Blocker tiles (`Tile::Licorice`)
+
+First of `.notes/match3_todo.md` item #3's blocker candidates to ship — flagged there as
+the simplest (closest to the already-solved `Tile::Ingredient` immunity pattern) and
+picked as the starting point the rest of that list (Frozen, Deep Freeze, Locked/Caged,
+Spreading Jelly) can build on. Colorless, like `ColorBomb`/`Ingredient` (`Tile::color()`
+returns `None`), which is what already keeps it out of ordinary color runs — no separate
+guard needed, same mechanism `Ingredient` already relies on. `classify_swap` refuses any
+swap touching it (`SwapKind::Illegal`, same check as `Ingredient`) — it's a wall, not a
+piece that can be picked up.
+
+**The first version shipped had the clearing rule backwards — checked against real
+match-3 games (Candy Crush's "Licorice Swirl" family) rather than assumed, and fixed.**
+The todo doc's original guess ("only removed by a bonus effect... never an ordinary
+match") turned out to be inverted: real Licorice Swirl's primary, iconic mechanic is
+being cleared by an *adjacent ordinary match* — "each match weakens it" — with bonus
+effects as a secondary path. The original implementation only had the secondary path,
+which made it near-permanent in practice (bonus tiles are relatively rare), starving
+`solver::LICORICE_WEIGHT` of almost anything to actually reward. Fixed in
+`find_matches_with_spawns`: after computing the final `matched` set for *any* match
+(the initial swap-driven one and every cascade continuation alike — real Licorice
+weakens on cascades too, not just the triggering match), every orthogonal neighbor of a
+matched cell that holds `Tile::Licorice` is folded into the same set, so it clears
+alongside the match that triggered it. The bonus-effect path is unchanged and still
+correct on its own terms: `RowClear`/`ColClear`/`Wrapped`'s `effect_cells` don't filter
+by tile identity, so a Licorice cell caught in one of those areas clears same as any
+other cell; `ColorBomb` still doesn't reach it (color-filtered, and Licorice has none) —
+falls out of the existing filter, no bespoke exception needed. (Real Licorice Swirl also
+"resists" a striped/line effect specifically, stopping its propagation past — not
+replicated here as unneeded complexity for a first pass.) `Resolution::licorice_cleared`
+(computed unconditionally in `resolve()`, same pattern as `jelly_cleared`/`color_cleared`)
+is what the solver reads.
+
+**Gravity-blocking ("shelf") behavior was kept despite not being directly attested for
+the real Swirl object specifically** — search results distinguish it from a separate
+"Licorice Fence" object, documented as the one that explicitly blocks falling. But any
+obstacle that fully occupies a cell and never moves has to act as a local shelf for
+whatever's above it in the same column as a matter of physical consequence, regardless of
+which of King's two licorice-family props that behavior is nominally attached to, so the
+mechanism below was kept as originally built. `compact_and_refill` doesn't compact a
+column top-to-bottom in one pass — it walks each column looking for runs of rows *not*
+containing a surviving (uncleared) Licorice cell, and calls the pre-existing
+single-column logic (factored out as `compact_and_refill_segment`) once per run, scoped
+to `start..end` instead of always `0..H`. A Licorice cell that itself got cleared this
+wave isn't a separator — the segments on either side simply merge for that pass, same as
+any other obstacle's removal would unify a column. `Tile::Ingredient`'s bottom-row
+collection check is guarded on `end == H` for the same reason: a segment sitting above a
+surviving shelf structurally can't reach the board's true bottom row while the blocker
+stands.
+
+**A segment below a shelf can't spawn its fresh tiles off-board the way the top segment
+does — that would visibly clip through the shelf, since `FallEntry::from_row` is an
+absolute board row the renderer lerps from, not a segment-relative one.** The original
+single-segment formula (`from_row = start + i - deficit - 1`) goes negative or otherwise
+above `start` for every fresh tile by construction; harmless when `start == 0` (spawns
+off the true top of the board, unchanged behavior for every level with no Licorice in a
+column), but for `start > 0` that range always lands at or above `start - 1` — i.e.
+*inside* the segment above the shelf, or off-board past it. A first pass tried this naively
+and it animated as tiles falling from off the top of the whole board, straight through
+the shelf and the segment above it. Fixed by special-casing `start > 0`: every fresh tile
+in a below-shelf segment falls in from exactly `start - 1` (the shelf's own row) instead —
+no stagger between simultaneous spawns in that segment, but a fall that reads as
+"emerging from beneath the shelf," not "through" it. Zero behavior change for `start == 0`
+(every column in every pre-Licorice level), confirmed by the full test suite and the floor
+test's unchanged win rates for every level not featuring Licorice.
+
+**`Variant::Licorice` — clear every `Tile::Licorice` cell — added after the first ship,
+replacing the original `Score`-dressed "Licorice Lane."** An obstacle-clearing level
+should make clearing the obstacle the actual point, not an incidental drag on an
+unrelated score target; a real `Variant` (mirroring `Jelly`'s "clear all X" shape) also
+makes it a proper free-cycling `V`-cycle entry like every other goal, not a `LEVELS`-only
+special case. `Game::licorice_remaining` (computed from `board.tiles` at generation time,
+decremented by `Resolution::licorice_cleared` in `apply`) is the win-condition counter,
+same relationship `jelly_remaining` has to `Variant::Jelly`. `solver::LICORICE_GOAL_WEIGHT`
+(350, on top of the always-on `LICORICE_WEIGHT` of 200 — so ~550/cell total when Licorice
+*is* the goal) is the `INGREDIENT_WEIGHT`-equivalent term that makes the eval actually
+chase it rather than merely tolerate it.
+
+`LevelParams::licorice_cell_count` itself stays independent of `variant` (threaded through
+`gen_board` alongside `jelly_cell_count`/`ingredients_target`, placed after any
+variant-specific placement so it only ever overwrites a plain tile) — a level *could* in
+principle decorate a `Score`/`Jelly`/etc. board with some Licorice without making clearing
+it the win condition, same architecture as before, just no longer how "Licorice Lane"
+itself is built. `MAX_LEVEL_LICORICE` (soft cap on `licorice_cell_count`, not a rigorously
+derived floor like `MIN_LEVEL_COLORS`) started at `W*H/4` (16) as an untested guess and was
+raised to `W*H*3/8` (24) once real tuning data showed that density plays fine — see below,
+the adjacent-match clearing rule needed *more* cells than guessed to feel like a real
+obstacle, not fewer.
+
+**Tuning: the adjacent-match clearing rule is dramatically more generous than the
+bonus-effect-only version, and needed correspondingly denser boards / tighter move
+budgets than the first-ship numbers.** Measured via the standard seed-sweep method
+(`--no-ui --once --variant licorice` for the free-cycling variant; `--release` seed
+sweeps of `LEVELS[15]` for "Licorice Lane"), iterating both levers together rather than
+one at a time given how far off the starting guess was:
+
+- Free-cycling `Variant::Licorice`: started at 12 cells / 24 moves (near the *old*,
+  too-low `MAX_LEVEL_LICORICE` guess) — 90.7% win rate (n=150), far too easy. 20/20 → 62.7%. Then
+  overcorrected to 28/15 → 30% (two big lever moves at once, past the band on the low
+  side). Settled at **`LICORICE_CELL_COUNT` = 24, `LICORICE_MOVE_LIMIT` = 17**: 55.3%
+  (seeds 1-150), 41.3% (seeds 151-300) — averages to a healthy ~48%, consistent with this
+  file's other documented range-to-range swings.
+- "Licorice Lane" (`LEVELS[15]`, still appended after "Grand Finale" so no other level's
+  index moved): the original `Score`-variant numbers are moot now that it's
+  `Variant::Licorice`. Started from 14 cells / 22 moves (83% win rate, too easy), tried
+  22/18 (62%), settled at **`licorice_cell_count` = 22, `move_limit` = 17**: 52% (seeds
+  1-60, the floor test's own range), 51.3% (a disjoint 61-210 check) — both in-band.
+  Floor-retested end to end afterward: every other level unchanged, all still ≥ floor.
+
+**A related, more targeted diagnostic on `Variant::Ingredients` — raised while reviewing
+this feature — reinforced this file's existing "no reweighting fix" conclusion from a
+new angle, rather than contradicting it.** A report that the solver "doesn't seem to
+prioritize removing Ingredients" prompted an instrumented sweep distinct from the earlier
+documented one: for every turn across 40 episodes, compare the *chosen* move's own
+ingredient-progress (rows fallen + collections, via `Game::simulate`) against the *best*
+progress achievable by any legally available move that turn. On turns where a
+positive-progress move *was* available, the solver picked a zero-progress move anyway
+44.6% of the time — and in over a third of those, the chosen move even had lower raw
+`score_gained` than the best-progress alternative would have. This is a different failure
+mode than the one already ruled out above ("no legal move can advance the goal this
+turn is *actually true* on the stalled turns" — that's about turns where *no* progress
+move exists at all, a disjoint case from what this diagnostic measured). Tested whether
+it's fixable by the obvious lever anyway: `INGREDIENT_PROGRESS_WEIGHT` 180→320 (+78%)
+moved the skip rate only 44.6%→43.9% and the win rate only 46.7%→48.0% (n=150 both) —
+both comfortably inside this file's own noise floor. Reverted. The skip rate being nearly
+invariant to a 78%-larger weight is itself informative: whatever's driving these skips
+isn't "the weight is a bit too small," so a further reweighting attempt without a new
+angle would very likely reproduce this same null result. Diagnostic code was throwaway
+(not committed) — the numbers above are the artifact worth keeping, per this file's usual
+practice for one-off tuning sweeps.
 
 ## Bonus tiles and combos
 
@@ -724,6 +856,27 @@ overlay — `amain` mirrors `game2048`'s exact split (`board_cache.mark_dirty()`
 frame while animating, `board_cache.draw()` only when settled) rather than Tetris's
 "cache the locked board, draw the live piece on top" split.
 
+**`Tile::Licorice` draws as a dark rounded block filling the whole cell (rim/fill layers,
+same pattern every other tile uses), not a gem silhouette inset into it** — it's a wall
+occupying the cell rather than a piece sitting on it, so it needed its own full-cell
+treatment rather than `draw_gem`'s shape-in-a-cell one. Two rounds of tuning from real
+feedback: the original near-black plum hue (rim `(14,10,18)`, fill `(28,20,34)`) with a
+subtle same-hue diagonal double stripe was "doesn't look good, not noticeable" — too
+close to the board's own cell background `(24,22,30)` to register at a glance. A first
+fix (wine-red block + a flat hazard-tape amber X) solved contrast but lost the licorice
+identity — "should still look a little more like licorice". Settled shape: a true
+licorice-black backing (rim `(16,11,13)`, fill `(32,23,25)`) with the X arms drawn as
+twisted red-licorice rope rather than a flat bar — each arm layers a body stroke
+(`168,30,38`), a thinner lighter core sheen (`222,92,92`), and four perpendicular ridge
+ticks (`108,16,22`) along its length evoking a rope twist, the same
+body/core-highlight two-tone language every other tile in this file uses, just traced
+along a line instead of filling a shape. Reads as candy up close, still an unmistakable
+high-contrast X at a glance. Drawn at plain `alpha`-scaled opacity like every other tile
+(`a(...)`, no `blend()`-precompute treatment) since `board_cache`'s `with_backdrop` already fixes
+translucency-under-`RenderCache` generally — the extra `blend()` precompute elsewhere in
+this section was a narrow fix for a *residual* gap specific to jelly's near-opaque fill,
+not something every future tile needs by default.
+
 ## Testing
 
 `game.rs`'s `#[cfg(test)]` module includes `full_playthrough_terminates_for_every_variant`
@@ -733,6 +886,15 @@ now the `beam_solver`-backed entry point, each episode constructs a fresh
 `solver::new_beam_search()` and passes `&mut beam` in — same per-episode `Beam` lifetime
 `Session` follows (a stale `visited` set must never carry across episodes). Worth this
 shape of test for any new self-playing game, not just this one.
+
+`licorice_is_unswappable_and_splits_column_gravity`, `licorice_never_matches_or_joins_a_run`,
+and `licorice_is_cleared_by_an_adjacent_ordinary_match` cover `Tile::Licorice`'s mechanics
+directly (illegal swap, run-breaking, shelf-splitting gravity via a direct
+`compact_and_refill` call, and the adjacent-match clearing rule) rather than only through a
+full playthrough — the segmented-gravity change in particular is exactly the kind of thing
+a soak test could pass while still animating falls through a shelf, since
+`full_playthrough_terminates_for_every_variant` only asserts termination and
+move-legality, not fall-entry correctness.
 
 ## Running
 

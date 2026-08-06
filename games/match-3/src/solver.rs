@@ -56,6 +56,25 @@ const JELLY_ENDGAME_ROOT_BONUS: i64 = 4000;
 /// to fix. Dropped rather than shipped as inert complexity.
 const MYSTERY_WEIGHT: i64 = 300;
 
+/// Extra weight per `Tile::Licorice` cell a move clears (an adjacent ordinary match or a
+/// bonus effect's area — see that tile's doc comment), applied unconditionally regardless
+/// of `Variant` — even outside `Variant::Licorice`, a Licorice cell sitting on some other
+/// variant's board (`LevelParams::licorice_cell_count` is independent of `variant`)
+/// reduces future cascade throughput near it, so without this the eval would have no
+/// reason to ever prefer punching through a blocker over an equal-`score_gained` move
+/// elsewhere. Deliberately smaller than `JELLY_WEIGHT`/`INGREDIENT_WEIGHT`/`MYSTERY_WEIGHT`
+/// — those bias toward an actual win condition; this alone only biases toward keeping the
+/// board open. See `LICORICE_GOAL_WEIGHT` for the additional weight that applies when
+/// clearing Licorice *is* the win condition.
+const LICORICE_WEIGHT: i64 = 200;
+
+/// Extra weight per `Tile::Licorice` cell cleared, added on top of `LICORICE_WEIGHT`
+/// only when `game.variant == Variant::Licorice` — mirrors `INGREDIENT_WEIGHT`'s
+/// relationship to `Variant::Ingredients`: the baseline weight alone treats Licorice as
+/// a nice-to-have, but when clearing it *is* the win condition, the eval needs to
+/// actually chase it the way `JELLY_WEIGHT`/`INGREDIENT_WEIGHT` chase their own goals.
+const LICORICE_GOAL_WEIGHT: i64 = 350;
+
 /// Experimental: reward a move for leaving the cell directly *below* a still-uncollected
 /// `Ingredient` primed (already has a same-color neighbor, one swap away from a match) —
 /// clearing that cell is what actually pulls the ingredient down a row (verified against
@@ -100,6 +119,10 @@ fn score_resolution(game: &Game, res: &Resolution) -> i64 {
         s += res.jelly_cleared as i64 * JELLY_ENDGAME_BONUS;
     }
     s += res.ingredients_collected as i64 * INGREDIENT_WEIGHT;
+    s += res.licorice_cleared as i64 * LICORICE_WEIGHT;
+    if game.variant == Variant::Licorice {
+        s += res.licorice_cleared as i64 * LICORICE_GOAL_WEIGHT;
+    }
     if game.variant == Variant::Mystery {
         // Only reward progress on goals not yet met — otherwise clears of an
         // already-completed color would keep scoring, diluting the incentive to focus on
