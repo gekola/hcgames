@@ -43,6 +43,9 @@ pub fn native_size(name: &str) -> (u32, u32) {
         // small next-piece panel stranded in a wide leftover gap. Narrower canvas sized to
         // its own content instead of the shared default.
         "tetris" => (600, 720),
+        // Bubble Shooter's hex-packed board is inherently tall and narrow, same
+        // reasoning as Tetris's own override just above.
+        "bubble-shooter" => (600, 720),
         _ => (900, 720),
     }
 }
@@ -62,7 +65,7 @@ pub fn native_size(name: &str) -> (u32, u32) {
 /// for the same reason game2048's is — same 1.0 treatment.
 fn max_fit_scale(name: &str) -> f64 {
     match name {
-        "game2048" | "tetris" => 1.0,
+        "game2048" | "tetris" | "bubble-shooter" => 1.0,
         _ => 1.5,
     }
 }
@@ -526,6 +529,7 @@ pub fn description(name: &str) -> String {
         "minesweeper" => "AI-solved Minesweeper, played automatically in your browser. Cycle between square and hexagonal grids.".into(),
         "tetris" => "Self-playing Tetris. An AI scores every drop by height, holes, and bumpiness with a known-next-piece lookahead, cycling between 7-bag, classic NES-style, TGM, and pure-random piece generators.".into(),
         "match-3" => "Self-playing match-3 puzzle. An AI swaps gems to chase score, jelly-clear, and ingredient-collection goals, triggering striped/wrapped/color-bomb combos along the way.".into(),
+        "bubble-shooter" => "Self-playing Bubble Shooter. A beam-search AI aims and fires at a hex-packed wall of bubbles, chasing chain-popping cascades as new rows descend under time pressure.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }
