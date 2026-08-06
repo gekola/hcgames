@@ -94,13 +94,37 @@ but re-measure before raising width/depth.
 
 Scoring (`score_resolution`): `+POP_WEIGHT` per popped cell, `+FLOATER_WEIGHT` (higher —
 the actual skill outcome) per floater, `-HEIGHT_PENALTY` per row of the post-move
-board's deepest bubble, `-NO_POP_PENALTY` plus `-ISOLATED_SINGLETON_PENALTY` if a no-pop
-shot's own bubble has zero same-color neighbors, `+ADJACENT_PAIR_BONUS` per same-color
-adjacent pair left on the board (live near-match proxy), `-ORPHAN_COLOR_PENALTY` per
-color with exactly one bubble left. **These weights are reasoned-from-first-principles,
-not measured-and-tuned** — root CLAUDE.md's standing rule ("win rate must be checked
-empirically, not assumed from the weights") hasn't had a real tuning pass yet here; see
-"Balance — known follow-up" below for what *was* measured.
+board's deepest bubble plus `-HEIGHT_MARGIN_PENALTY / margin_to_death_row` (see below),
+`-NO_POP_PENALTY` plus `-ISOLATED_SINGLETON_PENALTY` if a no-pop shot's own bubble has
+zero same-color neighbors, `+ADJACENT_PAIR_BONUS` per same-color adjacent pair left on
+the board (live near-match proxy), `-ORPHAN_COLOR_PENALTY` per color with exactly one
+bubble left, and `-LOSE_PENALTY` if the resulting state is `Outcome::Lost`. **These
+weights are reasoned-from-first-principles, not measured-and-tuned** — root CLAUDE.md's
+standing rule ("win rate must be checked empirically, not assumed from the weights")
+hasn't had a real tuning pass yet here; see "Balance" below for what *was* measured.
+
+**Fixed 2026-08-06: a losing move was scored like any other move.** `beam_score` called
+`score_resolution(&res, &after.board)` — nothing in the scorer ever looked at
+`after.phase`, so a move that outright ends the episode in `Outcome::Lost` only paid the
+ordinary per-row `HEIGHT_PENALTY` (25/row), which a single decent pop could easily
+outweigh. Confirmed via an A/B (same seeds, only this scoring change, `--no-ui` sweep):
+Warm-Up's loss rate dropped from 48% to 30% purely from this fix, with the rest of the
+episode-structure/level constants held fixed. Two things now enforce "never trade a
+survivable move for a losing one, no matter how much it pops": `LOSE_PENALTY` (100_000,
+added when `after.phase == Phase::Over(Outcome::Lost)`) and `HEIGHT_MARGIN_PENALTY /
+margin` (`margin = DEATH_ROW - max_row`, floored at 1) — a hyperbolic term that's
+negligible early (margin 8 adds ~38) but dominant right at the edge (margin 1 adds 300),
+because the marginal cost of one more row of height isn't constant: it barely matters
+when there's plenty of cushion left and ends the episode when there's none. A flat
+per-row term alone couldn't express that difference.
+
+Verified this fix isn't *itself* the reason the AI seemed to "leave bubbles on the
+table": before touching any weights, a temporary diagnostic (compare the solver's chosen
+move against the single best-available immediate popped+floater count, every real shot)
+ran clean across 2000+ real shots spanning several seeds and levels — the solver never
+once picked a move that popped/floated less than the best move actually available to it.
+The AI's apparent "suboptimal decisions" symptom traced entirely to the pacing bug
+described below, not to move selection.
 
 ## Episode structure
 

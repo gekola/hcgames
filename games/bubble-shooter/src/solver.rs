@@ -1,5 +1,6 @@
 use crate::game::{
-    Board, Color, DeterministicHasher, Game, Move, Phase, Resolution, Rng, max_row, preview_seed,
+    Board, Color, DEATH_ROW, DeterministicHasher, Game, Move, Outcome, Phase, Resolution, Rng,
+    max_row, preview_seed,
 };
 
 // ── Scoring weights ──────────────────────────────────────────────────────────────
@@ -18,6 +19,20 @@ const FLOATER_WEIGHT: i64 = 40;
 /// Per-row penalty on the post-move board's deepest bubble — height is the actual
 /// loss condition (`DEATH_ROW`), so this should dominate once a shot noticeably worsens it.
 const HEIGHT_PENALTY: i64 = 25;
+/// Added on top of `HEIGHT_PENALTY`, divided by however many rows of margin are left
+/// before `DEATH_ROW` — negligible early (margin 8 adds ~38) but dominant right at the
+/// edge (margin 1 adds 300), because the *marginal* cost of one more row is not
+/// constant: losing a row of safety when there's plenty left barely matters, losing the
+/// last one ends the episode. A flat per-row penalty alone let a merely-decent pop
+/// outscore a move that pushed the board within one row of `DEATH_ROW`.
+const HEIGHT_MARGIN_PENALTY: i64 = 300;
+/// A move whose resulting state is `Outcome::Lost` used to be scored by ordinary
+/// height/pop math like any other move — nothing in `score_resolution` ever looked at
+/// `after.phase`, so a losing move could still come out ahead if it happened to pop or
+/// floater a lot on the way down. This is what actually enforces "never choose a losing
+/// move over a surviving one, regardless of how much it pops" — large enough that no
+/// realistic pop/floater haul on a single shot can outweigh it.
+const LOSE_PENALTY: i64 = 100_000;
 const NO_POP_PENALTY: i64 = 20;
 /// Extra penalty when a no-pop shot's own newly-placed bubble has zero same-color
 /// neighbors — a color stranded with no near-term way to complete a match.
@@ -59,7 +74,8 @@ fn orphan_colors(board: &Board) -> u32 {
     counts.values().filter(|&&c| c == 1).count() as u32
 }
 
-fn score_resolution(res: &Resolution, board_after: &Board) -> i64 {
+fn score_resolution(res: &Resolution, after: &Game) -> i64 {
+    let board_after = &after.board;
     let mut s = 0i64;
     s += res.popped.len() as i64 * POP_WEIGHT;
     s += res.floaters.len() as i64 * FLOATER_WEIGHT;
@@ -69,9 +85,15 @@ fn score_resolution(res: &Resolution, board_after: &Board) -> i64 {
             s -= ISOLATED_SINGLETON_PENALTY;
         }
     }
-    s -= max_row(board_after) as i64 * HEIGHT_PENALTY;
+    let row = max_row(board_after);
+    s -= row as i64 * HEIGHT_PENALTY;
+    let margin = (DEATH_ROW - row).max(1);
+    s -= HEIGHT_MARGIN_PENALTY / margin as i64;
     s += adjacent_pairs(board_after) as i64 * ADJACENT_PAIR_BONUS;
     s -= orphan_colors(board_after) as i64 * ORPHAN_COLOR_PENALTY;
+    if after.phase == Phase::Over(Outcome::Lost) {
+        s -= LOSE_PENALTY;
+    }
     s
 }
 
@@ -145,7 +167,7 @@ pub fn new_beam_search() -> Beam {
 
 fn beam_score(before: &Game, mv: &Move) -> i32 {
     let (after, res) = before.simulate(*mv);
-    score_resolution(&res, &after.board) as i32
+    score_resolution(&res, &after) as i32
 }
 
 /// No root-only bonus term (yet) — unlike match-3's jelly-endgame case, there's no
