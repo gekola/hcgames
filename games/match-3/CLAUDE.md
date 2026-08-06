@@ -835,6 +835,44 @@ approximating antialiasing without touching `sample_count` at all — sidesteps 
 risk entirely rather than trying to work around it. Confirmed by re-running the same
 diff: live and cached pixel sequences are now byte-identical across every sampled cell.
 
+**`with_supersample(2)` matched jelly's shallow rim but *overshot* on diagonal/pointed
+edges, and — more fundamentally — "tune `factor` to match live" was never platform-
+independent in the first place. Fixed properly by routing the *live* animated frames
+through the same offscreen pipeline (`RenderCache::draw_fresh`), making cached and live
+byte-identical by construction.** The `with_supersample(2)` fix above was validated only
+against jelly's rim (a mostly axis-aligned edge). Re-measured on a `GemShape::Star` tip
+(a sharp diagonal): cached spread the transition over ~2 px where live's browser AA used
+~1 px — supersample *overshot* there, the mirror image of the original under-shoot, so a
+single `factor` can't match every edge angle. The deeper problem: the live path's AA is
+the browser's default-framebuffer WebGL AA — undocumented, and *not guaranteed consistent
+across browsers/GPUs* (`mq_js_bundle.js` isn't ours; AA-on-by-default isn't universal), so
+matching it by eyeball in one browser is chasing a moving target. And the cached path
+*structurally cannot* use that browser AA — it's an offscreen `sample_count: 0` target
+(MSAA there is the documented WASM crash). So the only by-construction fix is to make the
+*live* path stop relying on browser AA too: the render loop now draws each animating frame
+via `board_cache.draw_fresh(|| ...)` (renders through the same supersampled target +
+`Linear` downscale as the cached idle frame, every frame, no caching) instead of straight
+to the screen. Both paths then rasterize through identical machinery, so `factor`'s value
+no longer affects cached-vs-live *identity* (it's now purely an AA-quality knob, applied
+equally to both; kept at 2). Measured with the same live-vs-cached screenshot-diff, five
+static cells (cells no active swap touched, sampled from a genuinely mid-animation frame
+vs. a settled idle frame of the same board): **before, 108-120 of 4096 px per 64×64 cell
+differed** (tracing the silhouette outline), max channel diff up to 87; **after, exactly
+0 px differ — byte-identical, every cell.** Capture method: puppeteer-core compositor
+screenshots at viewport width exactly 900 so the canvas fit-scale binds to 1.0 (no CSS
+resample confounding the edge measurement); classify each frame idle/animating by
+whole-board frame-to-frame diff; pair an idle frame with an animating one whose target
+cell's interior fill matches. Cost: `draw_fresh` re-renders the board into the 2×
+supersampled target every animating frame — but those frames were *already* doing a full
+board redraw (nothing to cache mid-move; see the RenderCache-usage note below), so it adds
+GPU fill (4× the board's ~248K px) + one downscale blit, not new *draw calls*; the CPU/TBT
+cost `RenderCache` exists to cut is per-draw-call, and that count is unchanged, so idle
+frames still cache and TBT is unaffected. Side effect, an incidental *improvement*: fresh
+tiles spawn above the board (`from_row` negative) and used to briefly float in the HUD gap
+above the board when drawn live-to-screen (measured: 34/140 frames had stray gem pixels
+above the board top, up to ~11.9K px); routing through the board-rect-clipped target makes
+them emerge cleanly from the top edge instead (0/140 after).
+
 **Triangle/Pentagon gems sit visibly high in their cell — a pre-existing bug, unrelated
 to jelly, that jelly's new visible rim just made obvious** (reported as "grid
 misalignment," but it's per-shape, not per-cell — every gem is drawn at the same `(cx,

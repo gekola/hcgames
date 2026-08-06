@@ -1105,10 +1105,11 @@ async fn amain(cli: CliArgs) {
     // comment for why this is the general fix for every translucent draw inside
     // `draw_board_static` (gem gloss streak, bonus-tile stripes/ring, jelly underlay)
     // rather than the opaque-precompute workaround each of those needed individually
-    // before this existed. `with_supersample(2)` fixes a separate symptom reported
-    // against the same cached/live split — jelly's rim reading as "shifted by a pixel"
-    // between the two — see `RenderCache::with_supersample`'s doc comment for why that's
-    // really a hard-vs-antialiased-edge mismatch, not an actual position change.
+    // before this existed. `with_supersample(2)` antialiases the cached content (its
+    // `sample_count: 0` target gets no hardware AA); the *animated* frames go through the
+    // same pipeline via `board_cache.draw_fresh(...)` in the render loop below, so cached
+    // and live rasterize identically and neither depends on the browser's own
+    // framebuffer AA — see `RenderCache::draw_fresh`/`with_supersample`'s doc comments.
     let mut board_cache = RenderCache::new(Rect::new(
         BOARD_X - 1.0,
         BOARD_Y - 1.0,
@@ -1152,7 +1153,21 @@ async fn amain(cli: CliArgs) {
 
         let animating = !matches!(view.phase, StepPhase::Idle | StepPhase::GameOver);
         if animating {
-            match view.phase {
+            // Route the live animated frame through the *same* `board_cache` pipeline the
+            // settled/idle frame uses (`draw_fresh` re-renders every frame instead of
+            // caching) rather than drawing it straight to the screen. This is what makes a
+            // cell a swap didn't touch pixel-identical whether it's currently drawn live
+            // (animating) or cached (idle): both paths supersample-and-downscale through
+            // the same offscreen `sample_count: 0` target, so neither depends on the
+            // browser's default-framebuffer antialiasing — which the cached path can't get
+            // anyway (offscreen target) and which varies by browser/GPU. Drawing the live
+            // frame directly to the screen instead reintroduced that browser AA on the
+            // animated frames only, so the same edge shifted between live and cached. See
+            // `RenderCache::draw_fresh`/`with_supersample`'s doc comments for the full
+            // rationale. A side effect (arguably an improvement): falling tiles spawned
+            // above the board are now clipped to the board rect, so they emerge from the
+            // top edge instead of briefly floating in the HUD gap above it.
+            board_cache.draw_fresh(|| match view.phase {
                 StepPhase::Swap => {
                     let mv = view.resolution.as_ref().unwrap().mv;
                     draw_swap_live(&view.pre_swap, mv.a, mv.b, view.t.min(1.0));
@@ -1164,8 +1179,7 @@ async fn amain(cli: CliArgs) {
                     draw_fall_live(&view.resolution.as_ref().unwrap().waves[i], view.t.min(1.0));
                 }
                 StepPhase::Idle | StepPhase::GameOver => unreachable!(),
-            }
-            board_cache.mark_dirty();
+            });
         } else {
             board_cache.draw(|| draw_board_static(&view.settled));
         }
