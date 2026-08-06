@@ -166,83 +166,62 @@ a fixed global constant (the shooter's screen position depends on it, and the ca
 a fixed 600x720 size — it can't vary per level), so a level whose starting wall already
 sits close to it has almost no margin *before play even begins*. That's an instant-death
 artifact, not earned difficulty, and reads as broken. Capping the ramp at 5 (`DEATH_ROW`
-stays 7, so margin never drops below ~2-3 rows) fixed it — see the measurement below.
+is now 12, so margin never drops below ~7 rows at episode start) fixed it — see the
+measurement below.
 
 ## Balance — measured, not just reasoned
 
-**STALE as of 2026-08-06 — every number below was measured against a since-fixed bug and
-needs re-sweeping.** `descend_row` used to hardcode the fresh ceiling row to always start
-at an even column, correct only for the very first descend — every descend after that
-needed the opposite column parity to stay tangent-adjacent to the (already-shifted) row
-below it, and getting it wrong silently severed the *entire* existing wall from the
-ceiling every other descend. `find_floating` never caught it (it only runs right after a
-pop, not after a descend itself), so the wall would sit detached until the next pop, at
-which point the whole thing dropped as floaters at once — a free, constant board-clear
-disguised as "the bot chaining huge cascades." That's what made every tier in the table
-below read as far safer than the game actually is: post-fix, `Warm-Up` (the easiest
-level) loses roughly 11/15 seeds instead of the documented ~0%. See `game.rs`'s
-`descend_row`/`Board::row0_parity` doc comments for the full mechanism, and
+**Every number in this section was re-tuned 2026-08-06 against the real (bug-fixed)
+descend mechanics.** All prior numbers here — including an original `DEATH_ROW=7` and a
+same-day intermediate `9` — were measured against a `descend_row` bug that silently
+severed the wall from the ceiling every other descend (`find_floating` only runs right
+after a pop, not after a descend itself), so the wall would sit detached until the next
+pop, at which point it dropped as floaters all at once — a free, constant board-clear
+disguised as "the bot chaining huge cascades." That inflated every historical number:
+once fixed, the *old* "final" config (`DEATH_ROW=7`, `DESCEND_INTERVAL=6`/floor
+`1`/ramp-every-`10`) measured **100% lost on every level except Warm-Up** (n=8-20 seeds
+per level, `--no-ui` sweep) — the AI wasn't making bad decisions, the pacing had simply
+never been re-validated against real (non-buggy) descend behavior. See `game.rs`'s
+`descend_row`/`Board::row0_parity` doc comments for the mechanism, and
 `descend_row_keeps_wall_connected`/`full_playthrough_terminates`'s `find_floating`
-assertion (`game.rs` tests) for the regression coverage that would have caught it. The
-whole sweep (this table, `DEATH_ROW`, `DESCEND_INTERVAL`, `LEVELS.initial_rows`, and the
-never-yet-tuned solver weights below) needs redoing against the fixed solver before any
-of these numbers can be trusted again.
+assertion (`game.rs` tests) for the regression coverage that would have caught it.
 
-**Solver weights (`solver.rs`'s `score_resolution`) are still reasoned-from-first-
-principles, not measured-and-tuned** — root CLAUDE.md's standing rule ("win rate must be
-checked empirically") hasn't had a pass on those yet. What *was* tuned empirically,
-several rounds via `--no-ui` `HCG_SEED` sweeps (root CLAUDE.md's standard method,
+Re-tuning method: same as before (root CLAUDE.md's standard `--no-ui` `HCG_SEED` sweep,
 aggregated per-level by running each seed through a full, un-`--once`'d rotation and
-bucketing the `level="..."` field in each `result=` line):
+bucketing the `level="..."` field in each `result=` line), iterating `DEATH_ROW` and the
+`descend_interval_for` knobs together since neither alone was enough:
 
-- 5 colors, flat `DESCEND_INTERVAL=6`, `DEATH_ROW=12` (7-row cushion over 5 initial
-  rows): 5/5 seeds survived, comfortably — the bot kept the board at rows 0-2 the entire
-  150-shot cap, floater cascades routinely popping 10-20+ bubbles at once.
-- + escalating `descend_interval_for` (min 2, ramp every 15 shots), still `DEATH_ROW=12`:
-  30/30 survived.
-- + 6 colors + tighter escalation (min 1, ramp every 10), still `DEATH_ROW=12`: 40/40
-  survived. Even a new row every single shot in the endgame didn't threaten a bot capable
-  of burst-clearing 10+ bubbles in one shot — *average* pressure barely matters when a
-  single lucky cascade can undo several rows at once.
-- `DEATH_ROW` 12→9, `LEVELS` not yet added (flat config): 9/10 survived, 1/10 lost —
-  thinner cushion was the first lever that actually mattered, confirming the problem was
-  margin, not throughput.
-- `LEVELS` added, `initial_rows` ramping 3→7, `DEATH_ROW=9`: **0/210 losses** across all
-  7 levels (30 seeds × 7 levels) — the easiest levels' small starting walls made the
-  9-row cushion trivially safe everywhere, swamping the one earlier data point.
-- `DEATH_ROW` 9→7, same `initial_rows` 3→7 ramp: 33/105 lost overall, but concentrated
-  and *instant* at the top two levels (Full Spectrum/Overflow: 100% and 87% lost, nearly
-  all at `shots_used` 1-7) — the instant-death artifact described above, diagnosed by
-  checking the loss `shots_used` distribution specifically, not just the aggregate rate.
-- `initial_rows` ramp capped at 3→5 (current `LEVELS`), `DEATH_ROW=7`: **n=40 seeds ×
-  7 levels, final numbers**:
+- `DEATH_ROW=9`, `DESCEND_INTERVAL=6`/floor `1`/ramp-every-`10` (the old "final" config,
+  re-measured post-fix): still ~100% lost on every level but Warm-Up (~50%) — confirms
+  the bug, not the AI, was masking the real difficulty.
+- `DEATH_ROW=9` + floor `2`/ramp-every-`15`: Warm-Up 0%, Getting Busy 31%, Color Rush
+  46%, but Wider Palette-onward (5-6 colors) still 100% — the floor/ramp softening
+  helped the easy tiers but the higher-`color_count` tiers need more raw cushion, not
+  just a slower ramp (fewer colors on the board sharply reduces incidental matches, so
+  even a slower descend outpaces clearing once `color_count` hits 5-6).
+- `DEATH_ROW=11` (same floor `2`/ramp `15`): Warm-Up/Getting Busy/Color Rush 0-33%,
+  Wider Palette 87%, Packed House-Overflow 100% — margin helps but the ramp is still too
+  aggressive by the point 6-color levels are reached.
+- `DEATH_ROW=12`, `DESCEND_INTERVAL=8`, floor `3`, ramp-every-`20` (current values):
+  **n=20 seeds, final numbers**:
 
-  | Level | colors | initial_rows | Lost | Survived | Won |
-  |---|---|---|---|---|---|
-  | Warm-Up | 3 | 3 | 0% | 97.5% | 2.5% |
-  | Getting Busy | 4 | 3 | 0% | 97.5% | 2.5% |
-  | Color Rush | 4 | 4 | 0% | 100% | 0% |
-  | Wider Palette | 5 | 4 | 5% | 95% | 0% |
-  | Packed House | 5 | 5 | untested after this tier's own last edit — see note below | | |
-  | Full Spectrum | 6 | 4 | 15% | 85% | 0% |
-  | Overflow | 6 | 5 | 27.5% | 72.5% | 0% |
+  | Level | colors | initial_rows | Lost |
+  |---|---|---|---|
+  | Warm-Up | 3 | 3 | 0% |
+  | Getting Busy | 4 | 3 | 0% |
+  | Color Rush | 4 | 4 | 0% |
+  | Wider Palette | 5 | 4 | 0% |
+  | Packed House | 5 | 5 | 0% |
+  | Full Spectrum | 6 | 4 | 36% |
+  | Overflow | 6 | 5 | 42% |
 
-  Loss `shots_used` for this config ranged 65-147 — spread across the run, not
-  clustered at the first descend, confirming these are organic losses.
-
-**Packed House's `initial_rows` was bumped 4→5 after the n=40 sweep above** (it had
-been accidentally identical to Wider Palette — same `color_count`/`initial_rows` — so
-its 0% at n=40 was just that pairing's own noise, not a real "easier than Wider
-Palette" data point). Not re-swept at n=40 after the fix — a reasonable, not
-rigorously confirmed, expectation is somewhere around Wider Palette and Full Spectrum's
-rates (5-15%) given where its levers now sit, but this specific number is unverified.
-
-**Shipped state**: a real, monotonically-increasing-by-level difficulty curve with
-organic (not instant) losses, going from "safe warm-up" to "~1-in-4 losses" over the
-7-level rotation. Not a rigorously-tuned 45-55%-per-tier target (that framing doesn't
-obviously apply to a *ramp* the way it does to match-3's single fixed-difficulty
-variants) — further tuning (smoothing the mid-ramp, re-verifying Packed House, tuning
-solver weights) remains a legitimate follow-up, not a blocking defect.
+**Shipped state**: safe through the first five (3-5 color) tiers, real risk concentrated
+in the two 6-color tiers rather than smoothly graduated — a steeper cliff at the end
+than the old (buggy-measurement-era) curve, not a smooth `0%→27.5%` ramp. Reasonable
+follow-up if a smoother mid-to-late ramp is wanted: soften `color_count`'s jump to 6 (an
+intermediate tier at 5-6 colors) rather than pushing `DEATH_ROW` past `12` — it's
+already near the top of what a 720px canvas can fit (`SHOOTER_Y`/`BOARD_H` derive from
+it; `12` leaves only ~10px of headroom at the bottom edge).
 
 ## Rendering
 

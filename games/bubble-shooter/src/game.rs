@@ -45,16 +45,13 @@ pub const BOARD_Y: f32 = 110.0;
 /// A bubble landing at this row or deeper ends the episode — see `update_phase`. A
 /// fixed global cushion (not per-`Level`, since the shooter's screen position depends
 /// on it and the canvas is a fixed size) — see this crate's CLAUDE.md "Balance" section
-/// for the full measured tuning trail: `DEATH_ROW=12` never produced a single loss
-/// across 40 seeds regardless of how aggressively row-descend escalated (a skilled
-/// beam-search bot's floater cascades burst-clear 10-20+ bubbles at once, so *average*
-/// pressure alone doesn't threaten it), and `LEVELS`' `initial_rows` has to stay well
-/// below this value — a level whose starting wall already sits close to `DEATH_ROW`
-/// dies to the very first ceiling descend almost immediately, an instant-death
-/// artifact rather than earned difficulty (measured directly: see `LEVELS`' own doc
-/// comment). `7` is what actually produced a real, gradually-increasing-by-level loss
-/// rate with organic (not instant) losses.
-pub const DEATH_ROW: i32 = 7;
+/// for the full measured tuning trail. `12` (re-tuned 2026-08-06 alongside
+/// `DESCEND_INTERVAL`/`MIN_DESCEND_INTERVAL`/`DESCEND_RAMP_SHOTS` below) is what produces
+/// a real, gradually-increasing-by-level loss rate against the *current* (bug-fixed)
+/// descend mechanics — every earlier number here, including a prior `7`/`9`, was tuned
+/// against a `descend_row` bug that faked huge auto-clear cascades and made the game look
+/// far safer than it actually was; see this crate's CLAUDE.md for the full history.
+pub const DEATH_ROW: i32 = 12;
 pub const SHOOTER_X: f32 = BOARD_X + BOARD_W / 2.0;
 pub const SHOOTER_Y: f32 = BOARD_Y + (DEATH_ROW as f32 + 2.0) * ROW_HEIGHT;
 /// Derived from `DEATH_ROW` (rather than a hand-picked constant) so the frame panel
@@ -132,18 +129,17 @@ pub fn level_for(generation: u32) -> &'static Level {
 }
 /// Shots between each ceiling row-push at the start of an episode — the
 /// survival-pressure pacing (see root CLAUDE.md discussion / plan: "row-descend
-/// survival" episode structure). Shrinks over the episode via `descend_interval_for` —
-/// a flat interval measured as never once threatening `DEATH_ROW` (the beam solver
-/// comfortably keeps the board under control indefinitely at a fixed pace, floater
-/// cascades routinely popping 10+ bubbles at once): rows arriving faster as the run
-/// goes on, the genre-standard difficulty curve, is what actually gives a run real
-/// stakes instead of a fixed-cap cruise. See this crate's CLAUDE.md's "Balance" section
-/// for the full measured tuning trail (this knob alone wasn't enough — `DEATH_ROW` and
-/// `LEVELS`' `initial_rows`/`color_count` needed to move too).
-pub const DESCEND_INTERVAL: u32 = 6;
-pub const MIN_DESCEND_INTERVAL: u32 = 1;
+/// survival" episode structure). Shrinks over the episode via `descend_interval_for`:
+/// rows arriving faster as the run goes on, the genre-standard difficulty curve, is what
+/// actually gives a run real stakes instead of a fixed-cap cruise. Re-tuned 2026-08-06
+/// (was `6`) alongside `MIN_DESCEND_INTERVAL`/`DESCEND_RAMP_SHOTS`/`DEATH_ROW` — this
+/// knob alone isn't enough, all four (plus `LEVELS`' `initial_rows`/`color_count`) need
+/// to move together — see this crate's CLAUDE.md "Balance" section for the measured
+/// sweep.
+pub const DESCEND_INTERVAL: u32 = 8;
+pub const MIN_DESCEND_INTERVAL: u32 = 3;
 /// The interval shrinks by 1 every this many shots.
-const DESCEND_RAMP_SHOTS: u32 = 10;
+const DESCEND_RAMP_SHOTS: u32 = 20;
 /// Hard cap on episode length — see `Outcome::Survived`.
 pub const SHOT_LIMIT: u32 = 150;
 
