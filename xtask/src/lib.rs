@@ -530,6 +530,7 @@ pub fn description(name: &str) -> String {
         "tetris" => "Self-playing Tetris. An AI scores every drop by height, holes, and bumpiness with a known-next-piece lookahead, cycling between 7-bag, classic NES-style, TGM, and pure-random piece generators.".into(),
         "match-3" => "Self-playing match-3 puzzle. An AI swaps gems to chase score, jelly-clear, and ingredient-collection goals, triggering striped/wrapped/color-bomb combos along the way.".into(),
         "bubble-shooter" => "Self-playing Bubble Shooter. A beam-search AI aims and fires at a hex-packed wall of bubbles, chasing chain-popping cascades as new rows descend under time pressure.".into(),
+        "water-sort" => "Self-playing Water Sort puzzle. A beam-search AI pours colored liquid between bottles to sort every color, through an endless, ever-harder progression of locked and hidden-bottom bottles.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }
