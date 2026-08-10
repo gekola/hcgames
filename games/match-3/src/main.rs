@@ -1090,6 +1090,19 @@ async fn amain(cli: CliArgs) {
     let mut control = control::Control::new();
     rand::srand(control.seed());
     let mode = cli.variant.unwrap_or(VariantMode::Auto);
+    // Daily-challenge runs are meant to be one deterministic, comparable puzzle —
+    // `Levels` steps through the hand-tuned `game::LEVELS` difficulty ramp instead of a
+    // single fixed ruleset, so the daily run would just be "level 1 of the ramp" rather
+    // than a complete puzzle. `Auto`'s own rotation already excludes `Levels` (see its
+    // doc comment above), so this is unreachable via any current WASM entry point —
+    // stated explicitly here so it stays true if a variant-selection path (e.g. a
+    // query-param bridge like minesweeper's `variant_query_bridge`) is ever added for
+    // match-3.
+    let mode = if control.daily_mode() && mode == VariantMode::Levels {
+        VariantMode::Auto
+    } else {
+        mode
+    };
     let mut session = Session::new(mode, 0);
     let mut view = View::new(&session);
     let mut shot = screenshot::Capture::from_env();
