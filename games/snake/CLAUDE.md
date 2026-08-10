@@ -35,6 +35,29 @@ struct Game { body: VecDeque<Pt>, dir, food, score, generation, blocks: [bool; G
 3. **Tail chase** — if food path is unsafe, BFS to tail (space opens as snake follows itself).
 4. **Max space** — fallback: pick direction with most reachable cells via `time_flood`.
 
+**Desperation is two-stage, and the first stage must stay tail-guarded.** After `2n` ticks
+without food the snake stops requiring the food route to be *comfortable* (step 2's flood
+test) but still requires `bfs_to(next → tail)` to succeed. Dropping that guard — taking the
+greedy food direction with no safety check at all — was the sole cause of essentially every
+death: the fatal tick always had *zero* legal moves (the head was already walled in), and the
+move that sealed it was an unguarded dash. Guarding it took mean score 269 → 374 over 100
+seeds (`--no-ui --once`, `HCG_SEED=1..100`).
+
+But the guard alone livelocks: with no escape at all, 59/100 seeds froze (score stuck at 429
+for 1M+ ticks) tail-chasing in a cycle they could never safely leave. Hence the second stage
+at `6n`, where the unguarded dash is allowed again — dying eventually beats never progressing.
+The `6n` figure is not sensitive (3n/4n/8n/12n all land within noise of each other); the
+*existence* of the escape is what matters. Two related off-by-ones were measured and rejected
+as non-causes: `max_space_dir`'s `best = self.dir` default (reachable, but only ever with
+`legal=[]`, i.e. the snake was already dead) and making the flood/space tests eat-aware
+(`n+1` cells needed, tail doesn't vacate when the candidate cell is the food) — worth 0pp.
+
+`DESPERATE_TICKS_MULT`/`STARVING_TICKS_MULT` (both `pub` in `game.rs`) are these two
+thresholds, `2` and `6`. `main.rs` reads them to drive the head's hunger tint (blue →
+white at `2n` ticks hungry, white → purple at `6n`; body segments stay plain blue) so
+the on-screen color tracks the AI's actual risk stage instead of an independently-tuned
+scale that could drift from it.
+
 ## Block generation (`blocks.rs`)
 
 Each generation: up to 2000 attempts to place 4–8 random rectangles (2–4 wide, 2–3 tall).
@@ -50,10 +73,16 @@ Fallback: `[false; GRID]` (no blocks) if 2000 attempts all fail.
 ## RNG
 
 ```rust
-rand::srand(macroquad::miniquad::date::now() as u64);  // in main(), before Game::new
+let mut control = control::Control::new();
+rand::srand(control.seed());  // before Game::new
 ```
 
-`std::time::SystemTime::now()` panics on WASM — always use `miniquad::date::now()`.
+`Control::seed` is `HCG_SEED` (native override) → day-hash (when `?daily=1` /
+`control.daily_mode()`, see root CLAUDE.md's pilot notes) → wall-clock, in that order.
+`std::time::SystemTime::now()` panics on WASM, which is why even the wall-clock fallback
+goes through `macroquad::miniquad::date::now()` rather than `SystemTime`. `Control` has
+to be constructed before this call so its `daily_mode()` read (from the page's `?daily=1`
+query param) is available in time to pick the right seed path.
 
 ## Running
 

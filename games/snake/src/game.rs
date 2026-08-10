@@ -15,6 +15,13 @@ pub struct Game {
     pub ticks_hungry: u32,
 }
 
+/// `choose_dir`'s first desperation stage (drops the comfort check, keeps the
+/// tail-reachability guard) — also used by `main.rs` to drive hunger-tint color.
+pub const DESPERATE_TICKS_MULT: u32 = 2;
+/// `choose_dir`'s livelock-escape stage (drops every guard) — see the comment in
+/// `choose_dir` for why it exists. Also used by `main.rs` to drive hunger-tint color.
+pub const STARVING_TICKS_MULT: u32 = 6;
+
 impl Game {
     pub fn new(generation: u32) -> Self {
         let blocks = generate_blocks();
@@ -73,8 +80,24 @@ impl Game {
 
         if let Some((path_len, dir)) = self.bfs_to(head, self.food, &bg) {
             let still_blocked = n.saturating_sub(path_len.saturating_sub(1));
-            let desperate = self.ticks_hungry > (n as u32).saturating_mul(2);
             let next = head.shifted(dir.0, dir.1);
+            // Desperation is an anti-livelock escape hatch: after `2n` ticks without food
+            // the snake stops requiring the route to be *comfortable* (the flood/space
+            // test below). It must not also stop requiring it to be *survivable* — an
+            // unguarded dash is what walks the head into a pocket it can't leave, and some
+            // ticks later into its own body with no legal move left at all. Every observed
+            // death traced back to this: the fatal tick always had zero legal moves, and
+            // the move that sealed the snake in was an unguarded desperate dash.
+            //
+            // So keep the tail-reachability check while desperate. The exception at `6n` is
+            // deliberate: if hunger gets that extreme the snake is stuck in a tail-chasing
+            // cycle it provably can't leave safely, and a risky dash is better than the
+            // alternative — with *no* escape at all the game livelocks outright (measured:
+            // score frozen at 429 for 1M+ ticks), which is worse than eventually dying.
+            let hungry = self.ticks_hungry;
+            let desperate = hungry > (n as u32).saturating_mul(DESPERATE_TICKS_MULT)
+                && (hungry > (n as u32).saturating_mul(STARVING_TICKS_MULT)
+                    || self.bfs_to(next, tail, &bg).is_some());
             if desperate
                 || (self.time_flood(self.food, still_blocked, &bg) > n
                     && self.bfs_to(self.food, tail, &bg).is_some()

@@ -34,6 +34,15 @@ impl Pt {
     }
 }
 
+fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    }
+}
+
 fn conf() -> Conf {
     Conf {
         window_title: "Snake".to_owned(),
@@ -164,11 +173,15 @@ fn main() {
 }
 
 async fn amain(cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mut game = Game::new(1);
     let mut accum = 0.0f32;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
+    // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes on its final frame instead of starting a new episode, and the tick
+    // loop below is skipped entirely so a game-over `Game` never sees another `tick()`.
+    let mut daily_done = false;
 
     // The board (border, static blocks, food, body) only actually changes once per
     // tick (`TICK`, ~12/sec) but was being fully re-drawn every render frame (~60/sec)
@@ -187,10 +200,21 @@ async fn amain(cli: CliArgs) {
         } else {
             0.0
         };
+        // Second stage past `hunger`==1.0: rides the same two thresholds `choose_dir`
+        // uses to widen its own desperation (see game.rs) so the color a player sees
+        // tracks the AI's actual risk-taking, not an arbitrary separate scale.
+        let starving = if game.score >= 10 {
+            let desperate_at = n * game::DESPERATE_TICKS_MULT as f32;
+            let starving_at = n * game::STARVING_TICKS_MULT as f32;
+            ((game.ticks_hungry as f32 - desperate_at) / (starving_at - desperate_at))
+                .clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let tick_interval = TICK * (1.0 - 0.5 * hunger);
 
         accum += control.scale(get_frame_time());
-        while accum >= tick_interval {
+        while !daily_done && accum >= tick_interval {
             accum -= tick_interval;
             if game.tick() {
                 log_tick(cli.debug, &game);
@@ -203,14 +227,22 @@ async fn amain(cli: CliArgs) {
                     );
                 }
                 control.episode_complete("snake", game.score as i64);
-                if cli.once {
+                if control.daily_mode() {
+                    control::share_result(&control::daily_verdict_text(
+                        "Snake",
+                        control::daily_puzzle_number(),
+                        &format!("score {}", game.score),
+                    ));
+                    daily_done = true;
+                } else if cli.once {
                     println!(
                         "result=game_over score={} generation={}",
                         game.score, game.generation
                     );
                     std::process::exit(0);
+                } else {
+                    game = Game::new(game.generation + 1);
                 }
-                game = Game::new(game.generation + 1);
                 board_cache.mark_dirty();
                 break;
             }
@@ -279,15 +311,38 @@ async fn amain(cli: CliArgs) {
                 },
             );
 
+            // Head-only hunger tint: blue (fed) → white (past `DESPERATE_TICKS_MULT`*n
+            // ticks hungry) → purple (past `STARVING_TICKS_MULT`*n, the AI's own
+            // livelock-escape point). Body stays plain blue — only the head telegraphs risk.
+            let head_base = lerp_color(
+                Color {
+                    r: 0.08,
+                    g: 0.6,
+                    b: 0.95,
+                    a: 1.0,
+                },
+                Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                hunger,
+            );
+            let head_color = lerp_color(
+                head_base,
+                Color {
+                    r: 0.6,
+                    g: 0.15,
+                    b: 0.85,
+                    a: 1.0,
+                },
+                starving,
+            );
+
             for (i, &seg) in game.body.iter().enumerate() {
                 let color = if i == 0 {
-                    // blue → white/gray as hunger rises
-                    Color {
-                        r: 0.08 + 0.92 * hunger,
-                        g: 0.6 + 0.4 * hunger,
-                        b: 0.95 + 0.05 * hunger,
-                        a: 1.0,
-                    }
+                    head_color
                 } else {
                     let t = 1.0 - (i as f32 / n) * 0.65;
                     Color {
