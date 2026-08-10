@@ -236,6 +236,13 @@ impl View {
         session.game.refill(&mut session.piece_gen);
         if session.game.phase != Phase::Playing {
             control.episode_complete("tetris", session.game.score as i64);
+            if control.daily_mode() {
+                control::share_result(&control::daily_verdict_text(
+                    "Tetris",
+                    control::daily_puzzle_number(),
+                    &format!("score {}", session.game.score),
+                ));
+            }
             if debug {
                 eprintln!(
                     "game_over score={} lines={} level={} generation={}",
@@ -441,12 +448,12 @@ fn main() {
 }
 
 async fn amain(cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mode = cli.variant.unwrap_or(VariantMode::Auto);
     let mut session = Session::new(mode, 0);
     let mut view = View::new(&session);
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
 
     // The locked board (up to 200 flat-colored cells, no text) is redrawn only when a
     // piece finishes falling/flashing, not every render frame — see `render_cache` and
@@ -507,12 +514,19 @@ async fn amain(cli: CliArgs) {
                     print_result(&session);
                     std::process::exit(0);
                 }
-                view.over_t -= dt;
-                if view.over_t <= 0.0 {
-                    session = session.next_generation();
-                    view = View::new(&session);
-                    view.advance(&mut session, &mut control, cli.debug);
-                    board_cache.mark_dirty();
+                // Daily-challenge run: freeze here rather than counting down to a
+                // restart (see `control::Control::daily_mode`) — `View::advance` already
+                // fired `share_result` the moment this phase was entered, and nothing
+                // else moves `view.phase` off `GameOver`, so skipping the countdown is
+                // enough to hold the board on its final frame indefinitely.
+                if !control.daily_mode() {
+                    view.over_t -= dt;
+                    if view.over_t <= 0.0 {
+                        session = session.next_generation();
+                        view = View::new(&session);
+                        view.advance(&mut session, &mut control, cli.debug);
+                        board_cache.mark_dirty();
+                    }
                 }
             }
         }
@@ -532,7 +546,7 @@ async fn amain(cli: CliArgs) {
             draw_flash(&view.cleared_rows, view.flash_t);
         }
         if view.phase == ViewPhase::GameOver && !control.stream_mode() {
-            draw_game_over(view.over_t);
+            draw_game_over(view.over_t, control.daily_mode());
         }
 
         shot.tick();
@@ -706,7 +720,7 @@ fn draw_hud(session: &Session, control: &control::Control) {
     }
 }
 
-fn draw_game_over(over_t: f32) {
+fn draw_game_over(over_t: f32, daily_mode: bool) {
     draw_rectangle(
         BOARD_X,
         BOARD_Y,
@@ -721,7 +735,14 @@ fn draw_game_over(over_t: f32) {
     let d = measure_text(title, None, 30, 1.0);
     draw_text(title, cx - d.width * 0.5, cy - 10.0, 30.0, rgb(240, 90, 90));
 
-    let sub = format!("Restarting in {:.0}...", over_t.max(0.0));
+    // Daily-challenge runs freeze here rather than restarting (see
+    // `control::Control::daily_mode`) — a countdown to a restart that never happens
+    // would lie, and `over_t` itself has stopped counting down anyway.
+    let sub = if daily_mode {
+        "Today's run is over.".to_owned()
+    } else {
+        format!("Restarting in {:.0}...", over_t.max(0.0))
+    };
     let sd = measure_text(&sub, None, 18, 1.0);
     draw_text(
         &sub,

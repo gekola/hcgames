@@ -271,7 +271,8 @@ fn main() {
 }
 
 async fn run_ui(cli: CliArgs) {
-    macroquad::rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    macroquad::rand::srand(control.seed());
 
     let mut mode = cli.variant.unwrap_or(VariantMode::Auto);
     let mut game = new_game_for(mode, 0);
@@ -280,8 +281,10 @@ async fn run_ui(cli: CliArgs) {
     let mut highlight: Option<(Move, f32)> = None;
     let mut end_time: Option<f64> = None;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
     let metrics = DigitMetrics::compute();
+    // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes in its solved state instead of starting a new episode.
+    let mut daily_done = false;
 
     // The board (cell backgrounds, digits/candidates, grid lines) only actually
     // changes once per solver tick (`TICK`, ~7/sec), but was being fully re-drawn
@@ -330,21 +333,30 @@ async fn run_ui(cli: CliArgs) {
                     std::process::exit(0);
                 }
                 let t = *end_time.get_or_insert(now);
-                if now - t > RESTART_DELAY {
+                if !daily_done && now - t > RESTART_DELAY {
                     control.episode_complete("sudoku", game.moves as i64);
-                    game = new_game_for(mode, game.generation + 1);
-                    solver = Solver::new();
-                    accum = 0.0;
-                    highlight = None;
-                    end_time = None;
-                    board_cache.mark_dirty();
+                    if control.daily_mode() {
+                        control::share_result(&control::daily_verdict_text(
+                            "Sudoku",
+                            control::daily_puzzle_number(),
+                            &format!("solve it in {} moves", game.moves),
+                        ));
+                        daily_done = true;
+                    } else {
+                        game = new_game_for(mode, game.generation + 1);
+                        solver = Solver::new();
+                        accum = 0.0;
+                        highlight = None;
+                        end_time = None;
+                        board_cache.mark_dirty();
+                    }
                 }
             }
         }
 
         clear_background(Color::new(0.09, 0.09, 0.13, 1.0));
         if !control.stream_mode() {
-            draw_hud(&game, mode.label(), &control.label());
+            draw_hud(&game, mode.label(), &control.label(), control.daily_mode());
         }
         board_cache.draw(|| draw_board_static(&game, &metrics));
         draw_highlight(highlight);
@@ -357,9 +369,12 @@ async fn run_ui(cli: CliArgs) {
 
 // ── HUD ───────────────────────────────────────────────────────────────────────
 
-fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
+fn draw_hud(game: &Game, mode_label: &str, speed_label: &str, daily_mode: bool) {
     let sw = screen_width();
+    // Daily-challenge runs freeze once solved rather than restarting (see
+    // `control::Control::daily_mode`) — "Restarting..." would be an outright lie there.
     let (txt_col, status) = match game.phase {
+        Phase::Solved if daily_mode => (Color::new(0.28, 1.0, 0.52, 1.0), "  - SOLVED!"),
         Phase::Solved => (
             Color::new(0.28, 1.0, 0.52, 1.0),
             "  - SOLVED! Restarting...",
