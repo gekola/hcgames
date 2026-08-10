@@ -214,6 +214,15 @@ round — fires a `gtag('event', 'episode_complete', {game, episode, score})` ca
 through a tiny miniquad JS plugin (`xtask::analytics_bridge`, registers `env.hcg_ga_event`
 before the wasm module loads) rather than wasm-bindgen; see "WASM caveats" below.
 
+Other analytics are page-level JS in `xtask`, not per-game Rust — `session_signals_bridge`
+(`game_switch`, `session_end`), `wall_analytics_bridge` (`wall_view`, `wall_tile_click`),
+`share_result_bridge` (`daily_share_click`). **Any new page-level event must be suppressed
+under `?embed=1`/`?stream=1`** (`HIDE_CHROME_JS`): the ambient wall runs every game at once
+in iframes, so an unguarded per-page event fires once per tile per wall view and buries the
+real signal. If an event needs something only the wasm module knows, prefer counting it
+inside `analytics_bridge`'s existing `hcg_ga_event` callback — every Rust-side event already
+passes through there — over adding a second wasm export.
+
 `?` toggles a hotkey-reference popup, `Esc` closes it, `S` saves a screenshot, `F`/double-click
 toggles fullscreen — all pure page-level HTML/CSS/JS (`xtask::hotkey_popup`,
 `xtask::screenshot_bridge`, `xtask::fullscreen_bridge`), not drawn by the games themselves.
