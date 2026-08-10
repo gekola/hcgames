@@ -446,7 +446,8 @@ fn main() {
 }
 
 async fn run_ui(cli: CliArgs) {
-    macroquad::rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    macroquad::rand::srand(control.seed());
 
     let mut mode = cli.variant.unwrap_or(VariantMode::Auto);
     let mut game = new_game_for(mode, 0);
@@ -457,7 +458,9 @@ async fn run_ui(cli: CliArgs) {
     let mut flying: Vec<FlyingCard> = Vec::new();
     let mut end_time: Option<f64> = None;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
+    // Set once the daily-challenge run reaches Won/Stuck (see `control::Control::daily_mode`)
+    // — the board freezes there instead of restarting into a new deal.
+    let mut daily_done = false;
 
     // See `render_cache::prewarm_glyphs` — must run before `board_cache` (or any
     // RenderCache) exists. 16.0 is the stock-pile count label's fixed font size.
@@ -547,17 +550,31 @@ async fn run_ui(cli: CliArgs) {
                 }
 
                 let t = *end_time.get_or_insert(now);
-                if now - t > RESTART_DELAY {
+                if !daily_done && now - t > RESTART_DELAY {
                     let score: i64 = game.foundations.iter().map(|f| f.len() as i64).sum();
                     control.episode_complete("klondike", score);
-                    game = new_game_for(mode, game.generation + 1);
-                    display_game = game.clone();
-                    solver = Solver::new();
-                    end_time = None;
-                    accum = 0.0;
-                    anim_t = 1.0;
-                    flying.clear();
-                    board_cache.mark_dirty();
+                    if control.daily_mode() {
+                        let result_clause = if game.phase == Phase::Won {
+                            format!("win with all {score} cards home")
+                        } else {
+                            format!("get stuck with {score} cards home")
+                        };
+                        control::share_result(&control::daily_verdict_text(
+                            "Klondike",
+                            control::daily_puzzle_number(),
+                            &result_clause,
+                        ));
+                        daily_done = true;
+                    } else {
+                        game = new_game_for(mode, game.generation + 1);
+                        display_game = game.clone();
+                        solver = Solver::new();
+                        end_time = None;
+                        accum = 0.0;
+                        anim_t = 1.0;
+                        flying.clear();
+                        board_cache.mark_dirty();
+                    }
                 }
             }
         }
@@ -566,7 +583,7 @@ async fn run_ui(cli: CliArgs) {
 
         clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
         if !control.stream_mode() {
-            draw_hud(&game, mode.label(), &control.label());
+            draw_hud(&game, mode.label(), &control.label(), control.daily_mode());
         }
         board_cache.draw(|| draw_game(&display_game, &layout, &in_flight));
 
@@ -586,7 +603,7 @@ async fn run_ui(cli: CliArgs) {
 
 // ── HUD ───────────────────────────────────────────────────────────────────────
 
-fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
+fn draw_hud(game: &Game, mode_label: &str, speed_label: &str, daily_mode: bool) {
     let sw = screen_width();
     let (hud_bg, txt_col) = match game.phase {
         Phase::Won => (
@@ -604,8 +621,12 @@ fn draw_hud(game: &Game, mode_label: &str, speed_label: &str) {
     };
     draw_rectangle(0.0, 0.0, sw, 34.0, hud_bg);
 
+    // Daily-challenge runs freeze here rather than restarting (see
+    // `control::Control::daily_mode`) — "Restarting..." would be an outright lie.
     let status = match game.phase {
         Phase::Playing => String::new(),
+        Phase::Won if daily_mode => "  - WON!".to_owned(),
+        Phase::Stuck if daily_mode => "  - STUCK.".to_owned(),
         Phase::Won => "  - WON! Restarting...".to_owned(),
         Phase::Stuck => "  - STUCK. Restarting...".to_owned(),
     };
