@@ -186,13 +186,16 @@ pub fn run_headless(kind: GridKind, cli: CliArgs) -> ! {
 }
 
 pub async fn run(kind: GridKind, cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mut kind = kind;
     let mut board = Board::new(kind);
     let mut accum = 0.0f32;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
     const GAME_NAME: &str = "minesweeper";
+    // Set once a daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes on its final frame instead of starting a new episode.
+    let mut daily_done = false;
 
     // The grid (cell backgrounds, revealed-neighbor-count text, flags) only actually
     // changes once per solver tick (`TICK`), but was being fully re-drawn every render
@@ -222,7 +225,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
             board_cache.mark_dirty();
         }
 
-        while accum >= TICK {
+        while !daily_done && accum >= TICK {
             accum -= TICK;
             board_cache.mark_dirty();
             if step(&mut board, &cli) {
@@ -237,15 +240,28 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
                         );
                     }
                     control.episode_complete(GAME_NAME, revealed as i64);
-                    if cli.once {
+                    if control.daily_mode() {
+                        let result_clause = if won {
+                            format!("win with {revealed} cells revealed")
+                        } else {
+                            format!("lose with only {revealed} cells revealed")
+                        };
+                        control::share_result(&control::daily_verdict_text(
+                            "Minesweeper",
+                            control::daily_puzzle_number(),
+                            &result_clause,
+                        ));
+                        daily_done = true;
+                    } else if cli.once {
                         println!(
                             "result={} revealed={revealed}",
                             if won { "won" } else { "lost" }
                         );
                         std::process::exit(0);
+                    } else {
+                        board = Board::new(kind);
+                        update_probs(&mut board);
                     }
-                    board = Board::new(kind);
-                    update_probs(&mut board);
                 }
                 break;
             }
@@ -255,6 +271,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
             &board,
             &control.label(),
             control.stream_mode(),
+            control.daily_mode(),
             &mut board_cache,
         );
         shot.tick();
@@ -344,7 +361,7 @@ fn cell_bg(cell: &Cell, idx: usize, hit: Option<usize>, global_prob: Option<f32>
 
 // ── HUD ──────────────────────────────────────────────────────────────────────
 
-fn draw_hud(board: &Board, sw: f32, speed_label: &str) {
+fn draw_hud(board: &Board, sw: f32, speed_label: &str, daily_mode: bool) {
     let hud_bg = match board.phase {
         Phase::GameOver(_) => Color {
             r: 0.28,
@@ -395,19 +412,23 @@ fn draw_hud(board: &Board, sw: f32, speed_label: &str) {
         GridKind::Square => "Square",
         GridKind::Hex => "Hex",
     };
-    let msg = match board.phase {
-        Phase::FirstClick | Phase::Playing => format!(
+    // Daily-challenge runs freeze here rather than restarting (see
+    // `control::Control::daily_mode`) — "restarting in Ns" would be an outright lie.
+    let msg = match (board.phase, daily_mode) {
+        (Phase::FirstClick | Phase::Playing, _) => format!(
             "{}  Mines: {}  Flagged: {}  Remaining: {}",
             label,
             board.mine_count,
             flagged,
             board.remaining_mines()
         ),
-        Phase::GameOver(_) => format!(
+        (Phase::GameOver(_), true) => format!("{label}  MINE HIT."),
+        (Phase::Won(_), true) => format!("{label}  SOLVED!"),
+        (Phase::GameOver(_), false) => format!(
             "{}  MINE HIT — restarting in {:.0}s…",
             label, RESTART_DELAY as u32
         ),
-        Phase::Won(_) => format!(
+        (Phase::Won(_), false) => format!(
             "{}  SOLVED! Restarting in {:.0}s…",
             label, RESTART_DELAY as u32
         ),
@@ -656,7 +677,13 @@ fn draw_hex_grid(
 
 // ── Top-level draw ────────────────────────────────────────────────────────────
 
-fn draw_board(board: &Board, speed_label: &str, hide_hud: bool, board_cache: &mut RenderCache) {
+fn draw_board(
+    board: &Board,
+    speed_label: &str,
+    hide_hud: bool,
+    daily_mode: bool,
+    board_cache: &mut RenderCache,
+) {
     let sw = screen_width();
     let sh = screen_height();
 
@@ -667,7 +694,7 @@ fn draw_board(board: &Board, speed_label: &str, hide_hud: bool, board_cache: &mu
         a: 1.0,
     });
     if !hide_hud {
-        draw_hud(board, sw, speed_label);
+        draw_hud(board, sw, speed_label, daily_mode);
     }
 
     let total_hidden = board

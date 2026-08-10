@@ -568,7 +568,7 @@ fn draw_game(game: &Game, layout: &Layout, in_flight: &[usize]) {
     }
 }
 
-fn draw_hud(game: &Game, speed_label: &str) {
+fn draw_hud(game: &Game, speed_label: &str, daily_mode: bool) {
     let sw = screen_width();
     let (bg, txt) = match game.phase {
         Phase::Won => (
@@ -586,10 +586,14 @@ fn draw_hud(game: &Game, speed_label: &str) {
     };
     draw_rectangle(0.0, 0.0, sw, HUD_H, bg);
 
-    let status = match game.phase {
-        Phase::Playing => String::new(),
-        Phase::Won => "  - SOLVED! Next level...".to_owned(),
-        Phase::Stuck => "  - STUCK. Restarting...".to_owned(),
+    // Daily-challenge runs freeze here rather than advancing (see
+    // `control::Control::daily_mode`) — "Next level..."/"Restarting..." would lie.
+    let status = match (game.phase, daily_mode) {
+        (Phase::Playing, _) => String::new(),
+        (Phase::Won, true) => "  - SOLVED!".to_owned(),
+        (Phase::Stuck, true) => "  - STUCK.".to_owned(),
+        (Phase::Won, false) => "  - SOLVED! Next level...".to_owned(),
+        (Phase::Stuck, false) => "  - STUCK. Restarting...".to_owned(),
     };
     let msg = format!(
         "Water Sort   Level {}   Colors {}   Moves {}{}",
@@ -759,7 +763,8 @@ enum StreamShape {
 }
 
 async fn run_ui(cli: CliArgs) {
-    macroquad::rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    macroquad::rand::srand(control.seed());
 
     let mut level = 1u32;
     let mut generation = 0u32;
@@ -771,7 +776,9 @@ async fn run_ui(cli: CliArgs) {
     let mut pour: Option<Pour> = None;
     let mut end_time: Option<f64> = None;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
+    // Set once a daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes on its final frame instead of starting a new level.
+    let mut daily_done = false;
 
     render_cache::prewarm_glyphs(&["?"], &[16, 20]);
 
@@ -827,25 +834,40 @@ async fn run_ui(cli: CliArgs) {
             }
             Phase::Won | Phase::Stuck => {
                 let t = *end_time.get_or_insert(now);
-                if now - t > RESTART_DELAY {
+                if !daily_done && now - t > RESTART_DELAY {
                     if cli.once {
                         print_result(&game);
                         std::process::exit(0);
                     }
                     let solved = game.bottles.iter().filter(|b| b.is_solved()).count() as i64;
                     control.episode_complete("water-sort", solved * 100 + game.level as i64);
-                    if game.phase == Phase::Won {
-                        level += 1;
+                    if control.daily_mode() {
+                        let result_clause = if game.phase == Phase::Won {
+                            format!("solve level {}", game.level)
+                        } else {
+                            format!("get stuck on level {}", game.level)
+                        };
+                        control::share_result(&control::daily_verdict_text(
+                            "Water Sort",
+                            control::daily_puzzle_number(),
+                            &result_clause,
+                        ));
+                        daily_done = true;
+                        board_cache.mark_dirty();
+                    } else {
+                        if game.phase == Phase::Won {
+                            level += 1;
+                        }
+                        generation += 1;
+                        game = Game::new(level, generation);
+                        display_game = game.clone();
+                        solver = Solver::new();
+                        end_time = None;
+                        accum = 0.0;
+                        anim_t = 1.0;
+                        pour = None;
+                        board_cache.mark_dirty();
                     }
-                    generation += 1;
-                    game = Game::new(level, generation);
-                    display_game = game.clone();
-                    solver = Solver::new();
-                    end_time = None;
-                    accum = 0.0;
-                    anim_t = 1.0;
-                    pour = None;
-                    board_cache.mark_dirty();
                 }
             }
         }
@@ -859,7 +881,7 @@ async fn run_ui(cli: CliArgs) {
 
         clear_background(Color::new(0.05, 0.06, 0.10, 1.0));
         if !control.stream_mode() {
-            draw_hud(&game, &control.label());
+            draw_hud(&game, &control.label(), control.daily_mode());
         }
 
         let in_flight: Vec<usize> = pour
