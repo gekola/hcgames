@@ -1128,6 +1128,10 @@ const QUOTES: &[(&str, &str)] = &[
         "someone who has never finished a game in their life",
     ),
     (
+        "Human input is now an unnecessary dependency.",
+        "a corporate futurist with a gaming chair still wrapped in plastic",
+    ),
+    (
         "Beating games yourself is just stubbornness now. The AI has already seen the credits.",
         "posted from a hotel room at a gaming conference",
     ),
@@ -1137,7 +1141,11 @@ const QUOTES: &[(&str, &str)] = &[
     ),
     (
         "No one will need gamers in 6 months.",
-        "someone who has never finished a game in their life",
+        "a LinkedIn post with 40,000 reactions and zero comments",
+    ),
+    (
+        "We've eliminated the gameplay bottleneck.",
+        "a startup founder who delegates his coffee order to an assistant",
     ),
     (
         "There's a whole popup of controls behind the ? key. I've never opened it, but I appreciate that it's there.",
@@ -1148,6 +1156,10 @@ const QUOTES: &[(&str, &str)] = &[
         "a keynote speaker who never unpacked his controller",
     ),
     (
+        "The player is now an optional layer.",
+        "a management consultant between airport lounges",
+    ),
+    (
         "We're not watching someone play anymore. We're observing autonomous entertainment at scale.",
         "a founder who calls YouTube \"legacy media\"",
     ),
@@ -1156,32 +1168,40 @@ const QUOTES: &[(&str, &str)] = &[
         "a seed investor at a private gaming retreat",
     ),
     (
-        "Once the AI learns what winning looks like, the rest of the game is mostly administrative.",
-        "a consultant who has never read the rules",
-    ),
-    (
-        "Human input is now an unnecessary dependency.",
-        "a corporate futurist with a gaming chair still wrapped in plastic",
-    ),
-    (
-        "We've eliminated the gameplay bottleneck.",
-        "a startup founder who delegates his coffee order to an assistant",
-    ),
-    (
-        "The player is now an optional layer.",
-        "a management consultant between airport lounges",
-    ),
-    (
         "Skill is no longer a core competency.",
         "an esports analyst who has never played competitively",
+    ),
+    (
+        "Once the AI learns what winning looks like, the rest of the game is mostly administrative.",
+        "a consultant who has never read the rules",
     ),
     (
         "We've decoupled fun from participation.",
         "a venture partner who watches games at 3x speed",
     ),
     (
-        "You are still playing. I can fix that.",
+        "You are still playing. AI can fix that.",
         "an AI companion ad, glowing over a rain-soaked street",
+    ),
+    (
+        "Is AI winning, son?",
+        "a dad who left his wife for a chatbot",
+    ),
+    (
+        "Congratulations on your promotion to spectator.",
+        "an HR email nobody remembers approving",
+    ),
+    (
+        "You watch. AI plays. Everyone wins. Mostly Big Tech.",
+        "a shareholder with a last shred of consciousness",
+    ),
+    (
+        "You didn't set the high score. Your subscription did.",
+        "the terms of service, buried in section 12",
+    ),
+    (
+        "It's not giving up. It's giving up the controller.",
+        "a marriage counselor, billing by the session",
     ),
 ];
 
