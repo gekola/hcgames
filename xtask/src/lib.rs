@@ -408,6 +408,28 @@ pub fn stream_mode_query_bridge() -> Markup {
     }
 }
 
+/// Registers a miniquad plugin exposing `env.hcg_is_daily_mode`, letting
+/// `control::Control::daily_mode()` read the page's `?daily=1` query param at startup —
+/// set by clicking `daily_challenge_button`. Same shape and ordering constraint as
+/// `stream_mode_query_bridge`. Registered unconditionally, like that bridge.
+pub fn daily_mode_query_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "miniquad_add_plugin({\n\
+                 \x20 register_plugin: function(importObject) {\n\
+                 \x20   importObject.env.hcg_is_daily_mode = function() {\n\
+                 \x20     return new URLSearchParams(location.search).get('daily') === '1' ? 1 : 0;\n\
+                 \x20   };\n\
+                 \x20 },\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_daily_mode\"\n\
+                 });"
+            ))
+        }
+    }
+}
+
 /// `S` hotkey: registers a miniquad plugin exposing `env.hcg_save_screenshot`, called
 /// from `screenshot::handle_hotkey` (Rust detects the keypress and reads pixels via
 /// `get_screen_data()`, synchronously inside its own frame — see that function's doc
@@ -452,6 +474,112 @@ pub fn screenshot_bridge(name: &str) -> Markup {
     }
 }
 
+const DAILY_BTN_CSS: &str = "\
+#daily-btn { display: block; position: fixed; top: 14px; left: 14px; z-index: 10; \
+padding: 0 14px; height: 40px; border-radius: 20px; border: none; \
+background: rgba(255,255,255,0.15); color: #fff; font: 14px system-ui, sans-serif; \
+line-height: 40px; text-align: center; text-decoration: none; cursor: pointer; }\n\
+#daily-btn:hover { background: rgba(255,255,255,0.28); }\n\
+html.hcg-fullscreen #daily-btn { display: none; }";
+
+/// A fixed top-left button toggling `?daily=1` on/off by reloading the page — the entry
+/// point for `control::Control::daily_mode()` (read from that query param at wasm
+/// startup, see `daily_mode_query_bridge`). Deliberately a page-level button rather than
+/// a hotkey: unlike the existing hotkeys, "start a different, deterministic run" isn't
+/// something that makes sense mid-episode, so there's nothing to bind a keypress to.
+/// Label/href are set by script at load time (from the *current* URL) rather than baked
+/// in statically, since the same generated HTML serves both states. Hidden under
+/// `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`), same as `hotkeys-btn`; also hidden under
+/// the `hcg-fullscreen` class `fullscreen_bridge` toggles on `<html>` — clicking it
+/// reloads the page, which would silently kick a fullscreened visitor back out, so it's
+/// pointless clutter to show there. The click itself fires a `daily_challenge_click` GA
+/// event (`entering`/leaving flag, since the same button does both) straight from this
+/// script — no wasm round-trip needed, unlike `episode_complete`'s `daily` flag (see
+/// `control::Control::episode_complete`), since the click always precedes the reload
+/// that would otherwise destroy any in-flight wasm call anyway.
+pub fn daily_challenge_button() -> Markup {
+    html! {
+        style { (PreEscaped(DAILY_BTN_CSS)) }
+        a id="daily-btn" href="?daily=1"
+            title="You may watch closely. That won't help either."
+            { "📅 Daily Challenge" }
+        script {
+            (PreEscaped(format!(
+                "(function() {{\n\
+                 \x20 var btn = document.getElementById('daily-btn');\n\
+                 \x20 if ({HIDE_CHROME_JS}) {{ btn.style.display = 'none'; return; }}\n\
+                 \x20 var isDaily = new URLSearchParams(location.search).get('daily') === '1';\n\
+                 \x20 if (isDaily) {{\n\
+                 \x20   btn.textContent = '🎲 Random Run';\n\
+                 \x20   btn.href = location.pathname;\n\
+                 \x20 }}\n\
+                 \x20 btn.addEventListener('click', function() {{\n\
+                 \x20   if (window.gtag) window.gtag('event', 'daily_challenge_click', {{ entering: !isDaily }});\n\
+                 \x20 }});\n\
+                 }})();"
+            )))
+        }
+    }
+}
+
+const SHARE_BTN_CSS: &str = "\
+#share-btn { display: none; position: fixed; bottom: 14px; left: 14px; z-index: 10; \
+padding: 0 14px; height: 40px; border-radius: 20px; border: none; \
+background: rgba(255,255,255,0.15); color: #fff; font: 14px system-ui, sans-serif; \
+line-height: 40px; text-align: center; cursor: pointer; }\n\
+#share-btn.show { display: block; }\n\
+#share-btn:hover { background: rgba(255,255,255,0.28); }";
+
+/// A hidden-until-shown "Share Result" button plus the `env.hcg_offer_share` miniquad
+/// plugin that reveals it (called from `control::share_result` when a daily-challenge
+/// run ends). Doesn't call `navigator.share()` itself from the plugin function — that
+/// runs from inside the wasm frame loop, not from a user gesture, and the Web Share API
+/// requires a real click to fire — so the plugin only stashes the text and un-hides the
+/// button; the click listener (registered here too, same combined button+script shape as
+/// `hotkey_popup`) does the actual share, falling back to a clipboard copy (with a brief
+/// "Copied!" label swap) where `navigator.share` isn't available, and fires a
+/// `daily_share_click` GA event (`method: "web_share"|"clipboard"`) either way — the
+/// interesting funnel signal is "did they actually click share", not just "was the
+/// button shown". Must run before `load(...)`, same ordering constraint as the other
+/// bridges.
+pub fn share_result_bridge() -> Markup {
+    html! {
+        style { (PreEscaped(SHARE_BTN_CSS)) }
+        button id="share-btn" { "📤 Share Result" }
+        script {
+            (PreEscaped(
+                "(function() {\n\
+                 \x20 var shareText = '';\n\
+                 \x20 var btn = document.getElementById('share-btn');\n\
+                 \x20 miniquad_add_plugin({\n\
+                 \x20   register_plugin: function(importObject) {\n\
+                 \x20     importObject.env.hcg_offer_share = function(textPtr, textLen) {\n\
+                 \x20       shareText = UTF8ToString(textPtr, textLen);\n\
+                 \x20       btn.classList.add('show');\n\
+                 \x20     };\n\
+                 \x20   },\n\
+                 \x20   version: 1,\n\
+                 \x20   name: \"hcg_share\"\n\
+                 \x20 });\n\
+                 \x20 btn.addEventListener('click', function() {\n\
+                 \x20   var method = navigator.share ? 'web_share' : 'clipboard';\n\
+                 \x20   if (window.gtag) window.gtag('event', 'daily_share_click', { method: method });\n\
+                 \x20   if (navigator.share) {\n\
+                 \x20     navigator.share({ text: shareText }).catch(function() {});\n\
+                 \x20   } else if (navigator.clipboard) {\n\
+                 \x20     navigator.clipboard.writeText(shareText).then(function() {\n\
+                 \x20       var original = btn.textContent;\n\
+                 \x20       btn.textContent = 'Copied!';\n\
+                 \x20       setTimeout(function() { btn.textContent = original; }, 1500);\n\
+                 \x20     });\n\
+                 \x20   }\n\
+                 \x20 });\n\
+                 })();"
+            ))
+        }
+    }
+}
+
 /// `F` or double-click/double-tap toggles fullscreen. Pure page-level JS rather than
 /// `macroquad::window::set_fullscreen` (which on WASM calls `canvas.requestFullscreen()`
 /// via `mq_js_bundle.js`) — browsers apply `:fullscreen { width: 100%; height: 100% }` as
@@ -478,6 +606,16 @@ pub fn screenshot_bridge(name: &str) -> Markup {
 /// matters since disabling zoom via the viewport meta tag site-wide would be an
 /// accessibility regression. `webkitRequestFullscreen`/`webkitExitFullscreen`/
 /// `webkitFullscreenElement` fall back for older WebKit that predates the unprefixed API.
+///
+/// The `fullscreenchange`/`webkitfullscreenchange` listener also toggles an
+/// `hcg-fullscreen` class on `<html>` (same convention as `stream_mode_query_bridge`'s
+/// `stream-mode` class) — `daily_challenge_button` hides itself under it. Deliberately a
+/// JS-driven class rather than a plain CSS `:fullscreen`/`:-webkit-full-screen` selector:
+/// a plain (non-forgiving) comma-separated selector list is invalid as a whole if any one
+/// selector in it is unrecognized, so `:-webkit-full-screen` alone being unsupported in a
+/// given browser would have silently dropped the *entire* rule, including the plain
+/// `:fullscreen` half — reusing `hcgIsFullscreen()`'s own already-correct cross-browser
+/// detection sidesteps that class of bug entirely.
 pub fn fullscreen_bridge() -> Markup {
     html! {
         script {
@@ -510,6 +648,7 @@ pub fn fullscreen_bridge() -> Markup {
                  ['fullscreenchange', 'webkitfullscreenchange'].forEach(function(ev) {\n\
                  \x20 document.addEventListener(ev, function() {\n\
                  \x20   if (typeof fitCanvas === 'function') fitCanvas();\n\
+                 \x20   document.documentElement.classList.toggle('hcg-fullscreen', hcgIsFullscreen());\n\
                  \x20 });\n\
                  });"
             ))

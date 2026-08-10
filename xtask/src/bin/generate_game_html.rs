@@ -2,10 +2,10 @@
 use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
-    analytics_bridge, base_url, description, favicon_links, fullscreen_bridge, gtag_head,
-    hotkey_popup, loading_screen, manifest_json, native_size_style, orientation_hint, pwa_head,
-    screenshot_bridge, social_image, stream_mode_query_bridge, sw_register_bridge, title,
-    variant_query_bridge,
+    analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
+    favicon_links, fullscreen_bridge, gtag_head, hotkey_popup, loading_screen, manifest_json,
+    native_size_style, orientation_hint, pwa_head, screenshot_bridge, share_result_bridge,
+    social_image, stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
 };
 
 fn main() {
@@ -51,12 +51,15 @@ fn main() {
                 (analytics_bridge())
                 (sw_register_bridge("../sw.js"))
                 (stream_mode_query_bridge())
+                (daily_mode_query_bridge())
                 (screenshot_bridge(&name))
+                (share_result_bridge())
                 @if name == "minesweeper" {
                     (variant_query_bridge())
                 }
                 script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
                 (hotkey_popup(&name))
+                (daily_challenge_button())
                 (fullscreen_bridge())
                 (orientation_hint(&name))
             }

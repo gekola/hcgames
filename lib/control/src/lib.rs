@@ -16,6 +16,8 @@ const SWIPE_MAX_SECS: f64 = 0.6;
 unsafe extern "C" {
     fn hcg_ga_event(name_ptr: *const u8, name_len: u32, params_ptr: *const u8, params_len: u32);
     fn hcg_is_stream_mode() -> i32;
+    fn hcg_is_daily_mode() -> i32;
+    fn hcg_offer_share(text_ptr: *const u8, text_len: u32);
 }
 
 /// Fires a Google Analytics event (`gtag('event', name, params)`) via the small JS plugin
@@ -36,6 +38,49 @@ fn ga_event(name: &str, params_json: &str) {
     {
         let _ = (name, params_json);
     }
+}
+
+/// Reveals the page's hidden "Share Result" button with `text` pre-filled (see
+/// `xtask::share_result_bridge`) — call once, right when a daily-challenge run ends.
+/// Doesn't share directly: `navigator.share()` requires a real user gesture (a click) to
+/// fire, which a call from inside the wasm frame loop isn't, so the JS side stores `text`
+/// and waits for the button click instead. No-op on native (no page to show a button on).
+pub fn share_result(text: &str) {
+    #[cfg(target_arch = "wasm32")]
+    unsafe {
+        hcg_offer_share(text.as_ptr(), text.len() as u32);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = text;
+    }
+}
+
+/// Whole UTC days since the Unix epoch, per `macroquad::miniquad::date::now()` (real
+/// wall-clock time on both native and WASM — `std::time::SystemTime` panics on WASM, same
+/// reason `Control::seed`'s own wall-clock fallback goes through the miniquad clock too).
+fn today_day_index() -> u64 {
+    macroquad::miniquad::date::now() as u64 / 86_400
+}
+
+/// Stable, ever-increasing puzzle number for a daily-challenge share (see
+/// `daily_verdict_text`) — independent of `Control::seed`'s hash, just a human-readable
+/// day count since a fixed epoch (2024-01-01T00:00:00Z).
+pub fn daily_puzzle_number() -> u64 {
+    const EPOCH_DAY: u64 = 19_723; // 2024-01-01 in days-since-epoch
+    today_day_index().saturating_sub(EPOCH_DAY)
+}
+
+/// Wording for a daily-challenge share (see `share_result`) — one shared template so
+/// every game's daily result reads in the same voice instead of being hand-written per
+/// game. Deliberately not framed as "your score": there's no player input anywhere in
+/// this workspace, so every visitor watching today's run sees the identical outcome —
+/// there's nothing personal to have achieved. First-person "I watched" keeps it readable
+/// as something a visitor is actually saying when they share it. `result_clause` is the
+/// game-specific bit, completing "I watched {title} ___ today" (e.g. `"score 40"`,
+/// `"solve it in 87 ticks"`).
+pub fn daily_verdict_text(title: &str, puzzle_number: u64, result_clause: &str) -> String {
+    format!("Case #{puzzle_number}: I watched {title} {result_clause} today.")
 }
 
 /// Simulation-speed multiplier, adjustable via hotkeys (`=`/`-` step by 10%, `0` resets
@@ -59,6 +104,7 @@ pub struct Control {
     one_finger_start: Option<(f32, f32, f64)>,
     variant_swipe: bool,
     stream_mode: bool,
+    daily_mode: bool,
 }
 
 impl Control {
@@ -78,6 +124,10 @@ impl Control {
             stream_mode: unsafe { hcg_is_stream_mode() != 0 },
             #[cfg(not(target_arch = "wasm32"))]
             stream_mode: false,
+            #[cfg(target_arch = "wasm32")]
+            daily_mode: unsafe { hcg_is_daily_mode() != 0 },
+            #[cfg(not(target_arch = "wasm32"))]
+            daily_mode: false,
         }
     }
 
@@ -89,6 +139,40 @@ impl Control {
     /// this is true — `Control` only carries the flag, it doesn't touch rendering itself.
     pub fn stream_mode(&self) -> bool {
         self.stream_mode
+    }
+
+    /// True under the page's `?daily=1` query param (see `xtask::daily_mode_query_bridge`
+    /// / `xtask::daily_challenge_button`) — a visitor asked for today's shared-seed board
+    /// instead of a random one. Read once at startup, same as `stream_mode`. Games should
+    /// seed their RNG with `control.seed()` instead of `screenshot::seed()`, and freeze on
+    /// episode end (calling `share_result`) instead of starting a new episode, when this
+    /// is true.
+    pub fn daily_mode(&self) -> bool {
+        self.daily_mode
+    }
+
+    /// RNG seed for this run. `HCG_SEED` (native testing override) wins if set — same
+    /// precedence as `screenshot::seed()`. Otherwise, when `daily_mode()` is on, every
+    /// visitor loading the page on the same UTC day gets the identical hash of
+    /// `today_day_index()` (splitmix64 — cheap, well-distributed), so they all see the
+    /// same board: the mechanic behind Wordle-style daily-return puzzles (see
+    /// `.notes/aiideas.md`). Falls back to wall-clock for a normal, non-daily run — the
+    /// same fallback `screenshot::seed()` uses, duplicated here (rather than adding a
+    /// dependency on that crate for three lines) since seeding is a `Control`-level
+    /// concern once daily mode is involved: `Control` is what owns `daily_mode` itself,
+    /// so it should own the seed decision built on top of it rather than splitting that
+    /// decision across two crates.
+    pub fn seed(&self) -> u64 {
+        if let Some(n) = std::env::var("HCG_SEED").ok().and_then(|s| s.parse().ok()) {
+            return n;
+        }
+        if !self.daily_mode {
+            return macroquad::miniquad::date::now() as u64;
+        }
+        let mut x = today_day_index().wrapping_add(0x9E37_79B9_7F4A_7C15);
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^ (x >> 31)
     }
 
     pub fn handle_keys(&mut self) {
@@ -202,14 +286,19 @@ impl Control {
     }
 
     /// Call when a game round ends. Bumps the episode counter and reports it, with the
-    /// round's final `score`, as a GA event.
+    /// round's final `score`, as a GA event. `daily` is tagged on from `self.daily_mode`
+    /// so a completed daily-challenge run (vs. a regular random one) is filterable in GA
+    /// without a second event — see `daily_mode` for why there's no separate
+    /// "daily run started" event: `Control::new()` doesn't know the game's name yet, and
+    /// `daily_challenge_button`'s own click already fires `daily_challenge_click` for the
+    /// entering-daily-mode signal instead.
     pub fn episode_complete(&mut self, game: &str, score: i64) {
         self.episode += 1;
         ga_event(
             "episode_complete",
             &format!(
-                "{{\"game\":\"{game}\",\"episode\":{},\"score\":{score}}}",
-                self.episode
+                "{{\"game\":\"{game}\",\"episode\":{},\"score\":{score},\"daily\":{}}}",
+                self.episode, self.daily_mode
             ),
         );
     }
