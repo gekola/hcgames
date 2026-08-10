@@ -4,8 +4,9 @@ use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
     favicon_links, fullscreen_bridge, gtag_head, hotkey_popup, loading_screen, manifest_json,
-    native_size_style, orientation_hint, pwa_head, screenshot_bridge, share_result_bridge,
-    social_image, stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
+    native_size_style, orientation_hint, pwa_head, screenshot_bridge, session_signals_bridge,
+    share_result_bridge, social_image, stream_mode_query_bridge, sw_register_bridge, title,
+    variant_query_bridge,
 };
 
 fn main() {
@@ -49,6 +50,7 @@ fn main() {
                 }
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
+                (session_signals_bridge(&name))
                 (sw_register_bridge("../sw.js"))
                 (stream_mode_query_bridge())
                 (daily_mode_query_bridge())

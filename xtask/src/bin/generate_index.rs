@@ -3,7 +3,7 @@ use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
     base_url, description, favicon_links, gtag_head, manifest_json, pwa_head, social_image,
-    sw_register_bridge, title,
+    sw_register_bridge, title, wall_analytics_bridge,
 };
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
@@ -854,10 +854,11 @@ fn main() {
                 }
                 div class="wall-grid" {
                     @for game in &games {
-                        iframe class="wall-tile" title=(title(game))
+                        iframe class="wall-tile" title=(title(game)) data-game=(game)
                             src=(format!("../{game}/index.html?embed=1")) loading="lazy" allow="fullscreen" {}
                     }
                 }
+                (wall_analytics_bridge())
                 (sw_register_bridge("../sw.js"))
             }
         }

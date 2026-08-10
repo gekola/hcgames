@@ -350,6 +350,13 @@ pub fn orientation_hint(name: &str) -> Markup {
 /// Must run after `mq_js_bundle.js` (needs its global `miniquad_add_plugin`/`UTF8ToString`)
 /// but before `load(...)` (plugins register into the import object at instantiation time).
 /// A no-op when `window.gtag` isn't defined (GTAG_ID unset locally).
+///
+/// Also the cheapest place to count `episode_complete`s toward `session_end`'s
+/// `episodes_seen`: every one already passes through this one function on its way from
+/// Rust, so `session_signals_bridge` just reads a counter incremented here instead of
+/// adding a second wasm→JS call. `window.__hcgSessionStats` is only defined when that
+/// bridge runs (i.e. not under `?embed=1`/`?stream=1`), so the check also doubles as that
+/// suppression without this function needing to know about embed mode itself.
 pub fn analytics_bridge() -> Markup {
     html! {
         script {
@@ -359,12 +366,116 @@ pub fn analytics_bridge() -> Markup {
                  \x20   importObject.env.hcg_ga_event = function(namePtr, nameLen, paramsPtr, paramsLen) {\n\
                  \x20     var name = UTF8ToString(namePtr, nameLen);\n\
                  \x20     var params = paramsLen > 0 ? JSON.parse(UTF8ToString(paramsPtr, paramsLen)) : {};\n\
+                 \x20     if (name === 'episode_complete' && window.__hcgSessionStats) {\n\
+                 \x20       window.__hcgSessionStats.episodesSeen++;\n\
+                 \x20     }\n\
                  \x20     if (window.gtag) window.gtag('event', name, params);\n\
                  \x20   };\n\
                  \x20 },\n\
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_analytics\"\n\
                  });"
+            ))
+        }
+    }
+}
+
+/// `game_switch {from, to}` and `session_end {game, seconds_watched, episodes_seen}` —
+/// the two page-navigation/session-length signals from the `session-signals` idea in
+/// `.notes/aiideas.md`. Both are pure page-level JS, no wasm round-trip: `game_switch`
+/// only needs to compare this page's game name against whatever the last game page in
+/// this tab was, and `session_end` only needs a page-visibility hook — neither needs
+/// anything from the wasm module itself (`episodes_seen` aside, see below).
+///
+/// `from` comes from `sessionStorage`, not `document.referrer`: referrer is stripped or
+/// absent under common referrer policies/extensions, and a plain reload would also read
+/// as a same-game "switch" unless specially excluded. `sessionStorage` is scoped to this
+/// tab and only changes when a *different* game page in this tab actually finishes
+/// loading, which is exactly the transition this event wants.
+///
+/// `episodes_seen` piggybacks on `analytics_bridge`'s existing `hcg_ga_event` plugin
+/// (see its doc comment) rather than adding a second wasm export — every
+/// `episode_complete` already passes through that one function.
+///
+/// `session_end` fires on `visibilitychange` (backgrounded/switched tab) and `pagehide`
+/// (actual navigation/close), not `unload` — mobile Safari does not reliably fire
+/// `unload` at all. A `sent` flag stops the pair from double-firing when both occur in
+/// quick succession. No `transport_type: 'beacon'` parameter: that's a Universal Analytics
+/// field, and GA4's gtag.js already uses `sendBeacon`/`fetch(keepalive)` by itself for hits
+/// sent while a page is going away. Passing it here would just ride along as a junk custom
+/// event parameter and show up as one in reports.
+///
+/// Suppressed entirely under `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`): the wall
+/// (`generate_index`'s `wall_page`) runs up to 11 of these pages at once in iframes, and
+/// a `game_switch`/`session_end` from every tile on every wall view would flood the
+/// property with events nobody could use — the wall has its own, separate signal
+/// (`wall_analytics_bridge`). Dropped instead of sent when `window.gtag` is undefined
+/// (GTAG_ID unset locally), same convention as every other bridge here.
+pub fn session_signals_bridge(name: &str) -> Markup {
+    html! {
+        script {
+            (PreEscaped(format!(
+                "(function() {{\n\
+                 \x20 if ({HIDE_CHROME_JS}) return;\n\
+                 \x20 var GAME = \"{name}\";\n\
+                 \x20 var prev = sessionStorage.getItem('hcg_last_game');\n\
+                 \x20 if (prev && prev !== GAME && window.gtag) {{\n\
+                 \x20   window.gtag('event', 'game_switch', {{ from: prev, to: GAME }});\n\
+                 \x20 }}\n\
+                 \x20 sessionStorage.setItem('hcg_last_game', GAME);\n\
+                 \x20\n\
+                 \x20 window.__hcgSessionStats = {{ episodesSeen: 0, start: performance.now() }};\n\
+                 \x20 var sent = false;\n\
+                 \x20 function sendSessionEnd() {{\n\
+                 \x20   if (sent || !window.gtag) return;\n\
+                 \x20   sent = true;\n\
+                 \x20   var seconds = Math.round((performance.now() - window.__hcgSessionStats.start) / 1000);\n\
+                 \x20   window.gtag('event', 'session_end', {{\n\
+                 \x20     game: GAME,\n\
+                 \x20     seconds_watched: seconds,\n\
+                 \x20     episodes_seen: window.__hcgSessionStats.episodesSeen\n\
+                 \x20   }});\n\
+                 \x20 }}\n\
+                 \x20 document.addEventListener('visibilitychange', function() {{\n\
+                 \x20   if (document.visibilityState === 'hidden') sendSessionEnd();\n\
+                 \x20 }});\n\
+                 \x20 window.addEventListener('pagehide', sendSessionEnd);\n\
+                 }})();"
+            )))
+        }
+    }
+}
+
+/// `wall_view` (fired once per load of `generate_index`'s `wall_page`) and
+/// `wall_tile_click` (`{game}`, fired when a visitor focuses one of the embedded game
+/// iframes) — the wall was previously the most shareable page on the site and emitted no
+/// analytics at all.
+///
+/// Click detection can't use a plain `click` listener: a click landing inside an
+/// `<iframe>` fires and stays inside *that* iframe's own document, it never bubbles out
+/// to the parent page. The standard workaround is used instead — clicking into an iframe
+/// moves keyboard focus into it, which fires `blur` on the parent `window`; checking
+/// `document.activeElement` right after (`setTimeout(…, 0)` lets focus actually land
+/// first) identifies which iframe just got clicked via its `data-game` attribute
+/// (`wall_page` sets one per tile). Each embedded game page already suppresses its own
+/// `game_switch`/`session_end` under `?embed=1` (see `session_signals_bridge`) — this is
+/// the wall's own, separate signal: one event per interaction with the grid, not one
+/// `session_end` per tile per wall view.
+pub fn wall_analytics_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "(function() {\n\
+                 \x20 if (window.gtag) window.gtag('event', 'wall_view', {});\n\
+                 \x20 window.addEventListener('blur', function() {\n\
+                 \x20   setTimeout(function() {\n\
+                 \x20     var el = document.activeElement;\n\
+                 \x20     if (el && el.tagName === 'IFRAME' && el.dataset.game && window.gtag) {\n\
+                 \x20       window.gtag('event', 'wall_tile_click', { game: el.dataset.game });\n\
+                 \x20     }\n\
+                 \x20   }, 0);\n\
+                 \x20 });\n\
+                 })();"
             ))
         }
     }
