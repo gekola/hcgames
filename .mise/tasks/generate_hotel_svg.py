@@ -2,9 +2,14 @@
 # mise description="Generate static/hotel-scene.svg — source of the OG preview image"
 #
 # Mirrors the pixel-art hotel room scene drawn live on the homepage canvas
-# (see the <script> block in generate_index.py). Kept as a separate static
-# SVG so it can be rasterized to a real image for social-preview meta tags,
+# (see HOTEL_SCENE_SCRIPT in xtask/src/bin/generate_index.rs). Kept as a separate
+# static SVG so it can be rasterized to a real image for social-preview meta tags,
 # which crawlers can't render from JS canvas.
+#
+# This is deliberately the scene as the page *loads* — daylit, curtains open, hotel
+# armchair — not the state it settles into after its transition (curtains shut, lights
+# down, bed glowing neon, gaming chair). The preview is the "before"; the reveal belongs
+# to the page. Don't "re-sync" this file to the end state.
 
 W, H = 80, 60
 

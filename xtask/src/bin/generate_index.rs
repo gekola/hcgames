@@ -395,17 +395,56 @@ header p { margin-top: 0.4rem; font-size: 0.8rem; color: #a89a86; }
 }
 "#;
 
+/// The hero scene draws in four separate 80x60 layers rather than one, so the chair can be
+/// swapped without touching the room: `back` (wall/floor/curtains/window) and `front` (the bed,
+/// which occludes the chair) are painted once and never repainted; the two chair sprites —
+/// hotel armchair and gaming chair — are painted once each into transparent layers, and every
+/// frame of the transition picks each chair pixel from one sprite or the other by an ordered
+/// threshold, then composites back -> chair -> front and blits the result upscaled.
+///
+/// The pick is a **dither dissolve**, not an alpha crossfade: cross-fading two pixel-art
+/// sprites shows a half-transparent double image (both chairs visible at once, muddy colors
+/// that exist in neither palette) and looks like a rendering bug. Flipping whole pixels one
+/// at a time on a per-pixel threshold keeps every intermediate frame made only of real palette
+/// colors. The threshold is mostly vertical (bottom rows flip first, so the gaming chair grows
+/// up off the floor) with a Bayer 4x4 term mixed in to break the sweep line into pixel grain.
+/// Pixels at the leading edge of the sweep flash cyan for a few frames — the chair powering on.
+///
+/// As the dissolve runs the room dims and the bed lights up neon (a dilated-silhouette halo
+/// spilling onto the wall/floor, a `lighter` tint on the frame/headboard, and an under-frame LED
+/// strip). Both ramp in over the dissolve's first third and then stay: the page's resting state
+/// is the night room with a glowing bed and the gaming chair, not the daylit room it loads with.
+/// The light's *hue* cycles RGB-peripheral style while the chair dissolves and eases onto a fixed
+/// pink by the end; only its brightness keeps moving afterwards, on a slow breathe.
+///
+/// The dissolve runs once, ~1.5s after load. The breathe that follows it is throttled to ~15fps,
+/// costs no per-pixel work (only the `t`-dependent chair layer does, and `t` stops moving), and
+/// is suspended whenever the hero is scrolled out of view or the tab is hidden — this page's
+/// canvas art must not sit on the main thread, same concern that motivated `RenderCache`. Under
+/// `prefers-reduced-motion` the end state is painted once and no loop ever starts.
 const HOTEL_SCENE_SCRIPT: &str = r#"
 (function () {
   const canvas = document.getElementById('hotel');
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
 
   const W = 80, H = 60;
-  const off = document.createElement('canvas');
-  off.width = W; off.height = H;
-  const c = off.getContext('2d');
-  c.imageSmoothingEnabled = false;
+
+  function layer() {
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const c = cv.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    return { cv, c };
+  }
+
+  const back = layer(), front = layer();
+  const armchair = layer(), gamer = layer(), chair = layer();
+  const gamerBase = layer(), gamerTop = layer();
+  const halo = layer(), bedNeon = layer(), tint = layer(), curtains = layer();
+
+  let c = back.c;
 
   function px(x, y, w, h, col) {
     c.fillStyle = col;
@@ -427,30 +466,6 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   px( 7, 2, 3, 3, '#c8a858');
   px(60, 2, 3, 3, '#c8a858');
 
-  // left curtain
-  const lx = 10;
-  px(lx,     5, 12, 37, '#1e3e5e');
-  px(lx+1,   5,  1, 37, '#2a5070');
-  px(lx+4,   5,  1, 37, '#2a5070');
-  px(lx+8,   5,  1, 37, '#2a5070');
-  px(lx+2,   5,  1, 37, '#162e48');
-  px(lx+6,   5,  1, 37, '#162e48');
-  px(lx+10,  5,  1, 37, '#162e48');
-  px(lx+9,  36,  3,  6, '#2a5070');
-  px(lx+10, 38,  2,  4, '#162e48');
-
-  // right curtain
-  const rx = 48;
-  px(rx,     5, 12, 37, '#1e3e5e');
-  px(rx+1,   5,  1, 37, '#2a5070');
-  px(rx+4,   5,  1, 37, '#2a5070');
-  px(rx+8,   5,  1, 37, '#2a5070');
-  px(rx+2,   5,  1, 37, '#162e48');
-  px(rx+6,   5,  1, 37, '#162e48');
-  px(rx+10,  5,  1, 37, '#162e48');
-  px(rx,    36,  3,  6, '#2a5070');
-  px(rx+1,  38,  2,  4, '#162e48');
-
   // window
   px(22,  5, 26, 32, '#3a2818');
   px(24,  7, 22, 28, '#7ab0d4');
@@ -465,7 +480,34 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   px(46,  7,  2, 28, '#c8a87a');
   px(22, 35, 22,  2, '#c0a070');
 
-  // ── armchair — side profile facing right (toward bed), drawn first ────────
+  // ── curtains — own layer, repainted as they close over the transition ──────
+  // The panels stay pinned to the rod's ends and grow *inward*, 12px gathered to 25px spread:
+  // the fabric bunched at the sides is what fills the middle when a real curtain closes. They
+  // live in their own layer rather than in `back` because once closed they cover the window —
+  // which is also what darkens it, instead of tinting the glass.
+  const CUR = '#1e3e5e', CUR_HI = '#2a5070', CUR_LO = '#162e48';
+  let curW = -1;
+
+  function curtainsAt(close) {
+    const w = 12 + Math.round(13 * Math.min(1, Math.max(0, close)));
+    if (w === curW) return;
+    curW = w;
+    const cc = curtains.c;
+    cc.clearRect(0, 0, W, H);
+    for (const x0 of [10, 60 - w]) {
+      cc.fillStyle = CUR; cc.fillRect(x0, 5, w, 37);
+      for (let i = 1; i < w; i += 4) { cc.fillStyle = CUR_HI; cc.fillRect(x0 + i, 5, 1, 37); }
+      for (let i = 2; i < w; i += 4) { cc.fillStyle = CUR_LO; cc.fillRect(x0 + i, 5, 1, 37); }
+    }
+    // Each panel's inner edge hangs a little heavier than the rest of the fold pattern.
+    cc.fillStyle = CUR_HI;
+    cc.fillRect(7 + w, 36, 3, 6); cc.fillRect(60 - w, 36, 3, 6);
+    cc.fillStyle = CUR_LO;
+    cc.fillRect(8 + w, 38, 2, 4); cc.fillRect(61 - w, 38, 2, 4);
+  }
+
+  // ── armchair — side profile facing right (toward bed), own layer ──────────
+  c = armchair.c;
   const cx = 21;
   // chair back: tall post on the left
   px(cx,    32,  4, 21, '#5c1e0e');
@@ -487,10 +529,61 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   px(cx+3,  55,  2,  3, '#3a1008');
   px(cx+11, 55,  2,  3, '#3a1008');
   // floor shadow (left portion only, right hidden by bed)
-  c.fillStyle = 'rgba(0,0,0,0.15)';
-  c.fillRect(cx, 57, 12, 3);
+  px(cx, 57, 12, 3, 'rgba(0,0,0,0.15)');
+
+  // ── gaming chair — same anchor, same facing, taller shell + caster base ───
+  // Split across two layers at the gas cylinder: `gamerBase` is bolted to the floor, `gamerTop`
+  // is everything the chair swivels on, so the resting loop can sway the top while the casters
+  // stay put. `gamer` is the two flattened together, which is what the dissolve consumes.
+  c = gamerBase.c;
+  const INK = '#20202a', INK_HI = '#2e2e3c', INK_LO = '#15151d';
+  const RED = '#d92b3a', RED_HI = '#f04a58';
+  const STEEL = '#3a3a4a', STEEL_HI = '#50506a';
+  // floor shadow (wider than the armchair's — five-star base)
+  px(cx-1, 57, 17, 3, 'rgba(0,0,0,0.2)');
+  // five-star base + casters
+  px(cx+1,  55, 13, 1, '#2c2c38');
+  px(cx+2,  56, 11, 1, INK_LO);
+  px(cx,    55,  3, 3, '#16161e');
+  px(cx+12, 55,  3, 3, '#16161e');
+  px(cx+1,  55,  1, 1, STEEL);
+  px(cx+13, 55,  1, 1, STEEL);
+  // gas cylinder
+  px(cx+6,  49,  3, 6, STEEL);
+  px(cx+7,  49,  1, 6, STEEL_HI);
+  px(cx+8,  52,  1, 1, '#c07aff');
+
+  c = gamerTop.c;
+  // seat pan, red piping along the side
+  px(cx+3,  45, 12, 4, INK);
+  px(cx+3,  45, 12, 1, INK_HI);
+  px(cx+3,  48, 12, 1, RED);
+  px(cx+14, 46,  1, 2, INK_LO);
+  // backrest — reclined, each segment shifted left of the one below it
+  px(cx+2,  40,  5, 6, INK);
+  px(cx+6,  40,  1, 6, RED);
+  px(cx+1,  34,  6, 6, INK);
+  px(cx+6,  34,  1, 6, RED);
+  px(cx,    30,  5, 5, INK);
+  px(cx+4,  30,  1, 5, RED);
+  px(cx+1,  35,  1, 10, INK_HI);
+  // headrest — pillow sitting proud of the shell top
+  px(cx-1,  26,  6, 3, INK_HI);
+  px(cx+4,  26,  1, 3, RED_HI);
+  px(cx-1,  29,  6, 1, INK_LO);
+  // lumbar pillow
+  px(cx+5,  37,  2, 4, '#b02030');
+  px(cx+5,  37,  2, 1, RED_HI);
+  // armrest
+  px(cx+7,  41,  6, 2, INK);
+  px(cx+7,  41,  6, 1, INK_HI);
+  px(cx+9,  43,  2, 3, INK_LO);
+
+  gamer.c.drawImage(gamerBase.cv, 0, 0);
+  gamer.c.drawImage(gamerTop.cv, 0, 0);
 
   // ── bed — drawn on top of chair ──────────────────────────────────────────
+  c = front.c;
   const bx = 44;
   // headboard (original proportions: 29px wide)
   px(bx,    29, 29, 15, '#3e2010');
@@ -523,10 +616,244 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   px(bx+2,  54,  2,  3, '#2e1808');
   px(bx+26, 54,  2,  3, '#2e1808');
   // floor shadow
-  c.fillStyle = 'rgba(0,0,0,0.18)';
-  c.fillRect(bx+1, 57, 27, 3);
+  px(bx+1, 57, 27, 3, 'rgba(0,0,0,0.18)');
 
-  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  // ── chair dissolve ────────────────────────────────────────────────────────
+  const from = armchair.c.getImageData(0, 0, W, H);
+  const to = gamer.c.getImageData(0, 0, W, H);
+  const mix = chair.c.createImageData(W, H);
+
+  // Per-pixel flip threshold: 0 = flips first. Vertical sweep (floor upward) carrying a
+  // Bayer 4x4 dither so the boundary is grain, not a straight line.
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const TOP = 24, BOTTOM = 60;
+  const thresh = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const v = Math.min(1, Math.max(0, (BOTTOM - y) / (BOTTOM - TOP)));
+    for (let x = 0; x < W; x++) {
+      const d = (BAYER[(y % 4) * 4 + (x % 4)] + 0.5) / 16;
+      thresh[y * W + x] = 0.76 * v + 0.24 * d;
+    }
+  }
+
+  // ── neon bed lighting ─────────────────────────────────────────────────────
+  // `halo` is the bed silhouette dilated ~2px: light
+  // spilling onto the wall and floor from around the frame. Stacking the same silhouette at
+  // every offset in the disc at low alpha builds the falloff for free — alpha accumulates near
+  // the bed and thins at the rim. `bedNeon` is the flat silhouette, drawn back over the bed with
+  // `lighter` so the dark frame/headboard picks up the glow while the white duvet clips and
+  // stays white. Both are stored as **white** masks, not pre-colored: the light cycles hue
+  // during the transition (see `ledHue`), so each frame re-tints a mask through `source-in`
+  // (which replaces color but keeps the mask's alpha profile) into a scratch layer.
+  halo.c.globalAlpha = 0.22;
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      if (dx * dx + dy * dy > 4) continue;
+      halo.c.drawImage(front.cv, dx, dy);
+    }
+  }
+  halo.c.globalAlpha = 1;
+  halo.c.globalCompositeOperation = 'source-in';
+  halo.c.fillStyle = '#ffffff';
+  halo.c.fillRect(0, 0, W, H);
+  // The mask stays *solid* across the bed's own footprint instead of having the bed punched back
+  // out of it. The bed is drawn over the halo anyway, so the hole was never visible at scale 1 —
+  // but the pulse scales the halo up, which scaled the hole up too and opened a dark ring between
+  // the bed and its own glow. A solid mask can be enlarged with nothing to show through.
+
+  bedNeon.c.drawImage(front.cv, 0, 0);
+  bedNeon.c.globalCompositeOperation = 'source-in';
+  bedNeon.c.fillStyle = '#ffffff';
+  bedNeon.c.fillRect(0, 0, W, H);
+
+  function tinted(mask, col) {
+    const c2 = tint.c;
+    c2.globalCompositeOperation = 'source-over';
+    c2.clearRect(0, 0, W, H);
+    c2.drawImage(mask.cv, 0, 0);
+    c2.globalCompositeOperation = 'source-in';
+    c2.fillStyle = col;
+    c2.fillRect(0, 0, W, H);
+    c2.globalCompositeOperation = 'source-over';
+    return tint.cv;
+  }
+
+  // Room-dim / bed-glow strength: 0 before the dissolve starts, ramps in over its first third,
+  // then *stays* — night room + lit bed is the resting state, not a passing effect.
+  function envelope(t) {
+    if (t <= 0) return 0;
+    return Math.min(1, t / 0.28);
+  }
+
+  // RGB-peripheral hue cycle: spins fast for almost the whole dissolve, then snaps onto the
+  // resting neon purple over the last fifth — the cycle owns the transition, the purple owns the
+  // rest. (Settling from halfway through washed the RGB out under the resting hue long before the
+  // transition was over.) Blending takes the shortest way round the wheel, or a settle from hue 20
+  // to 283 would run the long way through green.
+  const REST_HUE = 283;
+  function ledHue(t) {
+    if (t >= 1) return REST_HUE;
+    const spin = (t * 860) % 360;
+    const settle = Math.min(1, Math.max(0, (t - 0.78) / 0.22));
+    const d = ((REST_HUE - spin + 540) % 360) - 180;
+    return (spin + d * settle + 360) % 360;
+  }
+
+  // Same hue as an [r,g,b] triple, for the dissolve's leading-edge sparkle pixels — those are
+  // written straight into the chair's ImageData, which can't take a CSS color string.
+  function hueRgb(h) {
+    const f = (n) => {
+      const k = (n + h / 30) % 12;
+      return Math.round(255 * (0.62 - 0.38 * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
+    };
+    return [f(0), f(8), f(4)];
+  }
+
+  // The dither dissolve only depends on `t`, so once `t` stops moving (the resting breathe loop
+  // holds it at 2) the chair layer is left alone and a rest frame costs a handful of drawImage
+  // calls on an 80x60 surface, no per-pixel work at all.
+  let mixT = NaN;
+
+  // Everything composites at the canvas's own resolution (S = 6x the 80x60 art), not at 80x60
+  // followed by one upscale. That only matters for the swiveling chair, and it matters a lot: a
+  // shear applied in 80x60 space quantizes the lean to whole art pixels, so the chair jumps 6
+  // screen pixels at a time and reads as juddering pixel noise rather than motion. Sheared at
+  // output scale the same lean lands on 1/6-art-pixel steps — the blocks stay crisp (nearest
+  // sampling, `imageSmoothingEnabled = false`) but their edges move smoothly.
+  const S = canvas.width / W;
+  const blit = (s, cv) => s.drawImage(cv, 0, 0, W * S, H * S);
+
+  // A real yaw can't be drawn from one side-profile sprite, and at this scale the honest
+  // foreshortening of a small turn (width * cos 12deg) is under half a pixel — invisible. So the
+  // swivel is a shear about the top of the gas cylinder instead: the shell leans while the seat
+  // barely moves and the casters not at all, which is what a chair being idly twisted looks like.
+  // `sx` narrows the shell slightly at the extremes of the sway, borrowing the one part of the
+  // real projection that does read at 80x60.
+  const PIVOT_X = 28, PIVOT_Y = 51;
+
+  function drawSwivel(s, sway) {
+    blit(s, gamerBase.cv);
+    const k = 0.115 * sway;
+    const sx = 1 - 0.05 * Math.abs(sway);
+    s.setTransform(sx, 0, k, 1, S * (PIVOT_X * (1 - sx) - k * PIVOT_Y), 0);
+    blit(s, gamerTop.cv);
+    s.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  function paint(t, pulse, wob, sway, chase) {
+    if (t !== mixT) {
+      const a = from.data, b = to.data, m = mix.data;
+      const [sr, sg, sb] = hueRgb(ledHue(t));
+      for (let i = 0, p = 0; p < thresh.length; i += 4, p++) {
+        const th = thresh[p];
+        const src = t > th ? b : a;
+        m[i] = src[i]; m[i+1] = src[i+1]; m[i+2] = src[i+2]; m[i+3] = src[i+3];
+        if ((a[i+3] || b[i+3]) && Math.abs(t - th) < 0.045) {
+          m[i] = sr; m[i+1] = sg; m[i+2] = sb; m[i+3] = 255;
+        }
+      }
+      chair.c.putImageData(mix, 0, 0);
+      mixT = t;
+    }
+
+    const env = envelope(t);
+    // Flicker on the way in so the strip reads as an LED powering on rather than a linear
+    // opacity ramp; after the dissolve, `pulse` (the slow breathe) takes over.
+    const led = env * (t < 1 ? 0.9 + 0.1 * Math.sin(t * 37) : pulse);
+    const col = 'hsl(' + (ledHue(t) + wob).toFixed(1) + ', 100%, 62%)';
+    // Curtains shut over the first half of the dissolve, ahead of the chair finishing.
+    curtainsAt(t / 0.5);
+    const s = ctx;
+    s.imageSmoothingEnabled = false;
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    blit(s, back.cv);
+    blit(s, curtains.cv);
+    // Two dim passes: the room takes both, the chair only the second — it's lit by the bed.
+    if (env) { s.fillStyle = 'rgba(4,6,22,' + 0.42 * env + ')'; s.fillRect(0, 0, W * S, H * S); }
+    if (sway) drawSwivel(s, sway); else blit(s, chair.cv);
+    if (env) { s.fillStyle = 'rgba(4,6,22,' + 0.2 * env + ')'; s.fillRect(0, 0, W * S, H * S); }
+    if (led > 0) {
+      // The halo also swells a few percent with the pulse, about the bed's own center — a glow
+      // whose *reach* moves reads as light far more than one that only changes opacity.
+      const grow = 1 + 0.1 * led;
+      s.globalCompositeOperation = 'lighter';
+      s.globalAlpha = 0.92 * led;
+      s.setTransform(grow, 0, 0, grow, S * 58 * (1 - grow), S * 44 * (1 - grow));
+      blit(s, tinted(halo, col));
+      s.setTransform(1, 0, 0, 1, 0, 0);
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = 'source-over';
+      blit(s, front.cv);
+      s.globalCompositeOperation = 'lighter';
+      s.globalAlpha = 0.22 * led;
+      blit(s, tinted(bedNeon, col));
+      // Under-frame strip in segments on a travelling phase, so it reads as a real LED strip
+      // chasing rather than one rectangle fading up and down together.
+      s.fillStyle = col;
+      for (let i = 0; i < 9; i++) {
+        s.globalAlpha = Math.min(1, led * (0.62 + 0.5 * Math.sin(chase - i * 0.8)));
+        s.fillRect((45 + i * 3) * S, 56 * S, 3 * S, S);
+      }
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = 'source-over';
+    } else {
+      blit(s, front.cv);
+    }
+  }
+
+  // Resting loop, sampled at ~30fps. Brightness is four sines at unrelated periods rather than
+  // one, the fastest fast enough (~100ms) to read as flicker rather than breathing; hue only
+  // wobbles a few degrees around the resting pink (the full RGB cycle belongs to the transition).
+  // The chair's sway runs on its own two periods, so the two never lock into a shared beat.
+  //
+  // Throttled and suspended whenever the hero scrolls out of view; rAF already suspends it in a
+  // hidden tab. A rest frame is drawImage-only (see `mixT`), far cheaper than the games' own
+  // render loops, but still not free — hence the observer rather than an unconditional loop.
+  const breathe = (now) =>
+    0.66 + 0.2 * Math.sin(now / 940) + 0.12 * Math.sin(now / 430 + 1.7)
+         + 0.06 * Math.sin(now / 210 + 0.5) + 0.05 * Math.sin(now / 97 + 2.4)
+         // occasional bloom, so the strip surges every few seconds instead of only undulating
+         + 0.22 * Math.pow(Math.max(0, Math.sin(now / 2600)), 8);
+  const wobble = (now) => 9 * Math.sin(now / 1500) + 4 * Math.sin(now / 560 + 2.2);
+  const swayAt = (now) => 0.74 * Math.sin(now / 1250) + 0.26 * Math.sin(now / 690 + 0.9);
+
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { paint(2, 1, 0, 0, 0); return; }
+
+  paint(-1, 1, 0, 0, 0);
+  const DELAY = 1500, DUR = 1600;
+  let t0 = 0, live = true, last = 0, done = false;
+
+  function frame(now) {
+    if (!live) return;
+    if (done) {
+      if (now - last > 32) {
+        paint(2, breathe(now), wobble(now), swayAt(now), now / 190);
+        last = now;
+      }
+      requestAnimationFrame(frame);
+      return;
+    }
+    if (!t0) t0 = now;
+    const e = now - t0 - DELAY;
+    if (e >= 0) {
+      const raw = Math.min(1, e / DUR);
+      const eased = raw < 0.5 ? 2 * raw * raw : 1 - 2 * (1 - raw) * (1 - raw);
+      // Overshoot the 0..1 range slightly so the glow band starts off-sprite and leaves it.
+      paint(eased * 1.1 - 0.05, 1, 0, 0, 0);
+      if (raw >= 1) { done = true; last = now; }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  if (window.IntersectionObserver) {
+    new IntersectionObserver((entries) => {
+      const on = entries[entries.length - 1].isIntersecting;
+      if (on === live) return;
+      live = on;
+      if (on) requestAnimationFrame(frame);
+    }, { threshold: 0 }).observe(canvas);
+  }
 })();
 "#;
 
