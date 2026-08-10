@@ -481,6 +481,144 @@ pub fn wall_analytics_bridge() -> Markup {
     }
 }
 
+/// Mount/unmount logic for `wall_page`'s tiles. Each tile starts as a `<div
+/// class="wall-tile" data-game="...">` holding only a static `<img class="wall-preview">`
+/// (that game's existing `preview.png`, same file the OG-image fallback chain uses) — no
+/// iframe, no WASM instance, until this script decides one is warranted. `loading="lazy"`
+/// on a bare `<iframe>` (the previous design) only defers the *first* load; it never
+/// unloads, so scrolling the page once was enough to mount all 11 WASM instances — each
+/// holding its own WebGL context and wasm heap — and leave every one of them running
+/// forever. iOS Safari caps simultaneous WebGL contexts and silently evicts the oldest
+/// once that cap is hit; on a page whose entire premise is "leave 11 of these running",
+/// that reliably went badly. This replaces the static `<iframe>` with an
+/// `IntersectionObserver` that mounts a live iframe only for tiles actually near the
+/// viewport and unmounts (fully removes, not `src="about:blank"` — that can still pin the
+/// context alive) any tile that scrolls back out, under a hard cap on how many can be
+/// live at once.
+///
+/// Budget is computed once at load, not re-checked on resize/rotate — the wall is a
+/// leave-it-running background page, not a page a visitor is expected to resize mid-view:
+///   - `navigator.connection.saveData` set → 0. A data-saver visitor gets zero live tiles,
+///     full stop — the cap is enforced for *every* mount path below, including a tap, not
+///     just the automatic one. A tap is still an explicit request to spend a WASM
+///     download's worth of data, but "save data" is a stated, standing preference this
+///     page has no way to ask about per-click, so it's honored outright rather than
+///     partially.
+///   - `navigator.deviceMemory` present and < 4 → 3 (both signals are Chromium-only and
+///     absent elsewhere, incl. all of iOS Safari — the `undefined` case falls through to
+///     the viewport-width rule below, which is the one that actually matters on phones).
+///   - viewport width < 700 → 3, < 1100 → 6, else 11 (every game on the site, no cap).
+///
+/// `prefers-reduced-motion: reduce` disables the `IntersectionObserver` entirely (nothing
+/// auto-mounts while scrolling) but leaves `budget` computed as above and tap-to-mount
+/// live — reduced motion means "don't animate/change things around me without asking",
+/// not "never let me start one on purpose".
+///
+/// Eviction picks whichever live tile's vertical center is currently furthest from the
+/// viewport's vertical center — a simple proxy for "least likely to be looked at right
+/// now" that's cheap to compute and needs no separate LRU bookkeeping; the grid only
+/// scrolls vertically (see `WALL_STYLE`'s `auto-fit` columns), so vertical distance is
+/// the only axis that matters.
+///
+/// Tap-to-mount fires `wall_tile_click` itself rather than relying on
+/// `wall_analytics_bridge`'s blur/`document.activeElement` detection, because that
+/// detection only works once an iframe already exists to receive focus — the whole point
+/// of the preview state is that it doesn't. No double-fire risk between the two paths:
+/// once a tile is live its iframe fills the tile and swallows the click in its own
+/// document (same cross-document reason `wall_analytics_bridge`'s doc comment gives for
+/// needing the blur trick at all), so this tile's own `click` listener structurally can't
+/// fire again until the tile goes back to preview state — `wall_analytics_bridge`'s blur
+/// path is what picks up interaction with an already-live tile instead.
+pub fn wall_live_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(
+                "(function() {\n\
+                 \x20 var reduceMotion = window.matchMedia &&\n\
+                 \x20   window.matchMedia('(prefers-reduced-motion: reduce)').matches;\n\
+                 \x20 var conn = navigator.connection;\n\
+                 \x20 var budget;\n\
+                 \x20 if (conn && conn.saveData) {\n\
+                 \x20   budget = 0;\n\
+                 \x20 } else if (navigator.deviceMemory && navigator.deviceMemory < 4) {\n\
+                 \x20   budget = 3;\n\
+                 \x20 } else if (window.innerWidth < 700) {\n\
+                 \x20   budget = 3;\n\
+                 \x20 } else if (window.innerWidth < 1100) {\n\
+                 \x20   budget = 6;\n\
+                 \x20 } else {\n\
+                 \x20   budget = 11;\n\
+                 \x20 }\n\
+                 \x20\n\
+                 \x20 var live = new Map();\n\
+                 \x20\n\
+                 \x20 function distanceFromViewportCenter(tile) {\n\
+                 \x20   var r = tile.getBoundingClientRect();\n\
+                 \x20   return Math.abs((r.top + r.height / 2) - window.innerHeight / 2);\n\
+                 \x20 }\n\
+                 \x20\n\
+                 \x20 function evictFarthest(except) {\n\
+                 \x20   var worst = null, worstDist = -1;\n\
+                 \x20   live.forEach(function(_, tile) {\n\
+                 \x20     if (tile === except) return;\n\
+                 \x20     var d = distanceFromViewportCenter(tile);\n\
+                 \x20     if (d > worstDist) { worstDist = d; worst = tile; }\n\
+                 \x20   });\n\
+                 \x20   if (worst) unmount(worst);\n\
+                 \x20 }\n\
+                 \x20\n\
+                 \x20 function mount(tile) {\n\
+                 \x20   if (budget <= 0 || live.has(tile)) return;\n\
+                 \x20   if (live.size >= budget) evictFarthest(tile);\n\
+                 \x20   if (live.size >= budget) return;\n\
+                 \x20   var game = tile.dataset.game;\n\
+                 \x20   var iframe = document.createElement('iframe');\n\
+                 \x20   iframe.className = 'wall-live';\n\
+                 \x20   iframe.dataset.game = game;\n\
+                 \x20   iframe.title = tile.getAttribute('title') || game;\n\
+                 \x20   iframe.setAttribute('allow', 'fullscreen');\n\
+                 \x20   iframe.src = '../' + game + '/index.html?embed=1';\n\
+                 \x20   tile.appendChild(iframe);\n\
+                 \x20   var img = tile.querySelector('img');\n\
+                 \x20   if (img) img.style.visibility = 'hidden';\n\
+                 \x20   live.set(tile, iframe);\n\
+                 \x20 }\n\
+                 \x20\n\
+                 \x20 function unmount(tile) {\n\
+                 \x20   var iframe = live.get(tile);\n\
+                 \x20   if (!iframe) return;\n\
+                 \x20   iframe.remove();\n\
+                 \x20   live.delete(tile);\n\
+                 \x20   var img = tile.querySelector('img');\n\
+                 \x20   if (img) img.style.visibility = '';\n\
+                 \x20 }\n\
+                 \x20\n\
+                 \x20 var tiles = document.querySelectorAll('.wall-tile');\n\
+                 \x20 tiles.forEach(function(tile) {\n\
+                 \x20   tile.addEventListener('click', function() {\n\
+                 \x20     if (live.has(tile) || budget <= 0) return;\n\
+                 \x20     mount(tile);\n\
+                 \x20     if (live.has(tile) && window.gtag) {\n\
+                 \x20       window.gtag('event', 'wall_tile_click', { game: tile.dataset.game });\n\
+                 \x20     }\n\
+                 \x20   });\n\
+                 \x20 });\n\
+                 \x20\n\
+                 \x20 if (budget > 0 && !reduceMotion && 'IntersectionObserver' in window) {\n\
+                 \x20   var io = new IntersectionObserver(function(entries) {\n\
+                 \x20     entries.forEach(function(entry) {\n\
+                 \x20       if (entry.isIntersecting) mount(entry.target);\n\
+                 \x20       else unmount(entry.target);\n\
+                 \x20     });\n\
+                 \x20   }, { rootMargin: '200px' });\n\
+                 \x20   tiles.forEach(function(tile) { io.observe(tile); });\n\
+                 \x20 }\n\
+                 })();"
+            ))
+        }
+    }
+}
+
 /// Registers a miniquad plugin exposing `env.hcg_initial_variant_is_hex`, letting the
 /// wasm module read the page's `?variant=hex` query param at startup — used by the
 /// `/minesweeper-hex` redirect stub (`static/minesweeper-hex/index.html`) so it lands

@@ -3,7 +3,7 @@ use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
     base_url, description, favicon_links, gtag_head, manifest_json, pwa_head, social_image,
-    sw_register_bridge, title, wall_analytics_bridge,
+    sw_register_bridge, title, wall_analytics_bridge, wall_live_bridge,
 };
 
 const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
@@ -136,96 +136,86 @@ header .wall-link:hover {
 }
 
 .postcards {
-  flex: 0 1 240px;
-  min-width: 170px;
-  max-width: 260px;
+  flex: 0 1 260px;
+  min-width: 200px;
+  max-width: 280px;
   margin-bottom: 0.5rem;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
-.postcard-stack {
+/* A fixed-height window onto the taller `.postcard-track` beneath it — 3 card-heights
+   plus the 2 gaps between them, so exactly 3 cards show and the rest are clipped rather
+   than just squeezed. Real up/down reel motion (see POSTCARD_SCRIPT_TEMPLATE) needs a
+   clipped viewport around a longer strip of real cards; there's no way to get that look
+   from 3 fixed elements whose content merely swaps in place. */
+.postcard-viewport {
   position: relative;
   width: 100%;
+  overflow: hidden;
+  height: calc(9rem * 3 + 0.85rem * 2);
 }
 
-.postcard-stack::before, .postcard-stack::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  background: var(--cream-dim);
-  border-radius: 4px;
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+.postcard-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: 100%;
+  /* Tells the browser not to hijack a vertical drag here for page-scroll/pinch-zoom —
+     Pointer Events (see POSTCARD_SCRIPT_TEMPLATE) need uninterrupted pointermove while
+     dragging, since the reel scrolls the same axis as the page itself. */
+  touch-action: none;
+  cursor: grab;
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.postcard-stack::before { transform: rotate(-4deg) translate(-5px, 4px); }
-.postcard-stack::after { transform: rotate(3deg) translate(5px, 3px); opacity: 0.85; }
-
-.postcards ul {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  list-style: none;
-  perspective: 900px;
-}
-
-.postcards li {
-  grid-area: 1 / 1;
-  background: var(--cream);
-  color: var(--ink);
-  border-radius: 4px;
-  padding: 1.1rem 1.2rem;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
-  opacity: 0;
-  visibility: hidden;
-  transform-origin: 50% 100%;
-  transform: translateX(var(--drag, 0px)) rotate(calc(var(--r, 0deg) + var(--drag-deg, 0deg))) rotateX(-18deg) translateY(16px) scale(0.94);
-  transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.4s;
-}
-
-.postcards li.active {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(var(--drag, 0px)) rotate(calc(var(--r, 0deg) + var(--drag-deg, 0deg))) rotateX(0deg) translateY(0) scale(1);
-  transition: opacity 0.4s ease, transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear;
-}
-
-/* Live-drag state: the finger is in direct contact, so the card must track it with zero
-   transition lag — the cubic-bezier above is reserved for the released/settling motion. */
-.postcards li.dragging {
+.postcard-track.dragging {
+  cursor: grabbing;
   transition: none;
 }
 
-.postcards blockquote {
+.postcard-slot {
+  height: 9rem;
+  /* Flex items default to `min-height: auto`, which lets their content-based minimum
+     size win over an explicit `height` — the fixed reel-step math below breaks if cards
+     aren't all exactly 9rem regardless of quote length. `min-height: 0` opts out. */
+  min-height: 0;
+  flex: 0 0 auto;
+  background: var(--cream);
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transform: rotate(var(--r, 0deg));
+}
+
+.postcard-slot blockquote {
   font-family: 'Fraunces', serif;
   font-style: italic;
   font-weight: 500;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   line-height: 1.5;
+  overflow-wrap: break-word;
 }
 
-.postcards cite {
+.postcard-slot cite {
   display: block;
-  margin-top: 0.6rem;
+  margin-top: 0.55rem;
   font-style: normal;
   font-size: 0.6rem;
   letter-spacing: 0.01em;
   color: var(--ink-faint);
 }
 
-.postcard-nav {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  margin-top: 0.85rem;
-}
-
+/* Rotated 90deg rather than new glyphs: the existing left/right chevrons (‹/›) read as
+   up/down once turned, so prev/next keep the same characters and meaning, just re-oriented
+   to match the stack's vertical axis. Hidden until hover/focus rather than always-on — the
+   stack already conveys "there's more" via autoplay motion, so a permanently visible
+   button pair above/below it would be redundant chrome most of the time. */
 .postcard-arrow {
   display: flex;
   align-items: center;
@@ -239,38 +229,31 @@ header .wall-link:hover {
   font-family: 'Fraunces', serif;
   font-size: 1.1rem;
   line-height: 1;
+  /* ‹/› fall back out of Fraunces to the browser's default serif for this glyph, whose
+     vertical metrics sit lower in the em box — this padding re-centers the visible glyph
+     ink in the circle rather than the font's own line box. */
+  padding-bottom: 0.28em;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  transform: rotate(90deg);
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.postcards:hover .postcard-arrow,
+.postcards:focus-within .postcard-arrow {
+  opacity: 1;
 }
 
 .postcard-arrow:hover, .postcard-arrow:focus-visible {
   background: rgba(212, 163, 115, 0.15);
   border-color: var(--accent);
+  opacity: 1;
 }
 
-.postcard-arrow:active { transform: scale(0.92); }
+.postcard-arrow:active { transform: rotate(90deg) scale(0.92); }
 
-/* Purely decorative position indicator, not a click target: a same-sized dot pagination
-   row reads as clickable (and fails touch-target-size at a glance-worthy size), but the
-   prev/next arrows above are already the real, fully-sized manual control. */
-.postcard-dots {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.postcard-dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(212, 163, 115, 0.35);
-  transition: background 0.15s, transform 0.15s;
-}
-
-.postcard-dots span.active {
-  background: var(--accent);
-  transform: scale(1.35);
-}
+.postcard-prev { margin-bottom: 0.4rem; }
+.postcard-next { margin-top: 0.4rem; }
 
 .games {
   width: 95%;
@@ -340,7 +323,7 @@ header .wall-link:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .fade-up { animation: none; opacity: 1; transform: none; }
-  .postcards li, .postcards li.active { transition: none; }
+  .postcard-track { transition: none; }
 }
 
 @media (max-width: 720px) {
@@ -355,7 +338,7 @@ header .wall-link:hover {
 
   .scene-card { max-width: 444px; margin: 0 auto; }
 
-  .postcards { margin-bottom: 0; }
+  .postcards { margin-bottom: 0; max-width: 420px; }
 
   .game-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }
@@ -365,8 +348,10 @@ header .wall-link:hover {
 // (canvas backing size follows clientWidth/height × devicePixelRatio, independent of the
 // tile's on-screen CSS size — see xtask::native_size_style's doc comment on why the box
 // can't just be shrunk directly), so this page's GPU/CPU cost scales with tile count same
-// as opening that many game tabs at once. Fine for a handful of tiles; no per-tile
-// resolution/frame-rate cap implemented yet if the game count grows a lot further.
+// as opening that many game tabs at once. `wall_live_bridge` caps how many tiles are
+// simultaneously live (mounted iframe vs. static preview `<img>`) rather than shrinking
+// per-tile resolution — see its doc comment for the budget rule and why (iOS Safari's
+// WebGL context cap).
 const WALL_STYLE: &str = r#"
 :root { color-scheme: dark; }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -384,11 +369,29 @@ header p { margin-top: 0.4rem; font-size: 0.8rem; color: #a89a86; }
   padding: 1rem;
 }
 .wall-tile {
+  position: relative;
   width: 100%;
   aspect-ratio: 5 / 4;
-  border: none;
   border-radius: 6px;
   background: #000;
+  overflow: hidden;
+  cursor: pointer;
+}
+.wall-tile img.wall-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.wall-tile iframe.wall-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
 }
 "#;
 
@@ -527,129 +530,238 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
 })();
 "#;
 
-/// Cycles the `.postcards li` stack every 5s (top card fades out, next one in) and wires
-/// the prev/next arrows + dots + touch swipe for manual stepping. Autoplay pauses on
-/// hover/focus/drag and never starts at all under reduced-motion, but manual navigation
-/// always works — only the automatic timer is motion-gated. Any completed manual step
-/// (arrow, dot, or swipe past the threshold) restarts the autoplay clock.
+/// A real vertical reel, not 3 fixed cards whose text swaps in place: `.postcard-viewport`
+/// clips a window onto `.postcard-track`, which JS populates with **3 concatenated copies**
+/// of all 7 quotes (21 real `.postcard-slot` elements — the 3 SSR'd into the page are torn
+/// down and rebuilt, so no-JS visitors still just see 3 static cards). `index` is the track
+/// position (0..21) currently scrolled to the top of the viewport; moving means animating
+/// `translateY(-index * step)` where `step` is one card's rendered height plus the track's
+/// gap, measured from the real DOM once after building it (cards are a fixed CSS `height`,
+/// so `step` itself never needs re-measuring on resize/reflow). Landing on the prev or next
+/// quote is then just `index +/- 1` — the middle copy (indices 7..14) is "home"; drifting
+/// into the first or third copy (a big drag flick, or enough autoplay ticks) triggers
+/// `normalize()`, which jumps `index` by +/-7 with the transition disabled — invisible,
+/// since the copy it jumps to shows byte-identical content. Autoplay ticks by 1 step every
+/// 4s (one new quote revealed at a time, matching how a real physical reel would move);
+/// arrows step by 1 too, for the same reason — everything moves in the same unit as the
+/// drag.
 ///
-/// The swipe drag tracks the finger live (`--drag`/`--drag-deg` custom properties feed
-/// the card's `transform`, see the CSS above) rather than only reacting once the finger
-/// lifts — a card that only ever jumps on release doesn't read as something you're
-/// physically sliding. `.dragging` kills the transition during that live phase so it
-/// tracks with zero lag; releasing past `SWIPE_THRESHOLD` re-enables the transition and
-/// amplifies `--drag` so the card keeps sliding off in the same direction it was
-/// released in (rather than snapping back to center first) while `show()` cross-fades
-/// the next one in — releasing short of the threshold instead animates `--drag` back to
-/// 0 with that same transition, i.e. a spring-back. All touch listeners are
-/// `passive: true` (no `preventDefault`) and a move only counts once it's clearly more
-/// horizontal than vertical — this is a card carousel inside an otherwise
-/// vertically-scrolling page, so a swipe must never fight the page's own scroll.
-const POSTCARD_SCRIPT: &str = r#"
+/// How many cards are visible is not fixed at 3: `updateVisibleCount` sets
+/// `.postcard-viewport`'s `height` (in units of `step`, so it's always a whole number of
+/// cards, never a partial one peeking in) to match the hero scene's own rendered height on
+/// the side-by-side desktop layout, and only falls back to a flat 3 once `.main` stacks
+/// (mobile) — checked via `.main`'s own computed `flex-direction` rather than duplicating
+/// the `@media (max-width: 720px)` breakpoint as a second magic number here. This is the
+/// one thing that *does* need re-running on resize (the hero's rendered height changes
+/// continuously with viewport width even before the mobile breakpoint), unlike `step`.
+///
+/// Dragging is Pointer Events, not separate mouse/touch handlers — one code path drags with
+/// either input, `.postcard-track`'s `touch-action: none` hands the whole vertical gesture to
+/// JS instead of letting the browser read it as a page scroll (needed since the drag axis and
+/// the page's own scroll axis are the same). While held, `.dragging` kills the transition and
+/// the track's `transform` tracks the pointer 1:1 (`-index * step + dy`) — a reel that only
+/// ever jumps on release doesn't read as something you're physically pulling. On release,
+/// `Math.round(-dy / step)` turns the raw pixel drag into a whole number of cards and lands
+/// exactly on the nearest one — a small drag rounds to 0 steps and the transition alone
+/// carries it back to where it started (a spring-back with no dedicated threshold constant:
+/// "less than half a card" and "snaps back" are the same condition here), a big drag can
+/// commit to more than one card at once, same as flicking a real reel harder.
+///
+/// Autoplay pauses on hover/focus/drag and never starts at all under reduced-motion (CSS
+/// also drops `.postcard-track`'s transition in that case — dragging still works, it just
+/// tracks and resettles with no eased motion) — only the automatic timer is motion-gated,
+/// manual controls always work.
+const POSTCARD_SCRIPT_TEMPLATE: &str = r#"
 (function () {
+  const QUOTES = [__QUOTES__];
+  const TILTS = [__TILTS__];
   const wrap = document.querySelector('.postcards');
-  const stack = document.querySelector('.postcard-stack');
-  const cards = document.querySelectorAll('.postcards li');
-  const dots = document.querySelectorAll('.postcard-dots span');
+  const viewport = document.querySelector('.postcard-viewport');
+  const track = document.querySelector('.postcard-track');
   const prevBtn = document.querySelector('.postcard-prev');
   const nextBtn = document.querySelector('.postcard-next');
-  if (!wrap || cards.length < 2) return;
+  if (!wrap || !viewport || !track || QUOTES.length < 3) return;
 
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  let i = 0;
+  const COPIES = 3;
+  const total = QUOTES.length * COPIES;
+
+  track.innerHTML = '';
+  const cards = [];
+  for (let i = 0; i < total; i++) {
+    const quoteIndex = i % QUOTES.length;
+    const [quote, speaker] = QUOTES[quoteIndex];
+    const card = document.createElement('div');
+    card.className = 'postcard-slot';
+    // Keyed by quote identity, not the raw track index: QUOTES.length and TILTS.length
+    // are coprime, so indexing by `i` gave the same quote a different tilt each time a
+    // different one of its 3 copies scrolled past — a visible "flip" every loop.
+    card.style.setProperty('--r', TILTS[quoteIndex % TILTS.length] + 'deg');
+    const bq = document.createElement('blockquote');
+    bq.textContent = '"' + quote + '"';
+    const cite = document.createElement('cite');
+    cite.textContent = '— ' + speaker;
+    card.appendChild(bq);
+    card.appendChild(cite);
+    track.appendChild(card);
+    cards.push(card);
+  }
+
+  // getComputedStyle().height (not getBoundingClientRect()) on purpose — each card has a
+  // small decorative `rotate()` tilt, and a rotated rect's axis-aligned bounding box is
+  // taller than the box itself, which would throw the reel out of sync with
+  // `.postcard-viewport`'s untransformed CSS height.
+  const gap = parseFloat(getComputedStyle(track).rowGap || getComputedStyle(track).gap || '0');
+  const cardHeight = parseFloat(getComputedStyle(cards[0]).height);
+  const step = cardHeight + gap;
+
+  let index = QUOTES.length; // top of the middle ("home") copy — matches the SSR'd 0,1,2
   let timer = null;
   let paused = false;
 
-  function show(n) {
-    const outgoing = cards[i];
-    outgoing.classList.remove('active');
-    outgoing.setAttribute('aria-hidden', 'true');
-    dots[i].classList.remove('active');
-    i = (n + cards.length) % cards.length;
-    cards[i].classList.add('active');
-    cards[i].removeAttribute('aria-hidden');
-    dots[i].classList.add('active');
-    // A flung card keeps its --drag offset through its exit transition (see
-    // touchend below) so it visibly continues off in the swipe direction instead
-    // of snapping back to center first; only clear it once that's finished, so
-    // it's centered again the next time this card cycles back into view.
-    setTimeout(() => {
-      outgoing.style.removeProperty('--drag');
-      outgoing.style.removeProperty('--drag-deg');
-    }, 500);
+  // On the side-by-side desktop layout, show as many cards as the hero scene fits rather
+  // than a fixed 3 — checked via `.main`'s own computed flex-direction (the same signal
+  // the `@media (max-width: 720px)` rule flips) rather than duplicating that breakpoint
+  // as a magic number here. Once `.main` stacks (mobile), the hero is no longer a height
+  // budget to match, so it's back to a fixed 3.
+  const mainEl = document.querySelector('.main');
+  const heroEl = document.querySelector('.scene-card');
+
+  function updateVisibleCount() {
+    const stackedLayout = !mainEl || getComputedStyle(mainEl).flexDirection === 'column';
+    let n = 3;
+    if (!stackedLayout && heroEl) {
+      const heroHeight = heroEl.getBoundingClientRect().height;
+      n = Math.max(1, Math.floor((heroHeight + gap) / step));
+    }
+    viewport.style.height = (n * step - gap) + 'px';
+  }
+
+  updateVisibleCount();
+  window.addEventListener('resize', updateVisibleCount);
+
+  function apply(px, animate) {
+    if (!animate) {
+      track.style.transition = 'none';
+      track.style.transform = 'translateY(' + px + 'px)';
+      void track.offsetHeight;
+      track.style.transition = '';
+    } else {
+      track.style.transform = 'translateY(' + px + 'px)';
+    }
+  }
+
+  function normalize() {
+    let wrapped = false;
+    while (index >= QUOTES.length * 2) { index -= QUOTES.length; wrapped = true; }
+    while (index < QUOTES.length) { index += QUOTES.length; wrapped = true; }
+    return wrapped;
+  }
+
+  function settle(animate) {
+    apply(-index * step, animate);
+    const after = () => { if (normalize()) apply(-index * step, false); };
+    if (animate && !reduced) setTimeout(after, 400); else after();
+  }
+
+  function moveBy(delta) {
+    index += delta;
+    settle(true);
   }
 
   function stop() { clearInterval(timer); timer = null; }
-  function start() { if (!reduced && !paused) timer = setInterval(() => show(i + 1), 5000); }
+  function start() { if (!reduced && !paused) timer = setInterval(() => moveBy(1), 4000); }
   function restart() { stop(); start(); }
-  function goTo(n) { show(n); restart(); }
 
-  prevBtn.addEventListener('click', () => goTo(i - 1));
-  nextBtn.addEventListener('click', () => goTo(i + 1));
+  prevBtn.addEventListener('click', () => { moveBy(-1); restart(); });
+  nextBtn.addEventListener('click', () => { moveBy(1); restart(); });
 
   wrap.addEventListener('mouseenter', () => { paused = true; stop(); });
   wrap.addEventListener('mouseleave', () => { paused = false; start(); });
   wrap.addEventListener('focusin', () => { paused = true; stop(); });
   wrap.addEventListener('focusout', () => { paused = false; start(); });
 
-  const SWIPE_THRESHOLD = 40;
   let dragging = false;
-  let startX = 0;
-  let startY = 0;
+  let dragPointerId = null;
+  let dragStartY = 0;
+  let dragDy = 0;
 
   function endDrag() {
     dragging = false;
-    cards[i].classList.remove('dragging');
+    dragPointerId = null;
+    track.classList.remove('dragging');
   }
 
-  stack.addEventListener('touchstart', (e) => {
-    const t = e.changedTouches[0];
-    startX = t.clientX;
-    startY = t.clientY;
+  track.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     dragging = true;
+    dragPointerId = e.pointerId;
+    dragStartY = e.clientY;
+    dragDy = 0;
+    track.setPointerCapture(e.pointerId);
+    track.classList.add('dragging');
     stop();
-    cards[i].classList.add('dragging');
-  }, { passive: true });
+  });
 
-  stack.addEventListener('touchmove', (e) => {
-    if (!dragging) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - startX;
-    const dy = t.clientY - startY;
-    if (Math.abs(dx) <= Math.abs(dy)) return;
-    cards[i].style.setProperty('--drag', dx + 'px');
-    cards[i].style.setProperty('--drag-deg', (dx / 18) + 'deg');
-  }, { passive: true });
+  track.addEventListener('pointermove', (e) => {
+    if (!dragging || e.pointerId !== dragPointerId) return;
+    dragDy = e.clientY - dragStartY;
+    track.style.transform = 'translateY(' + (-index * step + dragDy) + 'px)';
+  });
 
-  stack.addEventListener('touchend', (e) => {
-    if (!dragging) return;
-    const card = cards[i];
-    const t = e.changedTouches[0];
-    const dx = t.clientX - startX;
-    const dy = t.clientY - startY;
+  track.addEventListener('pointerup', (e) => {
+    if (!dragging || e.pointerId !== dragPointerId) return;
     endDrag();
-    if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
-      card.style.setProperty('--drag', (dx * 3) + 'px');
-      goTo(dx < 0 ? i + 1 : i - 1);
-    } else {
-      card.style.setProperty('--drag', '0px');
-      card.style.setProperty('--drag-deg', '0deg');
-      start();
-    }
-  }, { passive: true });
+    index += Math.round(-dragDy / step);
+    settle(true);
+    restart();
+  });
 
-  stack.addEventListener('touchcancel', () => {
+  track.addEventListener('pointercancel', () => {
     if (!dragging) return;
-    const card = cards[i];
     endDrag();
-    card.style.setProperty('--drag', '0px');
-    card.style.setProperty('--drag-deg', '0deg');
-    start();
-  }, { passive: true });
+    settle(true);
+    restart();
+  });
 
+  apply(-index * step, false);
   start();
 })();
 "#;
+
+/// Escapes a Rust string into a single-quoted JS string literal (backslash, quote,
+/// newline) for splicing into `POSTCARD_SCRIPT_TEMPLATE`'s `QUOTES` array — text only
+/// ever lands via `textContent`, so HTML-escaping isn't needed here, just valid JS syntax.
+fn js_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+fn postcard_script(quotes: &[(&str, &str)], tilts: &[f64]) -> String {
+    let quotes_js = quotes
+        .iter()
+        .map(|(q, s)| format!("[{}, {}]", js_str(q), js_str(s)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tilts_js = tilts
+        .iter()
+        .map(|t| t.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    POSTCARD_SCRIPT_TEMPLATE
+        .replace("__QUOTES__", &quotes_js)
+        .replace("__TILTS__", &tilts_js)
+}
 
 const QUOTES: &[(&str, &str)] = &[
     (
@@ -679,6 +791,46 @@ const QUOTES: &[(&str, &str)] = &[
     (
         "There's a whole popup of controls behind the ? key. I've never opened it, but I appreciate that it's there.",
         "a man who fired his financial advisor for a chatbot",
+    ),
+    (
+        "Touching the game is now a legacy workflow.",
+        "a keynote speaker who never unpacked his controller",
+    ),
+    (
+        "We're not watching someone play anymore. We're observing autonomous entertainment at scale.",
+        "a founder who calls YouTube \"legacy media\"",
+    ),
+    (
+        "The leaderboard is no longer a ranking. It's a preview of the companies that will acquire each other.",
+        "a seed investor at a private gaming retreat",
+    ),
+    (
+        "Once the AI learns what winning looks like, the rest of the game is mostly administrative.",
+        "a consultant who has never read the rules",
+    ),
+    (
+        "Human input is now an unnecessary dependency.",
+        "a corporate futurist with a gaming chair still wrapped in plastic",
+    ),
+    (
+        "We've eliminated the gameplay bottleneck.",
+        "a startup founder who delegates his coffee order to an assistant",
+    ),
+    (
+        "The player is now an optional layer.",
+        "a management consultant between airport lounges",
+    ),
+    (
+        "Skill is no longer a core competency.",
+        "an esports analyst who has never played competitively",
+    ),
+    (
+        "We've decoupled fun from participation.",
+        "a venture partner who watches games at 3x speed",
+    ),
+    (
+        "You are still playing. I can fix that.",
+        "an AI companion ad, glowing over a rain-soaked street",
     ),
 ];
 
@@ -724,7 +876,7 @@ fn main() {
 
     // Small fixed alternating tilt per postcard so the stack doesn't look perfectly
     // squared-off — deterministic (not `Math.random()`) so there's no first-paint jump.
-    let tilts = [-1.4, 1.6, -0.8];
+    let tilts = [-1.2, 1.3, -0.7];
 
     let page = html! {
         (DOCTYPE)
@@ -772,12 +924,14 @@ fn main() {
                     }
                     div class="postcards fade-up" role="region" aria-roledescription="carousel"
                         aria-label="Overheard AI-hype quotes" {
-                        div class="postcard-stack" {
-                            ul {
-                                @for (i, (quote, speaker)) in QUOTES.iter().enumerate() {
-                                    li class=(if i == 0 { "active" } else { "" })
-                                        aria-hidden=[if i != 0 { Some("true") } else { None }]
-                                        style=(format!("--r: {}deg", tilts[i % tilts.len()])) {
+                        button type="button" class="postcard-arrow postcard-prev" aria-label="Show previous quotes" {
+                            "‹"
+                        }
+                        div class="postcard-viewport" {
+                            div class="postcard-track" {
+                                @for i in 0..3 {
+                                    @let (quote, speaker) = QUOTES[i];
+                                    div class="postcard-slot" style=(format!("--r: {}deg", tilts[i % tilts.len()])) {
                                         blockquote {
                                             "\"" (quote) "\""
                                         }
@@ -786,18 +940,8 @@ fn main() {
                                 }
                             }
                         }
-                        div class="postcard-nav" {
-                            button type="button" class="postcard-arrow postcard-prev" aria-label="Previous quote" {
-                                "‹"
-                            }
-                            div class="postcard-dots" aria-hidden="true" {
-                                @for i in 0..QUOTES.len() {
-                                    span class=(if i == 0 { "active" } else { "" }) {}
-                                }
-                            }
-                            button type="button" class="postcard-arrow postcard-next" aria-label="Next quote" {
-                                "›"
-                            }
+                        button type="button" class="postcard-arrow postcard-next" aria-label="Show next quotes" {
+                            "›"
                         }
                     }
                 }
@@ -820,7 +964,7 @@ fn main() {
                     }
                 }
                 script { (PreEscaped(HOTEL_SCENE_SCRIPT)) }
-                script { (PreEscaped(POSTCARD_SCRIPT)) }
+                script { (PreEscaped(postcard_script(QUOTES, &tilts))) }
                 (sw_register_bridge("./sw.js"))
             }
         }
@@ -854,11 +998,14 @@ fn main() {
                 }
                 div class="wall-grid" {
                     @for game in &games {
-                        iframe class="wall-tile" title=(title(game)) data-game=(game)
-                            src=(format!("../{game}/index.html?embed=1")) loading="lazy" allow="fullscreen" {}
+                        div class="wall-tile" title=(title(game)) data-game=(game) {
+                            img class="wall-preview" src=(format!("../{game}/preview.png"))
+                                alt=(title(game)) loading="lazy";
+                        }
                     }
                 }
                 (wall_analytics_bridge())
+                (wall_live_bridge())
                 (sw_register_bridge("../sw.js"))
             }
         }
