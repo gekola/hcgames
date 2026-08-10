@@ -544,12 +544,16 @@ fn main() {
 }
 
 async fn amain(cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mut game = Game::new(0);
     let title_w = measure_text("2048", None, 72, 1.0).width;
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
     let mut prev_anim_t = 1.0f32;
+    // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes on its final frame instead of starting a new episode, and `game.update`
+    // is skipped entirely so a game-over `Game` never advances again.
+    let mut daily_done = false;
 
     // The settled grid (16 tiles, each a rounded rect + measure_text/draw_text) only
     // actually needs redrawing when a move's slide animation finishes or a spawn/merge
@@ -561,7 +565,7 @@ async fn amain(cli: CliArgs) {
     loop {
         control.handle_keys();
         let dt = control.scale(get_frame_time());
-        let over = game.update(dt);
+        let over = !daily_done && game.update(dt);
 
         if cli.debug && game.anim_t == 0.0 && prev_anim_t != 0.0 {
             eprintln!(
@@ -583,7 +587,14 @@ async fn amain(cli: CliArgs) {
                 );
             }
             control.episode_complete("game2048", game.score as i64);
-            if cli.once {
+            if control.daily_mode() {
+                control::share_result(&control::daily_verdict_text(
+                    "2048",
+                    control::daily_puzzle_number(),
+                    &format!("score {} (top tile {})", game.score, max_tile(&game.board)),
+                ));
+                daily_done = true;
+            } else if cli.once {
                 println!(
                     "result=game_over score={} best={} max_tile={}",
                     game.score,
@@ -591,10 +602,11 @@ async fn amain(cli: CliArgs) {
                     max_tile(&game.board)
                 );
                 std::process::exit(0);
+            } else {
+                let best = game.best;
+                game = Game::new(best);
+                prev_anim_t = 1.0;
             }
-            let best = game.best;
-            game = Game::new(best);
-            prev_anim_t = 1.0;
             board_cache.mark_dirty();
         }
 
@@ -720,7 +732,14 @@ async fn amain(cli: CliArgs) {
                 26.0,
                 rgb(119, 110, 101),
             );
-            let sub = format!("Restarting in {:.0}...", game.overlay_timer.max(0.0));
+            // Daily-challenge runs freeze here rather than restarting (see
+            // `control::Control::daily_mode`) — a countdown to a restart that never
+            // happens would lie, and `overlay_timer` itself has stopped ticking anyway.
+            let sub = if control.daily_mode() {
+                "Today's run is over.".to_owned()
+            } else {
+                format!("Restarting in {:.0}...", game.overlay_timer.max(0.0))
+            };
             let sd = measure_text(&sub, None, 18, 1.0);
             draw_text(
                 &sub,

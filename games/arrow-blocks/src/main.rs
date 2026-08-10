@@ -174,11 +174,15 @@ fn main() {
 }
 
 async fn amain(cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mut game = game::Game::new(0);
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
     let mut last_remaining = game.remaining();
+    // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // field freezes on its final frame instead of starting a new level, and `game.tick`
+    // is skipped entirely so a Done `Game` never advances again.
+    let mut daily_done = false;
 
     // The field border + blocks only need redrawing while the camera is still
     // panning toward its target or a block is mid-animation (exiting/returning) —
@@ -195,7 +199,9 @@ async fn amain(cli: CliArgs) {
         let dt = control.scale(get_frame_time().min(0.05));
         let now = macroquad::miniquad::date::now();
 
-        game.tick(dt, now);
+        if !daily_done {
+            game.tick(dt, now);
+        }
 
         let remaining = game.remaining();
         if cli.debug && remaining != last_remaining {
@@ -203,7 +209,8 @@ async fn amain(cli: CliArgs) {
         }
         last_remaining = remaining;
 
-        if let game::Phase::Done { since } = game.phase
+        if !daily_done
+            && let game::Phase::Done { since } = game.phase
             && now - since > 0.4
         {
             if cli.debug {
@@ -214,17 +221,25 @@ async fn amain(cli: CliArgs) {
                 );
             }
             control.episode_complete("arrow-blocks", game.blocks.len() as i64);
-            if cli.once {
+            if control.daily_mode() {
+                control::share_result(&control::daily_verdict_text(
+                    "Arrow Blocks",
+                    control::daily_puzzle_number(),
+                    &format!("clear level {} ({} blocks)", game.level, game.blocks.len()),
+                ));
+                daily_done = true;
+            } else if cli.once {
                 println!(
                     "result=solved level={} blocks={}",
                     game.level,
                     game.blocks.len()
                 );
                 std::process::exit(0);
+            } else {
+                let next = (game.level + 1) % puzzle::NFIGURES;
+                game = game::Game::new(next);
+                last_remaining = game.remaining();
             }
-            let next = (game.level + 1) % puzzle::NFIGURES;
-            game = game::Game::new(next);
-            last_remaining = game.remaining();
             board_cache.mark_dirty();
         }
 
