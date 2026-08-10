@@ -1087,12 +1087,16 @@ fn main() {
 }
 
 async fn amain(cli: CliArgs) {
-    rand::srand(screenshot::seed());
+    let mut control = control::Control::new();
+    rand::srand(control.seed());
     let mode = cli.variant.unwrap_or(VariantMode::Auto);
     let mut session = Session::new(mode, 0);
     let mut view = View::new(&session);
     let mut shot = screenshot::Capture::from_env();
-    let mut control = control::Control::new();
+    // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the
+    // board freezes on the `GameOver` overlay's final frame instead of advancing to the
+    // next episode/level.
+    let mut daily_done = false;
 
     // The board is genuinely mid-animation (swap slide, clear flash, gravity fall) for
     // nearly the entire time a move is resolving — there's no static content to cache
@@ -1136,10 +1140,33 @@ async fn amain(cli: CliArgs) {
                 std::process::exit(0);
             }
             view.over_t -= dt;
-            if view.over_t <= 0.0 {
-                session = session.next_generation();
-                view = View::new(&session);
-                board_cache.mark_dirty();
+            if view.over_t <= 0.0 && !daily_done {
+                if control.daily_mode() {
+                    let Phase::Over(outcome) = session.game.phase else {
+                        unreachable!("GameOver view only reached once the episode has ended");
+                    };
+                    let result_clause = match outcome {
+                        Outcome::Won => {
+                            format!("win it, ending at score {}", session.game.score)
+                        }
+                        Outcome::OutOfMoves => {
+                            format!("run out of moves at score {}", session.game.score)
+                        }
+                        Outcome::TimeUp => {
+                            format!("run out of time at score {}", session.game.score)
+                        }
+                    };
+                    control::share_result(&control::daily_verdict_text(
+                        "Match 3",
+                        control::daily_puzzle_number(),
+                        &result_clause,
+                    ));
+                    daily_done = true;
+                } else {
+                    session = session.next_generation();
+                    view = View::new(&session);
+                    board_cache.mark_dirty();
+                }
             }
         } else {
             if session.game.variant == Variant::Timed {
@@ -1188,7 +1215,7 @@ async fn amain(cli: CliArgs) {
             draw_combo_banner(view.combo_banner_t);
         }
         if view.phase == StepPhase::GameOver && !control.stream_mode() {
-            draw_game_over(&session, view.over_t);
+            draw_game_over(&session, view.over_t, control.daily_mode());
         }
 
         shot.tick();
@@ -1345,7 +1372,7 @@ fn outcome_text(outcome: Outcome) -> (&'static str, Color) {
     }
 }
 
-fn draw_game_over(session: &Session, over_t: f32) {
+fn draw_game_over(session: &Session, over_t: f32, daily_mode: bool) {
     draw_rectangle(
         BOARD_X,
         BOARD_Y,
@@ -1373,7 +1400,14 @@ fn draw_game_over(session: &Session, over_t: f32) {
         rgb(210, 210, 225),
     );
 
-    let sub = format!("Restarting in {:.0}...", over_t.max(0.0));
+    // Daily-challenge runs freeze here rather than restarting (see
+    // `control::Control::daily_mode`) — a countdown to a restart that never happens
+    // would lie, and `over_t` itself has stopped counting down anyway.
+    let sub = if daily_mode {
+        "Today's run is over.".to_owned()
+    } else {
+        format!("Restarting in {:.0}...", over_t.max(0.0))
+    };
     let subd = measure_text(&sub, None, 18, 1.0);
     draw_text(
         &sub,
