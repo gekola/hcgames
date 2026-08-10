@@ -2,7 +2,14 @@ use maud::{Markup, PreEscaped, html};
 use std::path::Path;
 
 /// `GITHUB_REPOSITORY` ("owner/repo") is auto-set by GitHub Actions; matches the default
-/// project-pages URL when no custom domain (CNAME) is set. `BASE_URL` always overrides.
+/// Pages URL when no custom domain (CNAME) is set. `BASE_URL` always overrides.
+///
+/// Two Pages layouts, and the difference is load-bearing for `robots.txt`: a repo named
+/// exactly `<owner>.github.io` is an *org/user page*, served at the root of that
+/// subdomain, while any other name is a *project page* served under `/<repo>/`. Only the
+/// root form can serve a `robots.txt` that crawlers actually read — they fetch it from
+/// the origin root and nowhere else, so a project page's `/<repo>/robots.txt` is dead
+/// weight (see `.notes/seo_ideas.md`).
 pub fn base_url() -> String {
     if let Ok(url) = std::env::var("BASE_URL") {
         return url;
@@ -10,6 +17,9 @@ pub fn base_url() -> String {
     if let Ok(repo) = std::env::var("GITHUB_REPOSITORY")
         && let Some((owner, name)) = repo.split_once('/')
     {
+        if name.eq_ignore_ascii_case(&format!("{owner}.github.io")) {
+            return format!("https://{owner}.github.io/");
+        }
         return format!("https://{owner}.github.io/{name}/");
     }
     "http://localhost:8080/".to_owned() // matches `mise run serve`
