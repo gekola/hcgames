@@ -410,9 +410,9 @@ header p { margin-top: 0.4rem; font-size: 0.8rem; color: #a89a86; }
 /// up off the floor) with a Bayer 4x4 term mixed in to break the sweep line into pixel grain.
 /// Pixels at the leading edge of the sweep flash cyan for a few frames — the chair powering on.
 ///
-/// As the dissolve runs the room dims and the bed lights up neon (a dilated-silhouette halo
-/// spilling onto the wall/floor, a `lighter` tint on the frame/headboard, and an under-frame LED
-/// strip). Both ramp in over the dissolve's first third and then stay: the page's resting state
+/// As the dissolve runs the room dims and the bed lights up neon (a faint pool of light on the
+/// floor under the frame — never behind the bed, see the halo build for why — a `lighter` tint on
+/// the frame/headboard, and an under-frame LED strip). Both ramp in over the dissolve's first third and then stay: the page's resting state
 /// is the night room with a glowing bed and the gaming chair, not the daylit room it loads with.
 /// The light's *hue* cycles RGB-peripheral style while the chair dissolves and eases onto a fixed
 /// pink by the end; only its brightness keeps moving afterwards, on a slow breathe.
@@ -443,6 +443,7 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   const armchair = layer(), gamer = layer(), chair = layer();
   const gamerBase = layer(), gamerTop = layer();
   const halo = layer(), bedNeon = layer(), tint = layer(), curtains = layer();
+  const floorLit = layer();
 
   let c = back.c;
 
@@ -637,26 +638,47 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   }
 
   // ── neon bed lighting ─────────────────────────────────────────────────────
-  // `halo` is the bed silhouette dilated ~2px: light
-  // spilling onto the wall and floor from around the frame. Stacking the same silhouette at
-  // every offset in the disc at low alpha builds the falloff for free — alpha accumulates near
-  // the bed and thins at the rim. `bedNeon` is the flat silhouette, drawn back over the bed with
-  // `lighter` so the dark frame/headboard picks up the glow while the white duvet clips and
-  // stays white. Both are stored as **white** masks, not pre-colored: the light cycles hue
-  // during the transition (see `ledHue`), so each frame re-tints a mask through `source-in`
-  // (which replaces color but keeps the mask's alpha profile) into a scratch layer.
-  halo.c.globalAlpha = 0.22;
-  for (let dx = -2; dx <= 2; dx++) {
-    for (let dy = -2; dy <= 2; dy++) {
-      if (dx * dx + dy * dy > 4) continue;
-      halo.c.drawImage(front.cv, dx, dy);
+  // `halo` is light pooling on the **floor** under the bed, and nowhere else. Stacking the same
+  // silhouette at every offset in a kernel at low alpha builds the falloff for free — alpha
+  // accumulates near the bed and thins at the rim. `bedNeon` is the flat silhouette, drawn back
+  // over the bed with `lighter` so the dark frame/headboard picks up the glow while the white
+  // duvet clips and stays white. Both are stored as **white** masks, not pre-colored: the light
+  // cycles hue during the transition (see `ledHue`), so each frame re-tints a mask through
+  // `source-in` (which replaces color but keeps the mask's alpha profile) into a scratch layer.
+  //
+  // Two things this deliberately does *not* do, both of which it used to:
+  //
+  // 1. Glow behind the bed. The whole silhouette used to be dilated by a round 2px, so the
+  //    headboard — a vertical panel standing against the wall — threw the same ring of light as
+  //    the mattress, and the two read as one flat lightbox panel hung on the wall rather than
+  //    two perpendicular planes. The emitter is a strip under the frame; the only surface it
+  //    can reach is the floor, so nothing above the frame is dilated at all.
+  // 2. Spread the *whole* lower silhouette sideways — that just made a bed-shaped slab of flat
+  //    magenta with a hard edge, a painted rectangle rather than a pool. Only the base band
+  //    (frame bottom, legs, strip) spreads, so the falloff starts where the emitter is.
+  //
+  // The kernel is wide and flat rather than round: floor seen at this shallow an angle is
+  // foreshortened, so a circle of light on it reaches much further sideways than up or down.
+  // Alpha is kept low enough that the floor's plank texture still reads through the pool.
+  const BASE_Y = 51;
+  floorLit.c.drawImage(front.cv, 0, 0);
+  floorLit.c.globalCompositeOperation = 'destination-out';
+  floorLit.c.fillRect(0, 0, W, BASE_Y);
+
+  halo.c.globalAlpha = 0.028;
+  const RX = 13, UP = 4, DOWN = 3;
+  for (let dx = -RX; dx <= RX; dx++) {
+    for (let dy = -UP; dy <= DOWN; dy++) {
+      const ry = dy < 0 ? UP : DOWN;
+      if ((dx * dx) / (RX * RX) + (dy * dy) / (ry * ry) > 1) continue;
+      halo.c.drawImage(floorLit.cv, dx, dy);
     }
   }
   halo.c.globalAlpha = 1;
   halo.c.globalCompositeOperation = 'source-in';
   halo.c.fillStyle = '#ffffff';
   halo.c.fillRect(0, 0, W, H);
-  // The mask stays *solid* across the bed's own footprint instead of having the bed punched back
+  // The mask stays *solid* across the base's own footprint instead of having the bed punched back
   // out of it. The bed is drawn over the halo anyway, so the hole was never visible at scale 1 —
   // but the pulse scales the halo up, which scaled the hole up too and opened a dark ring between
   // the bed and its own glow. A solid mask can be enlarged with nothing to show through.
@@ -773,12 +795,14 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
     if (sway) drawSwivel(s, sway); else blit(s, chair.cv);
     if (env) { s.fillStyle = 'rgba(4,6,22,' + 0.2 * env + ')'; s.fillRect(0, 0, W * S, H * S); }
     if (led > 0) {
-      // The halo also swells a few percent with the pulse, about the bed's own center — a glow
-      // whose *reach* moves reads as light far more than one that only changes opacity.
+      // The pool also swells a few percent with the pulse, about the bed's base — a glow whose
+      // *reach* moves reads as light far more than one that only changes opacity. Anchored at
+      // the base, not the bed's center, so the pulse widens the pool instead of sliding it down
+      // the floor.
       const grow = 1 + 0.1 * led;
       s.globalCompositeOperation = 'lighter';
-      s.globalAlpha = 0.92 * led;
-      s.setTransform(grow, 0, 0, grow, S * 58 * (1 - grow), S * 44 * (1 - grow));
+      s.globalAlpha = 0.62 * led;
+      s.setTransform(grow, 0, 0, grow, S * 58 * (1 - grow), S * 56 * (1 - grow));
       blit(s, tinted(halo, col));
       s.setTransform(1, 0, 0, 1, 0, 0);
       s.globalAlpha = 1;
