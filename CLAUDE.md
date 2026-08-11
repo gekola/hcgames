@@ -47,6 +47,69 @@ There's no per-game dev HTML template or Trunk setup — `mise run build-wasm <n
 runs `xtask`) is the only way to get a browser-testable page, so there's a single source of
 truth for the page chrome (canvas sizing, hotkey popup, analytics bridge, screenshot hotkey).
 
+### Game page structure (one screen of game, then content)
+
+A game page is `.stage` (exactly `100dvh`, `overflow: hidden`, canvas centered inside it —
+`xtask::native_size_style`) followed by `xtask::game_page_info`: an `h1`, the game's
+`description()`, a link home, and a rotation of 3 related-game cards. The game still owns
+the entire first screen; the section is reachable only by scrolling, cued by a dim chevron
+(`xtask::scroll_cue`).
+
+This exists for indexing, not decoration. Before it, a game page's body was a `<canvas>`
+plus scripts — **zero `<a>` tags** (Search Console reported "Referring page: None detected",
+i.e. Google knew these URLs from the sitemap only, never from the link graph) and zero text
+in page flow, since `loading_screen`'s line is painted over as soon as the game draws. Don't
+regress either property when editing page chrome.
+
+Two things are load-bearing:
+
+- **`.stage`'s `overflow: hidden`.** A `transform: scale()` doesn't shrink the *layout* box,
+  so a 720px-tall canvas scaled to 0.7 still occupies 720px of layout — without clipping,
+  that adds hundreds of px of dead scroll region between the canvas and the text.
+- **`hcg-bare`** (set on `<html>` by `mode_class_script` under `?embed=1`/`?stream=1`, the
+  same `HIDE_CHROME_JS` condition every other chrome element uses) restores the old
+  non-scrolling `height: 100%; overflow: hidden` page and hides the section outright. An
+  ambient-wall tile is a few-hundred-px iframe and an OBS browser source has no reader —
+  neither should scroll to a text block. **Any new below-fold/page-level content must be
+  hidden under `hcg-bare` too.**
+
+The one line that differs per game is `game_flavor(name)`: it names the specific bad habit a
+human has in *that* game, then has the AI be insufferable about it. A new game needs an entry
+(the fallback is deliberately generic), and it should stay disjoint from `description()`, which
+sits directly above it on the page.
+
+**No implementation detail in site copy** — not in `game_flavor`, not in `description()`, not
+in the page chrome. An earlier version of both explained the solvers (beam widths, node
+budgets, technique names) on the theory that the vocabulary bought keyword coverage. It bought
+nothing: those queries are either tool-intent (`sudoku solver` — that searcher wants *their*
+board solved, not a demo) or video-dominated (`ai plays tetris`), and this site can't and
+shouldn't win either. Meanwhile 11 explainers built to one rhythm read as generated. Anyone
+curious about an algorithm can read `solver.rs`. Copy earns its place by being memorable or by
+being searched for; an explainer is neither. The category terms that *do* carry discoverability
+(`self-playing`, `played by an AI`) come from the h1 formula and the related-games heading, not
+from jargon — verified after the rewrite, 12 of 16 pages each, unchanged.
+
+Related-game links come from `xtask::all_games()`, which reads `games/` in the *source* tree
+rather than `dist/` (how `generate_index` discovers games): `generate_game_html` runs once
+per game while `mise run deploy` is still building the others, so a `dist/`-derived list
+would give the first game built zero related links and the last one all of them.
+
+`xtask::game_json_ld` / `homepage_json_ld` / `wall_json_ld` emit one `application/ld+json`
+`@graph` per page: `VideoGame` + `BreadcrumbList` on a game, `WebSite` + `Organization` on the
+homepage (that `Organization` node's `name`/`url`/`logo` is what builds a Knowledge Graph brand
+entity, so brand-recognition work belongs there rather than in `<title>` text), and
+`CollectionPage` + `ItemList` on the wall — the wall is the only page that's honestly a *list*
+of the games, which is why the other two don't emit an `ItemList`. JSON strings must go through
+the existing `json_escape` and the script body through `PreEscaped`.
+
+The wall's tiles each carry a `.wall-label` link to that game's own page: opacity 0 until
+`:hover`/`:focus-within` (always visible under `@media (hover: none)`, where hover can't
+happen and the link would otherwise be unreachable), so the grid still reads as an
+uninterrupted video wall at rest. An `<a href>` is crawled regardless of how it's styled, which
+took the wall from 1 outbound link to 12. `wall_live_bridge`'s tile-click handler bails on any
+click inside an `<a>`, so tapping a label navigates while tapping the tile still mounts the
+live game.
+
 ### PWA / installable
 
 Every generated page — the homepage and each game — is independently installable as its
@@ -93,7 +156,10 @@ config core.hooksPath .githooks` once per clone/worktree to activate it.
 4. Wire `control::Control` into the main loop (see "In-game controls" below)
 5. If `window_width`/`window_height` in `Conf` isn't 900×720, add a case to `xtask::native_size`
 6. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM (also generates `dist/<name>/index.html` — there's no separate dev HTML template to maintain)
-7. Once the game's design has settled, add `games/<name>/CLAUDE.md` documenting it — source layout table, key types/constants, algorithm/solver design, rendering notes, any real gotchas, a "Running" section. See `games/snake/CLAUDE.md` (terse) or `games/match-3/CLAUDE.md` (fuller) for the shape. Don't duplicate what's already covered in this root file (CLI flags, RenderCache, control/hotkeys, WASM caveats) — only game-specific content.
+7. Add a `description(name)` and a `game_flavor(name)` arm in `xtask/src/lib.rs` — without
+   the latter the new page falls back to generic text and reads as a near-duplicate of the
+   other games (see "Game page structure" above)
+8. Once the game's design has settled, add `games/<name>/CLAUDE.md` documenting it — source layout table, key types/constants, algorithm/solver design, rendering notes, any real gotchas, a "Running" section. See `games/snake/CLAUDE.md` (terse) or `games/match-3/CLAUDE.md` (fuller) for the shape. Don't duplicate what's already covered in this root file (CLI flags, RenderCache, control/hotkeys, WASM caveats) — only game-specific content.
 
 ## Self-playing solver games (klondike, spider, and similar)
 

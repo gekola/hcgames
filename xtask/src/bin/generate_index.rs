@@ -2,11 +2,22 @@
 use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
-    base_url, description, favicon_links, gtag_head, manifest_json, pwa_head, social_image,
-    sw_register_bridge, title, wall_analytics_bridge, wall_live_bridge,
+    base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json, pwa_head,
+    social_image, sw_register_bridge, title, wall_analytics_bridge, wall_json_ld, wall_live_bridge,
 };
 
-const SITE_DESCRIPTION: &str = "Free browser games that play themselves. Watch AI bots solve Snake, 2048, Klondike, Minesweeper, and more, live.";
+/// Feeds `meta description`, `og:description`, the PWA manifest's `description` and the
+/// `WebSite` JSON-LD node — i.e. everything a *machine* reads, and nothing a visitor sees on
+/// the page. A meta description is not a ranking input at all, only the SERP snippet, so this
+/// one is written for click-through: a claim first, then the game names a person actually
+/// scans a result for. The on-page pitch (`SITE_PITCH`) is the one that carries phrase-match
+/// weight, and it's deliberately worded differently.
+const SITE_DESCRIPTION: &str = "Just games. No player needed. Zero-player browser games where AI bots solve Snake, 2048, Klondike, Minesweeper and more, live.";
+
+/// The visible pitch under the homepage header. Unlike `SITE_DESCRIPTION` this is real body
+/// text, which *is* a ranking input — so it carries both category phrasings the site should
+/// own ("zero-player", "play themselves") while opening in the site's own voice.
+const SITE_PITCH: &str = "Just games. No player needed. Free zero-player browser games that play themselves — AI bots solve Snake, 2048, Klondike and more, live.";
 
 // Archivo is only ever used at its default weight (400) — the STYLE block never sets
 // font-weight on anything in the Archivo family, only on Fraunces — so 500/600 aren't
@@ -76,6 +87,17 @@ header .kicker {
   text-transform: uppercase;
   color: var(--accent);
   opacity: 0.85;
+}
+
+/* Sits between the kicker's one-liner and the wall link, so it reads as the explanation that
+   follows the joke rather than competing with it: normal weight, dimmer than body text, and
+   width-capped so it stays two or three short lines instead of one wide banner. */
+header .pitch {
+  margin: 0.9rem auto 0;
+  max-width: 46ch;
+  font-size: 0.85rem;
+  line-height: 1.65;
+  color: var(--text-dim);
 }
 
 header .wall-link {
@@ -392,6 +414,34 @@ header p { margin-top: 0.4rem; font-size: 0.8rem; color: #a89a86; }
   height: 100%;
   border: none;
   display: block;
+}
+/* Per-tile link to that game's own page. Present in the DOM on every load (an `<a href>` is
+   followed regardless of how it's styled, so this is 11 real internal links from a page that
+   previously had exactly one), but revealed only on hover/focus so the grid still reads as an
+   uninterrupted video wall at rest. z-index puts it above the live iframe, which otherwise
+   covers the whole tile once mounted. */
+.wall-tile .wall-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 0.5rem 0.6rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
+  color: #e7ddcd;
+  font-size: 0.8rem;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.wall-tile:hover .wall-label,
+.wall-tile:focus-within .wall-label { opacity: 1; }
+.wall-tile .wall-label:hover { color: #d4a373; }
+/* No hover on a touch screen, so the label would be permanently unreachable there — show it
+   outright instead. Tapping the label navigates; tapping anywhere else in the tile still
+   mounts the live game (see wall_live_bridge). */
+@media (hover: none) {
+  .wall-tile .wall-label { opacity: 1; }
 }
 "#;
 
@@ -825,7 +875,190 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
     }
   }
 
-  // Resting loop, sampled at ~30fps. Brightness is four sines at unrelated periods rather than
+  // Rest-state fast path. Once the dissolve is over `t` is pinned at 2 and `envelope(t)` at 1, so
+  // every layer below the glow is a fixed image: the room dimmed by both passes, the chair's
+  // static base dimmed by the second, and — separately, because the sway shears it — the shell,
+  // also dimmed by the second. Baking those at output resolution turns a rest frame from seven
+  // full-canvas composites plus two full-canvas fills into four.
+  //
+  // The bed and its neon merge per frame into one 80x60 canvas rather than taking an upscale
+  // each: `bedNeon` is built from `front` with 'source-in', so its alpha *is* front's alpha, which
+  // means the only thing beneath the neon in a real frame is the bed itself — compositing the two
+  // before the upscale is equivalent to compositing them after it.
+  //
+  // Measured (4x CPU throttle, 8s resting window, .notes/perf_probe.js): 847ms -> 636ms of
+  // main-thread task time, 10.6% -> 7.9% of one thread. (A per-layer cost model predicted 5.9%;
+  // it over-predicted because a 1:1 copy of a 480x360 opaque canvas is not free — measure, don't
+  // extrapolate.)
+  //
+  // Not bit-identical to the per-layer path, and worth knowing which part isn't. Over a
+  // deterministic 400-frame run (.notes/hero_frame.js, which fakes a virtual rAF clock so two
+  // builds paint the same frame at the same timestamp): the baked base and pre-dimmed shell differ
+  // on 3.6% of pixels by at most +-1/255, pure 8-bit rounding from compositing into an offscreen
+  // canvas; the bed/neon merge differs on a further disjoint 1.7% by up to +-5/255, because the
+  // neon's 0.22*led alpha quantizes once at 80x60 before the upscale instead of at output
+  // resolution. Both are invisible against a glow that pulses far harder than that between
+  // frames, but if exactness ever matters more than 1.4 percentage points of CPU, drawing `front`
+  // and `bedNeon` as two output-res blits (the pre-merge code) brings the worst case back to +-1.
+  const DIM1 = 0.42, DIM2 = 0.2;
+  let rest = null;
+
+  // A scratch canvas at the *output* resolution, so a baked layer costs a 1:1 copy per frame
+  // instead of an upscale.
+  function big() {
+    const cv = document.createElement('canvas');
+    cv.width = W * S; cv.height = H * S;
+    const c2 = cv.getContext('2d');
+    c2.imageSmoothingEnabled = false;
+    return { cv, c: c2 };
+  }
+
+  // `src` upscaled and dimmed by `a`. 'source-atop' confines the wash to the sprite's own pixels,
+  // which is what dimming the whole composite does wherever the sprite is opaque — true of these
+  // sprites, every one of which is drawn with fillRect.
+  function dimmedBig(src, a) {
+    const l = big();
+    l.c.drawImage(src.cv, 0, 0, W * S, H * S);
+    l.c.globalCompositeOperation = 'source-atop';
+    l.c.fillStyle = 'rgba(4,6,22,' + a + ')';
+    l.c.fillRect(0, 0, W * S, H * S);
+    l.c.globalCompositeOperation = 'source-over';
+    return l;
+  }
+
+  // The region that actually changes between one rest frame and the next: the sheared shell, the
+  // halo (which the pulse scales), the bed and its neon, and the LED strip. Wall, window,
+  // curtains, floor and the chair's own base are identical in every rest frame, so recompositing
+  // them is pure waste — measured, only 22-24% of pixels change per frame.
+  //
+  // Derived from the layers' own alpha bounds rather than hardcoded, so it tracks the art: move
+  // the bed or widen the glow and the box follows instead of silently cropping it.
+  //
+  // Measured (4x CPU throttle, 8s resting window, .notes/perf_probe.js): 640ms -> 452ms of
+  // main-thread task time, 8.0% -> 5.6% of one thread. Bit-identical to the unclipped path: 0
+  // differing pixels of 172800, at five different points in the sway/pulse cycle
+  // (.notes/hero_frame.js at 400/431/520/640/777 frames). That check is the one that matters here
+  // — a dirty rect that is too small doesn't look broken, it leaves a stale smear only at certain
+  // phases, so verify across phases rather than on one frame.
+  function alphaBounds(l) {
+    const d = l.c.getImageData(0, 0, W, H).data;
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let y = 0, p = 3; y < H; y++) {
+      for (let x = 0; x < W; x++, p += 4) {
+        if (d[p]) {
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+        }
+      }
+    }
+    return { x0: x0, y0: y0, x1: x1, y1: y1 };
+  }
+
+  // One rect, not several: two tighter boxes measured *slower* (440ms vs 425ms per 8s window) —
+  // the clip setup costs more than the pixels it saves.
+  function dirtyRect() {
+    const shell = alphaBounds(gamerTop), glow = alphaBounds(halo), bed = alphaBounds(front);
+    // Worst case of `drawSwivel`'s shear at |sway| = 1: the lean displaces a pixel by 0.115x its
+    // distance from the pivot row, and `sx` pulls the silhouette in by up to 5%.
+    const lean = 0.115 * Math.max(Math.abs(shell.y0 - PIVOT_Y), Math.abs(shell.y1 - PIVOT_Y));
+    const narrow = 0.05 * Math.max(Math.abs(shell.x0 - PIVOT_X), Math.abs(shell.x1 - PIVOT_X));
+    // Worst case of the halo's `grow` (1 + 0.1 * led, and the loudest `breathe` reaches ~1.35),
+    // which scales about (58, 56).
+    const g = 0.14;
+    const grow = g * Math.max(
+      Math.abs(glow.x0 - 58), Math.abs(glow.x1 - 58),
+      Math.abs(glow.y0 - 56), Math.abs(glow.y1 - 56));
+    // The LED strip is drawn from raw coordinates, not a sprite, so it's included literally.
+    const x0 = Math.min(shell.x0 - lean - narrow, glow.x0 - grow, bed.x0, 45);
+    const x1 = Math.max(shell.x1 + lean + narrow, glow.x1 + grow, bed.x1, 45 + 9 * 3);
+    const y0 = Math.min(shell.y0, glow.y0 - grow, bed.y0, 56);
+    const y1 = Math.max(shell.y1, glow.y1 + grow, bed.y1, 57);
+    // A pixel of slack each way, then out to device pixels.
+    const left = Math.max(0, Math.floor(x0) - 1), top = Math.max(0, Math.floor(y0) - 1);
+    const right = Math.min(W, Math.ceil(x1) + 1), bottom = Math.min(H, Math.ceil(y1) + 1);
+    return { x: left * S, y: top * S, w: (right - left) * S, h: (bottom - top) * S };
+  }
+
+  // Built lazily on the first rest frame, by which point the curtains are shut and the chair has
+  // finished dissolving — so whatever is in those layers now is what rests there forever.
+  function buildRest() {
+    const base = big();
+    base.c.drawImage(back.cv, 0, 0, W * S, H * S);
+    base.c.drawImage(curtains.cv, 0, 0, W * S, H * S);
+    base.c.fillStyle = 'rgba(4,6,22,' + DIM1 + ')';
+    base.c.fillRect(0, 0, W * S, H * S);
+    base.c.drawImage(gamerBase.cv, 0, 0, W * S, H * S);
+    base.c.fillStyle = 'rgba(4,6,22,' + DIM2 + ')';
+    base.c.fillRect(0, 0, W * S, H * S);
+    rest = { base: base, top: dimmedBig(gamerTop, DIM2), bed: layer(), dirty: dirtyRect() };
+  }
+
+  // `full` paints the whole canvas; every frame after that is clipped to `rest.dirty` (see
+  // `dirtyRect`). The first rest frame has to be unclipped — the frame underneath it came from the
+  // dissolve, so pixels outside the box aren't yet in their resting state. From then on they never
+  // change, which is exactly what makes clipping safe rather than merely cheap. The clip is set
+  // under the identity transform and a canvas clip is independent of later `setTransform` calls,
+  // so the shear and the halo's growth still land where they always did.
+  let restFull = false;
+
+  function paintRest(pulse, wob, sway, chase) {
+    if (!rest) buildRest();
+    const led = pulse;
+    const col = 'hsl(' + (ledHue(2) + wob).toFixed(1) + ', 100%, 62%)';
+    const s = ctx;
+    s.imageSmoothingEnabled = false;
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    const clipped = restFull;
+    if (clipped) {
+      s.save();
+      s.beginPath();
+      s.rect(rest.dirty.x, rest.dirty.y, rest.dirty.w, rest.dirty.h);
+      s.clip();
+    } else {
+      restFull = true;
+    }
+    s.drawImage(rest.base.cv, 0, 0);
+    const k = 0.115 * sway;
+    const sx = 1 - 0.05 * Math.abs(sway);
+    s.setTransform(sx, 0, k, 1, S * (PIVOT_X * (1 - sx) - k * PIVOT_Y), 0);
+    s.drawImage(rest.top.cv, 0, 0);
+    s.setTransform(1, 0, 0, 1, 0, 0);
+    if (led > 0) {
+      const grow = 1 + 0.1 * led;
+      s.globalCompositeOperation = 'lighter';
+      s.globalAlpha = 0.62 * led;
+      s.setTransform(grow, 0, 0, grow, S * 58 * (1 - grow), S * 56 * (1 - grow));
+      blit(s, tinted(halo, col));
+      s.setTransform(1, 0, 0, 1, 0, 0);
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = 'source-over';
+      const b = rest.bed;
+      b.c.globalCompositeOperation = 'source-over';
+      b.c.clearRect(0, 0, W, H);
+      b.c.drawImage(front.cv, 0, 0);
+      b.c.globalCompositeOperation = 'lighter';
+      b.c.globalAlpha = 0.22 * led;
+      b.c.drawImage(tinted(bedNeon, col), 0, 0);
+      b.c.globalAlpha = 1;
+      b.c.globalCompositeOperation = 'source-over';
+      blit(s, b.cv);
+      s.globalCompositeOperation = 'lighter';
+      s.fillStyle = col;
+      for (let i = 0; i < 9; i++) {
+        s.globalAlpha = Math.min(1, led * (0.62 + 0.5 * Math.sin(chase - i * 0.8)));
+        s.fillRect((45 + i * 3) * S, 56 * S, 3 * S, S);
+      }
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = 'source-over';
+    } else {
+      blit(s, front.cv);
+    }
+    if (clipped) s.restore();
+  }
+
+  // Resting loop, sampled at ~15fps (REST_MS). Brightness is four sines at unrelated periods rather than
   // one, the fastest fast enough (~100ms) to read as flicker rather than breathing; hue only
   // wobbles a few degrees around the resting pink (the full RGB cycle belongs to the transition).
   // The chair's sway runs on its own two periods, so the two never lock into a shared beat.
@@ -833,6 +1066,13 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   // Throttled and suspended whenever the hero scrolls out of view; rAF already suspends it in a
   // hidden tab. A rest frame is drawImage-only (see `mixT`), far cheaper than the games' own
   // render loops, but still not free — hence the observer rather than an unconditional loop.
+  // Resting paint interval. 64ms (~15fps) rather than the 32ms this used to run at: measured
+  // 4x-CPU-throttled main-thread cost dropped from 19.3% of one thread to 10.6% for a loop whose
+  // fastest term is a ~100ms flicker, so the sampling is still inside it. The transition itself is
+  // unaffected — it stays on every rAF tick, since a dissolve is watched closely and only lasts
+  // 1.6s, while the rest loop runs for as long as the page is open.
+  const REST_MS = 64;
+
   const breathe = (now) =>
     0.66 + 0.2 * Math.sin(now / 940) + 0.12 * Math.sin(now / 430 + 1.7)
          + 0.06 * Math.sin(now / 210 + 0.5) + 0.05 * Math.sin(now / 97 + 2.4)
@@ -850,8 +1090,8 @@ const HOTEL_SCENE_SCRIPT: &str = r#"
   function frame(now) {
     if (!live) return;
     if (done) {
-      if (now - last > 32) {
-        paint(2, breathe(now), wobble(now), swayAt(now), now / 190);
+      if (now - last > REST_MS) {
+        paintRest(breathe(now), wobble(now), swayAt(now), now / 190);
         last = now;
       }
       requestAnimationFrame(frame);
@@ -1255,17 +1495,30 @@ fn main() {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
-                title { "Hotel Chair Games" }
+                // Brand first, tagline second: a brand search has to land on the brand,
+                // but "Hotel Chair Games" alone tells a SERP reader (and Google) nothing
+                // about what the site is, and nobody searches the brand yet. "Watch them
+                // play" is also the site's own domain (watchthem.github.io), so the title,
+                // the URL and the premise all say the same thing. Game pages deliberately
+                // keep their terse "<Game> — Hotel Chair Games" form; their keyword weight
+                // comes from `game_page_info`'s on-page text instead.
+                title { "Hotel Chair Games — Watch Them Play" }
                 (favicon_links(&base_url, dist))
                 meta name="description" content=(SITE_DESCRIPTION);
                 link rel="canonical" href=(base_url);
                 meta property="og:type" content="website";
-                meta property="og:title" content="Hotel Chair Games";
+                meta property="og:site_name" content="Hotel Chair Games";
+                meta property="og:locale" content="en_US";
+                meta property="og:title" content="Hotel Chair Games — Watch Them Play";
                 meta property="og:description" content=(SITE_DESCRIPTION);
                 meta property="og:url" content=(base_url);
                 meta property="og:image" content=(og.url);
+                // Describes `static/hotel-scene.svg` (rasterized to dist/og-image.png),
+                // which is the hotel room itself — not a grid of games.
+                meta property="og:image:alt" content="A dim hotel room with an armchair pulled up to a glowing screen";
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
+                (homepage_json_ld(&base_url, dist, SITE_DESCRIPTION))
                 (gtag_head())
                 (pwa_head("#171310"))
                 link rel="preconnect" href="https://fonts.googleapis.com";
@@ -1287,6 +1540,7 @@ fn main() {
                 header class="fade-up" {
                     h1 { "Hotel Chair Games" }
                     p class="kicker" { "The bed is taken. Sit anyway." }
+                    p class="pitch" { (SITE_PITCH) }
                     a class="wall-link" href="wall/" { "→ leave the whole wall running" }
                 }
                 main class="main" {
@@ -1348,6 +1602,13 @@ fn main() {
     )
     .unwrap();
 
+    // (directory name, display title) pairs — shared by the wall's tiles and its `ItemList`
+    // JSON-LD so the visible grid and the machine-readable list can't drift apart.
+    let wall_items: Vec<(String, String)> = games
+        .iter()
+        .map(|game| (game.clone(), title(game)))
+        .collect();
+
     let wall_page = html! {
         (DOCTYPE)
         html lang="en" {
@@ -1358,6 +1619,20 @@ fn main() {
                 (favicon_links(&base_url, dist))
                 meta name="description" content="Every self-playing game on this site at once, one AI per screen — leave it running in the background, nothing to do here either.";
                 link rel="canonical" href=(format!("{base_url}wall/"));
+                // The wall had no OG tags at all, which mattered more here than anywhere
+                // else: it's the most shareable page on the site, so every link to it
+                // rendered as a bare URL with no title, text or image.
+                meta property="og:type" content="website";
+                meta property="og:site_name" content="Hotel Chair Games";
+                meta property="og:locale" content="en_US";
+                meta property="og:title" content="Ambient Wall — Hotel Chair Games";
+                meta property="og:description" content=(format!("{} self-playing games running at once, one AI per tile. Leave it on in the background.", games.len()));
+                meta property="og:url" content=(format!("{base_url}wall/"));
+                meta property="og:image" content=(og.url);
+                meta property="og:image:alt" content="A dim hotel room with an armchair pulled up to a glowing screen";
+                meta name="twitter:card" content=(og.twitter_card);
+                meta name="twitter:image" content=(og.url);
+                (wall_json_ld(&base_url, &wall_items))
                 (gtag_head())
                 style { (PreEscaped(WALL_STYLE)) }
             }
@@ -1368,10 +1643,11 @@ fn main() {
                     p { (format!("{} AIs. Zero players. Maximum efficiency.", games.len())) }
                 }
                 div class="wall-grid" {
-                    @for game in &games {
-                        div class="wall-tile" title=(title(game)) data-game=(game) {
+                    @for (game, game_title) in &wall_items {
+                        div class="wall-tile" title=(game_title) data-game=(game) {
                             img class="wall-preview" src=(format!("../{game}/preview.png"))
-                                alt=(title(game)) loading="lazy";
+                                alt=(format!("{game_title} being played by an AI")) loading="lazy";
+                            a class="wall-label" href=(format!("../{game}/")) { (game_title) " ↗" }
                         }
                     }
                 }

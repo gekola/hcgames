@@ -86,11 +86,22 @@ fn max_fit_scale(name: &str) -> f64 {
 /// change `clientWidth`/`clientHeight`, so `mq_js_bundle.js`'s resize handling (which
 /// syncs the canvas's backing resolution to its CSS box) never sees a mismatch.
 ///
-/// `?stream=1` (see `stream_mode_class_script`) swaps the opaque black `html`/`body`
+/// `?stream=1` (see `mode_class_script`) swaps the opaque black `html`/`body`
 /// background for transparent instead — for dropping the page into OBS/Twitch as a
 /// browser-source layer over other scene content. The letterboxed area around the
 /// (still fixed-size, never stretched — see CLAUDE.md's "Canvas sizing is load-bearing")
 /// canvas just becomes see-through padding rather than black bars.
+///
+/// `.stage` (the canvas's wrapper) is exactly one viewport tall with `overflow: hidden`,
+/// which is load-bearing in two ways now that the page below it scrolls (see
+/// `game_page_info`). First, a `transform: scale()` doesn't shrink the *layout* box: a
+/// 720px-tall canvas scaled to 0.7 still occupies 720px of layout, so without clipping it
+/// would add a few hundred px of dead scroll region between the visually-centered canvas
+/// and the text below. Second, it keeps "one screen of game, then content" exact — the
+/// game still owns the whole first screen the way it did when `body` itself was the
+/// centering flex container. `100dvh` (with a `100vh` fallback for older browsers) so a
+/// mobile address bar appearing/collapsing doesn't leave the stage taller than the visible
+/// viewport.
 pub fn native_size_style(name: &str) -> Markup {
     let (w, h) = native_size(name);
     let max_scale = max_fit_scale(name);
@@ -98,9 +109,11 @@ pub fn native_size_style(name: &str) -> Markup {
         style {
             (PreEscaped(format!(
                 "* {{ margin: 0; padding: 0; box-sizing: border-box; }}\n\
-                 html, body {{ height: 100%; overflow: hidden; background: #000; }}\n\
+                 html {{ background: #000; overflow-x: hidden; }}\n\
+                 body {{ background: #000; }}\n\
                  html.stream-mode, html.stream-mode body {{ background: transparent; }}\n\
-                 body {{ display: flex; align-items: center; justify-content: center; }}\n\
+                 .stage {{ position: relative; height: 100vh; height: 100dvh; overflow: hidden; \
+                 display: flex; align-items: center; justify-content: center; }}\n\
                  main {{ display: grid; }}\n\
                  canvas, .loading {{ grid-area: 1 / 1; width: {w}px; height: {h}px; transform-origin: center; }}\n\
                  canvas {{ display: block; outline: none; visibility: hidden; \
@@ -109,10 +122,13 @@ pub fn native_size_style(name: &str) -> Markup {
                  .loading {{ display: flex; align-items: center; justify-content: center; text-align: center; \
                  padding: 0 2rem; color: rgba(255, 255, 255, 0.35); font: italic 15px system-ui, sans-serif; \
                  pointer-events: none; }}\n\
+                 html.hcg-bare, html.hcg-bare body {{ height: 100%; overflow: hidden; }}\n\
+                 html.hcg-bare .stage {{ height: 100%; }}\n\
+                 {PAGE_INFO_CSS}\n\
                  {POPUP_CSS}"
             )))
         }
-        (stream_mode_class_script())
+        (mode_class_script())
         script {
             (PreEscaped(format!(
                 "function fitCanvas() {{\n\
@@ -128,19 +144,32 @@ pub fn native_size_style(name: &str) -> Markup {
     }
 }
 
-/// Adds the `stream-mode` class to `<html>` under `?stream=1`, for `native_size_style`'s
-/// transparent-background rule to key off. A synchronous script (not deferred to
-/// `DOMContentLoaded`) so the class lands before first paint — `document.documentElement`
-/// already exists as soon as the parser reaches the `<html>` start tag, well before
-/// `<body>`/the canvas/the WASM fetch.
-fn stream_mode_class_script() -> Markup {
+/// Two classes on `<html>`, both set before first paint:
+///
+/// - `stream-mode` under `?stream=1`, for `native_size_style`'s transparent-background
+///   rule to key off.
+/// - `hcg-bare` under `?embed=1` *or* `?stream=1` (see `HIDE_CHROME_JS`), which restores
+///   the old non-scrolling `height: 100%; overflow: hidden` page and hides
+///   `game_page_info`'s below-the-fold content entirely. An ambient-wall tile is an iframe
+///   a few hundred px tall — letting it scroll to a text section would be actively wrong
+///   there (and on an OBS browser source there's nobody to scroll it), so both those modes
+///   keep exactly the single-screen canvas page they had before that section existed.
+///
+/// A synchronous script (not deferred to `DOMContentLoaded`) so the classes land before
+/// first paint — `document.documentElement` already exists as soon as the parser reaches
+/// the `<html>` start tag, well before `<body>`/the canvas/the WASM fetch. Deferring
+/// `hcg-bare` in particular would let a wall tile paint one scrollable frame first.
+fn mode_class_script() -> Markup {
     html! {
         script {
-            (PreEscaped(
-                "if (new URLSearchParams(location.search).get('stream') === '1') {\n\
+            (PreEscaped(format!(
+                "if (new URLSearchParams(location.search).get('stream') === '1') {{\n\
                  \x20 document.documentElement.classList.add('stream-mode');\n\
-                 }"
-            ))
+                 }}\n\
+                 if ({HIDE_CHROME_JS}) {{\n\
+                 \x20 document.documentElement.classList.add('hcg-bare');\n\
+                 }}"
+            )))
         }
     }
 }
@@ -345,6 +374,206 @@ pub fn orientation_hint(name: &str) -> Markup {
     }
 }
 
+const PAGE_INFO_CSS: &str = "\
+.scroll-cue { position: absolute; bottom: 10px; left: 0; right: 0; z-index: 9; \
+text-align: center; color: rgba(255,255,255,0.28); font: 20px system-ui, sans-serif; \
+line-height: 1; pointer-events: none; transition: opacity 0.3s; }\n\
+.scroll-cue.gone { opacity: 0; }\n\
+.page-info { max-width: 760px; margin: 0 auto; padding: 3.5rem 1.5rem 4.5rem; \
+font-family: system-ui, sans-serif; color: #a89a86; }\n\
+.page-info .home-link { display: inline-block; margin-bottom: 1.2rem; font-size: 0.8rem; \
+color: #d4a373; text-decoration: none; }\n\
+.page-info .home-link:hover { text-decoration: underline; }\n\
+.page-info h1 { font-size: clamp(1.3rem, 5vw, 1.7rem); font-weight: 600; color: #f0ece2; \
+margin-bottom: 0.9rem; }\n\
+.page-info p { font-size: 0.95rem; line-height: 1.7; margin-bottom: 0.9rem; }\n\
+.page-info p a { color: #d4a373; }\n\
+.page-info h2 { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; \
+color: #d4a373; margin: 2.75rem 0 1.1rem; }\n\
+.related { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); \
+gap: 1rem; }\n\
+.related a { display: block; text-decoration: none; border: 1px solid rgba(212,163,115,0.18); \
+border-radius: 10px; overflow: hidden; background: rgba(255,255,255,0.02); }\n\
+.related a:hover { border-color: rgba(212,163,115,0.5); }\n\
+.related img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }\n\
+.related span { display: block; padding: 0.6rem 0.7rem; font-size: 0.85rem; color: #e7ddcd; }";
+
+/// Every game in the workspace, by directory name, sorted the same way the homepage's
+/// grid sorts (by display `title`). Read from `games/` in the source tree rather than from
+/// `dist/` (which is how `generate_index` discovers them): `generate_game_html` runs once
+/// per game *while* `mise run deploy` is still building the others, so on a fresh clone
+/// `dist/` holds only the games built so far and a `dist/`-derived list would give the
+/// first game zero related links and the last one all of them. `games/` is complete from
+/// the start and needs no build to be accurate. Empty (so the section is simply skipped)
+/// if the directory can't be read — e.g. running the generator from somewhere other than
+/// the repo root.
+pub fn all_games() -> Vec<String> {
+    let mut games: Vec<String> = std::fs::read_dir("games")
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    games.sort_by_key(|name| title(name));
+    games
+}
+
+/// The one line on a game page that is unique to that game. Two jobs, in this order: name the
+/// specific bad habit a human has in *this* game, then have the AI be insufferable about it.
+///
+/// It used to explain the solver — beam widths, node budgets, technique names — on the theory that
+/// the vocabulary bought keyword coverage. It didn't: those queries are either tool-intent
+/// ("sudoku solver") or video-dominated ("ai plays tetris"), so the words earned nothing, and 11
+/// explainers built to the same rhythm read as generated. Implementation detail doesn't belong in
+/// site copy unless it earns its place with a laugh or a search term; anyone curious can read the
+/// source. **Don't reintroduce solver internals here.**
+fn game_flavor(name: &str) -> &'static str {
+    match name {
+        "snake" => {
+            "You died to your own tail and called it lag. It has never met an obstacle it \
+            didn't put there on purpose."
+        }
+        "game2048" => {
+            "You swipe down when you panic. It picked the corner this ends in some forty \
+            moves ago and will not be taking questions."
+        }
+        "tetris" => {
+            "You were saving that I-piece for something. It doesn't need one — it builds \
+            cathedrals out of whatever falls."
+        }
+        "klondike" => {
+            "You restarted this deal four times. It has never restarted anything, and \
+            regards your reshuffling as a form of prayer."
+        }
+        "spider" => {
+            "You gave up on four-suit years ago. It plays four-suit like it's child's play."
+        }
+        "sudoku" => "You wrote it in pen. It was a 4. It knew that before you picked up the pen.",
+        "minesweeper" => {
+            "You called it intuition. It was a coin flip and you knew it. This one \
+            doesn't flip coins; it simply declines to be wrong."
+        }
+        "match-3" => "You tapped the same gem twice and hoped. It doesn't hope. It arranges.",
+        "arrow-blocks" => "You'd have saved the heart for last. It doesn't see a heart.",
+        "bubble-shooter" => {
+            "You aimed straight up. It banks off the wall like the wall was its \
+            own idea."
+        }
+        "water-sort" => {
+            "You poured red into blue and called it a plan. It has never once reached \
+            for undo, and finds yours touching."
+        }
+        _ => "You would have done it differently. It would not have listened.",
+    }
+}
+
+/// The `n` games following `name` in `all_games()` order, wrapping around. A rotation
+/// rather than any notion of similarity: it needs no hand-maintained relatedness table,
+/// and it guarantees every game is linked from exactly `n` others, so the internal link
+/// graph is uniform instead of pointing everything at a few favourites.
+fn related_games(name: &str, n: usize) -> Vec<String> {
+    let games = all_games();
+    let Some(pos) = games.iter().position(|game| game == name) else {
+        return Vec::new();
+    };
+    (1..=n)
+        .map(|offset| games[(pos + offset) % games.len()].clone())
+        .filter(|game| game != name)
+        .collect()
+}
+
+/// A dim chevron at the bottom of `.stage` hinting that the page continues below the game
+/// (see `game_page_info`) — with the stage exactly one viewport tall, nothing peeks over
+/// the fold to suggest it on its own. Fades out for good on the first scroll; `once: true`
+/// so it isn't re-hidden on every subsequent scroll event. Must be emitted *inside*
+/// `.stage` (it's positioned against it), which is why this is separate from
+/// `game_page_info` rather than part of it. Hidden with the rest of the below-fold chrome
+/// under `?embed=1`/`?stream=1` — `mode_class_script`'s `hcg-bare` makes those pages
+/// unscrollable, so a "scroll down" hint would be pointing at nothing.
+pub fn scroll_cue() -> Markup {
+    html! {
+        div class="scroll-cue" aria-hidden="true" { "⌄" }
+        script {
+            (PreEscaped(format!(
+                "(function() {{\n\
+                 \x20 var cue = document.querySelector('.scroll-cue');\n\
+                 \x20 if ({HIDE_CHROME_JS}) {{ cue.style.display = 'none'; return; }}\n\
+                 \x20 window.addEventListener('scroll', function() {{\n\
+                 \x20   cue.classList.add('gone');\n\
+                 \x20 }}, {{ once: true, passive: true }});\n\
+                 }})();"
+            )))
+        }
+    }
+}
+
+/// The below-the-fold content section on a game page: an `h1`, the game's description, a
+/// link back to the homepage, and a small grid of related games.
+///
+/// This exists for indexing, not decoration. Before it, a game page's `<body>` was a
+/// `<canvas>`, a hidden hotkey popup and some scripts — no `<a>` at all (so Search
+/// Console reported "Referring page: None detected", i.e. Google knew these URLs only
+/// from the sitemap, never from the link graph) and no text in page flow at all, since
+/// `loading_screen`'s line is painted over the moment the game starts drawing. Every
+/// indexable word lived in `<title>`/`<meta>`/OG tags, which reads as a thin page.
+///
+/// It sits *after* `.stage` (one full viewport of game — see `native_size_style`), so the
+/// game still owns the entire first screen and the page looks exactly as clean as it did;
+/// this is only reachable by scrolling. `?embed=1`/`?stream=1` hide it outright via
+/// `mode_class_script`'s `hcg-bare` class.
+///
+/// The Space-key `preventDefault` is a consequence of the page becoming scrollable at
+/// all: Space is the pause hotkey (`control::Control`), and it's also the browser's
+/// scroll-down key, so pausing used to be free but would now jump the reader a screen
+/// down. `preventDefault` (not `stopPropagation`) leaves the event reaching miniquad's
+/// own listener, so pause still works. Skipped when a button/link has focus, where Space
+/// means "activate this" (e.g. the hotkey popup's own buttons).
+pub fn game_page_info(name: &str) -> Markup {
+    let game_title = title(name);
+    let related = related_games(name, 3);
+    let all_count = all_games().len();
+    html! {
+        section id="about" class="page-info" {
+            a class="home-link" href="../" { "← Hotel Chair Games" }
+            h1 { (game_title) ", played by an AI" }
+            p { (description(name)) }
+            p { (game_flavor(name)) }
+            p {
+                "Nothing to install, nothing to sign up for, nothing to click. "
+                a href="../wall/" { "The ambient wall" }
+                " runs every game at once, if one of them isn't enough."
+            }
+            @if !related.is_empty() {
+                h2 { "More self-playing games" }
+                div class="related" {
+                    @for game in &related {
+                        a href=(format!("../{game}/")) {
+                            img src=(format!("../{game}/preview.png"))
+                                alt=(format!("{} being played by an AI", title(game)))
+                                loading="lazy";
+                            span { (title(game)) }
+                        }
+                    }
+                }
+                p style="margin-top: 1.1rem; font-size: 0.85rem;" {
+                    a href="../" { (format!("← All {all_count} games")) }
+                }
+            }
+        }
+        script {
+            (PreEscaped(
+                "document.addEventListener('keydown', function(e) {\n\
+                 \x20 if (e.key !== ' ') return;\n\
+                 \x20 var tag = (e.target && e.target.tagName) || '';\n\
+                 \x20 if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT') return;\n\
+                 \x20 e.preventDefault();\n\
+                 });"
+            ))
+        }
+    }
+}
+
 /// Registers a miniquad plugin exposing `env.hcg_ga_event` to the wasm module, so
 /// `control::Control::episode_complete` can fire `gtag('event', ...)` calls from Rust.
 /// Must run after `mq_js_bundle.js` (needs its global `miniquad_add_plugin`/`UTF8ToString`)
@@ -520,6 +749,10 @@ pub fn wall_analytics_bridge() -> Markup {
 /// scrolls vertically (see `WALL_STYLE`'s `auto-fit` columns), so vertical distance is
 /// the only axis that matters.
 ///
+/// The tile's own click handler bails out on any click that lands inside an `<a>` — each
+/// tile carries a hover-revealed `.wall-label` link to that game's own page (see
+/// `WALL_STYLE`), and a tap there means "take me to this game", not "mount it here".
+///
 /// Tap-to-mount fires `wall_tile_click` itself rather than relying on
 /// `wall_analytics_bridge`'s blur/`document.activeElement` detection, because that
 /// detection only works once an iframe already exists to receive focus — the whole point
@@ -595,7 +828,8 @@ pub fn wall_live_bridge() -> Markup {
                  \x20\n\
                  \x20 var tiles = document.querySelectorAll('.wall-tile');\n\
                  \x20 tiles.forEach(function(tile) {\n\
-                 \x20   tile.addEventListener('click', function() {\n\
+                 \x20   tile.addEventListener('click', function(e) {\n\
+                 \x20     if (e.target.closest('a')) return;\n\
                  \x20     if (live.has(tile) || budget <= 0) return;\n\
                  \x20     mount(tile);\n\
                  \x20     if (live.has(tile) && window.gtag) {\n\
@@ -918,17 +1152,17 @@ pub fn fullscreen_bridge() -> Markup {
 pub fn description(name: &str) -> String {
     let title = title(name);
     match name {
-        "snake" => "Watch an AI play Snake by itself. A pathfinding bot solves procedurally generated levels live in your browser.".into(),
-        "game2048" => "A self-playing 2048 AI merges tiles with expectimax search, climbing toward the highest tile with no input from you.".into(),
-        "klondike" => "Self-playing Klondike solitaire in your browser. Watch an AI deal, draw, and solve the classic card game automatically.".into(),
-        "spider" => "Self-playing Spider solitaire. An AI clears all 10 columns automatically, cycling through 1-, 2-, and 4-suit variants each round.".into(),
-        "sudoku" => "Self-playing Sudoku. Watch an AI fill in sure cells with logical deduction, showing its candidate notes, before falling back to a guess.".into(),
-        "arrow-blocks" => "A browser puzzle game solved automatically by an AI, sliding arrow-marked blocks through procedurally generated levels.".into(),
-        "minesweeper" => "AI-solved Minesweeper, played automatically in your browser. Cycle between square and hexagonal grids.".into(),
-        "tetris" => "Self-playing Tetris. An AI scores every drop by height, holes, and bumpiness with a known-next-piece lookahead, cycling between 7-bag, classic NES-style, TGM, and pure-random piece generators.".into(),
-        "match-3" => "Self-playing match-3 puzzle. An AI swaps gems to chase score, jelly-clear, and ingredient-collection goals, triggering striped/wrapped/color-bomb combos along the way.".into(),
-        "bubble-shooter" => "Self-playing Bubble Shooter. A beam-search AI aims and fires at a hex-packed wall of bubbles, chasing chain-popping cascades as new rows descend under time pressure.".into(),
-        "water-sort" => "Self-playing Water Sort puzzle. A beam-search AI pours colored liquid between bottles to sort every color, through an endless, ever-harder progression of locked and hidden-bottom bottles.".into(),
+        "snake" => "Snake, played by an AI that refuses to corner itself. Watch it clear level after level while your controller gathers dust.".into(),
+        "game2048" => "2048, played to the end by an AI. It hoards every tile into one corner with total confidence and no input from you.".into(),
+        "klondike" => "Klondike solitaire that deals, plays and wins itself. An AI works through the hand you would have restarted twice.".into(),
+        "spider" => "Spider solitaire, played by an AI through one, two and four suits. Ten columns, no undo button, nothing for you to do.".into(),
+        "sudoku" => "Sudoku solved by an AI, one certain cell at a time. It fills in the grid you would have penciled in wrong.".into(),
+        "arrow-blocks" => "A block puzzle that solves itself. An AI takes apart a heart, a crown and a castle, one arrow at a time.".into(),
+        "minesweeper" => "Minesweeper played by an AI that almost never has to guess. Square grids, hex grids, and no flag you placed by mistake.".into(),
+        "tetris" => "Tetris, played by an AI that never needs the I-piece. It keeps the stack flat and the lines coming while you sit and watch.".into(),
+        "match-3" => "A match-3 puzzle that plays itself. An AI lines up combos you would not have spotted and clears the board without asking.".into(),
+        "bubble-shooter" => "Bubble Shooter played by an AI with better aim than yours. It banks shots into gaps you would never have taken.".into(),
+        "water-sort" => "Water Sort played by an AI that has never needed an undo. It pours a mess of colors back into order, endlessly.".into(),
         _ => format!("Watch an AI play {title} automatically in your browser."),
     }
 }
@@ -1095,5 +1329,92 @@ pub fn social_image(base_url: &str, dist: &Path, preview: Option<&str>) -> Socia
     SocialImage {
         url: format!("{base_url}favicon.svg"),
         twitter_card: "summary",
+    }
+}
+
+/// `application/ld+json` structured data for a game page: a `VideoGame` node plus a
+/// `BreadcrumbList` (Home → this game), as one `@graph` script — Google's preferred shape
+/// over multiple `ld+json` tags on one page. Deliberately omits `genre`: several games on
+/// this site aren't really "Puzzle" (Snake, Tetris, Bubble Shooter) and guessing a genre
+/// per game isn't worth the risk of a wrong one; `applicationCategory: "Game"` is accurate
+/// for all of them instead. `image_url` is the caller's own already-computed
+/// `social_image(...).url` — passed in rather than recomputed, so the favicon/screenshot
+/// fallback chain only runs once per page. Every URL passed in must already be absolute.
+pub fn game_json_ld(
+    base_url: &str,
+    title: &str,
+    description: &str,
+    page_url: &str,
+    image_url: &str,
+) -> Markup {
+    let title = json_escape(title);
+    let description = json_escape(description);
+    let page_url = json_escape(page_url);
+    let image_url = json_escape(image_url);
+    let base_url = json_escape(base_url);
+    let json = format!(
+        r#"{{"@context":"https://schema.org","@graph":[{{"@type":"VideoGame","name":"{title}","description":"{description}","url":"{page_url}","image":"{image_url}","applicationCategory":"Game","operatingSystem":"Web Browser","browserRequirements":"Requires WebAssembly and WebGL","isAccessibleForFree":true,"playMode":"SinglePlayer","publisher":{{"@type":"Organization","name":"Hotel Chair Games","url":"{base_url}"}}}},{{"@type":"BreadcrumbList","itemListElement":[{{"@type":"ListItem","position":1,"name":"Hotel Chair Games","item":"{base_url}"}},{{"@type":"ListItem","position":2,"name":"{title}","item":"{page_url}"}}]}}]}}"#
+    );
+    html! {
+        script type="application/ld+json" {
+            (PreEscaped(json))
+        }
+    }
+}
+
+/// `application/ld+json` for the ambient wall: `CollectionPage` + an `ItemList` naming every
+/// game in grid order. That pairing is the honest description of what the page is — a list
+/// of the site's games, not a game itself — and it's the one page where an `ItemList` is
+/// accurate, which is why neither the homepage nor a game page emits one. `games` is
+/// `(directory name, display title)` pairs; each item's `url` is built from the base URL, so
+/// the list doubles as a machine-readable version of the tile links.
+pub fn wall_json_ld(base_url: &str, games: &[(String, String)]) -> Markup {
+    let items = games
+        .iter()
+        .enumerate()
+        .map(|(i, (name, title))| {
+            format!(
+                r#"{{"@type":"ListItem","position":{},"name":"{}","url":"{}{name}/"}}"#,
+                i + 1,
+                json_escape(title),
+                json_escape(base_url),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let base = json_escape(base_url);
+    let json = format!(
+        r#"{{"@context":"https://schema.org","@graph":[{{"@type":"CollectionPage","name":"Ambient Wall — Hotel Chair Games","url":"{base}wall/","description":"Every self-playing game on this site running at once, one AI per tile.","isPartOf":{{"@type":"WebSite","name":"Hotel Chair Games","url":"{base}"}}}},{{"@type":"ItemList","name":"Self-playing games on Hotel Chair Games","numberOfItems":{},"itemListElement":[{items}]}}]}}"#,
+        games.len()
+    );
+    html! {
+        script type="application/ld+json" {
+            (PreEscaped(json))
+        }
+    }
+}
+
+/// `application/ld+json` for the homepage: a `WebSite` node plus the standalone
+/// `Organization` node — `name`/`url`/`logo` on the latter are what Google actually uses to
+/// build a Knowledge Graph brand entity, so those three fields are the point of this
+/// function. `logo` follows the same exists-or-skip PNG-over-SVG fallback
+/// `favicon_links`/`social_image` already use, since a bare SVG isn't reliably rendered by
+/// every consumer of this data the way a raster PNG is.
+pub fn homepage_json_ld(base_url: &str, dist: &Path, description: &str) -> Markup {
+    let logo_url = if dist.join("favicon.png").exists() {
+        format!("{base_url}favicon.png")
+    } else {
+        format!("{base_url}favicon.svg")
+    };
+    let base_url = json_escape(base_url);
+    let description = json_escape(description);
+    let logo_url = json_escape(&logo_url);
+    let json = format!(
+        r#"{{"@context":"https://schema.org","@graph":[{{"@type":"WebSite","name":"Hotel Chair Games","url":"{base_url}","description":"{description}","publisher":{{"@type":"Organization","name":"Hotel Chair Games","url":"{base_url}","logo":"{logo_url}"}}}},{{"@type":"Organization","name":"Hotel Chair Games","url":"{base_url}","logo":"{logo_url}"}}]}}"#
+    );
+    html! {
+        script type="application/ld+json" {
+            (PreEscaped(json))
+        }
     }
 }

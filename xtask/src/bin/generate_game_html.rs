@@ -3,10 +3,10 @@ use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
-    favicon_links, fullscreen_bridge, gtag_head, hotkey_popup, loading_screen, manifest_json,
-    native_size_style, orientation_hint, pwa_head, screenshot_bridge, session_signals_bridge,
-    share_result_bridge, social_image, stream_mode_query_bridge, sw_register_bridge, title,
-    variant_query_bridge,
+    favicon_links, fullscreen_bridge, game_json_ld, game_page_info, gtag_head, hotkey_popup,
+    loading_screen, manifest_json, native_size_style, orientation_hint, pwa_head,
+    screenshot_bridge, scroll_cue, session_signals_bridge, share_result_bridge, social_image,
+    stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
 };
 
 fn main() {
@@ -32,22 +32,32 @@ fn main() {
                 meta name="description" content=(description);
                 link rel="canonical" href=(page_url);
                 meta property="og:type" content="website";
+                meta property="og:site_name" content="Hotel Chair Games";
+                meta property="og:locale" content="en_US";
                 meta property="og:title" content=(format!("{title} — Hotel Chair Games"));
                 meta property="og:description" content=(description);
                 meta property="og:url" content=(page_url);
                 meta property="og:image" content=(og.url);
+                meta property="og:image:alt" content=(format!("{title} being played automatically by an AI"));
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
                 link rel="preload" href=(format!("{name}.wasm")) as="fetch" crossorigin="anonymous";
+                (game_json_ld(&base_url, &title, &description, &page_url, &og.url))
                 (gtag_head())
                 (pwa_head("#000000"))
                 (native_size_style(&name))
             }
             body {
-                main {
-                    (loading_screen())
-                    canvas id="glcanvas" tabindex="0" {}
+                // One full viewport of game, then the content section below the fold —
+                // see `native_size_style`'s `.stage` and `game_page_info`.
+                div class="stage" {
+                    main {
+                        (loading_screen())
+                        canvas id="glcanvas" tabindex="0" {}
+                    }
+                    (scroll_cue())
                 }
+                (game_page_info(&name))
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
                 (session_signals_bridge(&name))
