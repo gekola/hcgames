@@ -328,6 +328,11 @@ pub fn hotkey_popup(name: &str) -> Markup {
 /// under `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`) — a tiny ambient-wall iframe
 /// tile's own viewport dimensions are a meaningless orientation signal, and an OBS/Twitch
 /// browser-source layer has no visitor around to rotate anything for either way.
+///
+/// An orientation *mismatch* alone is not enough to show it: that condition is satisfied
+/// by an ordinary landscape desktop window opening a portrait game (tetris,
+/// bubble-shooter, game2048), which told every desktop visitor to rotate a device they
+/// can't. The banner is now gated on the viewport belonging to something rotatable at all.
 pub fn orientation_hint(name: &str) -> Markup {
     let (w, h) = native_size(name);
     let game_is_landscape = w > h;
@@ -356,7 +361,14 @@ pub fn orientation_hint(name: &str) -> Markup {
                  \x20 var key = '{dismiss_key}';\n\
                  \x20 var gameIsLandscape = {game_is_landscape};\n\
                  \x20 var el = document.getElementById('rotate-hint');\n\
+                 \x20 // Only a device someone can physically rotate. `pointer: coarse` is the\n\
+                 \x20 // primary-input test, so a touchscreen laptop driven by a trackpad is\n\
+                 \x20 // excluded; maxTouchPoints then rules out a desktop browser that reports\n\
+                 \x20 // a coarse pointer anyway (headless Chrome does).\n\
+                 \x20 var canRotate = window.matchMedia('(pointer: coarse)').matches\n\
+                 \x20   && navigator.maxTouchPoints > 0;\n\
                  \x20 function check() {{\n\
+                 \x20   if (!canRotate) return;\n\
                  \x20   if (sessionStorage.getItem(key)) {{ el.classList.remove('show'); return; }}\n\
                  \x20   var viewportIsPortrait = window.innerHeight > window.innerWidth;\n\
                  \x20   el.classList.toggle('show', viewportIsPortrait === gameIsLandscape);\n\
