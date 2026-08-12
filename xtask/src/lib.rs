@@ -1203,16 +1203,24 @@ pub fn gtag_head() -> Markup {
     }
 }
 
-/// `<link rel="icon">` tags: the SVG always, plus the rasterized PNG (see `mise run
-/// rasterize`) when present. Falls back to SVG-only locally, where rasterization is
-/// skipped without resvg.
+/// `<link rel="icon">` tags: the SVG always, plus the rasterized PNG and the
+/// apple-touch-icon (see `mise run rasterize`) when present. Falls back to SVG-only
+/// locally, where rasterization is skipped without resvg.
+///
+/// `dist/favicon.ico` deliberately has no tag here — nothing links to it; it exists
+/// purely because browsers and Googlebot-Image request that root path unconditionally,
+/// and used to get a 404 for it on every crawl.
 pub fn favicon_links(base_url: &str, dist: &Path) -> Markup {
     let svg_url = format!("{base_url}favicon.svg");
     let has_png = dist.join("favicon.png").exists();
+    let has_apple_touch = dist.join("apple-touch-icon.png").exists();
     html! {
         link rel="icon" href=(svg_url) type="image/svg+xml";
         @if has_png {
             link rel="icon" href=(format!("{base_url}favicon.png")) type="image/png" sizes="192x192";
+        }
+        @if has_apple_touch {
+            link rel="apple-touch-icon" href=(format!("{base_url}apple-touch-icon.png")) sizes="180x180";
         }
     }
 }

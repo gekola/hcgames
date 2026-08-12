@@ -87,7 +87,7 @@ fi
 
 # Rasterize SVG art to PNG: mise run rasterize
 [tasks.rasterize]
-description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG (needs resvg or rsvg-convert; runs automatically in CI, skipped locally if neither is available; skips per-file if already up to date)"
+description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG, plus favicon.ico and apple-touch-icon.png (needs resvg or rsvg-convert; runs automatically in CI, skipped locally if neither is available; skips per-file if already up to date)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -122,6 +122,37 @@ fi
 # variant so Android/adaptive-icon installs don't letterbox-crop the artwork.
 if [ ! -f dist/icon-512-maskable.png ] || [ static/favicon-maskable.svg -nt dist/icon-512-maskable.png ]; then
     svg_to_png static/favicon-maskable.svg dist/icon-512-maskable.png 512 512
+fi
+# /apple-touch-icon.png: iOS requests this path directly when a page is added to the home
+# screen, on top of any <link rel="apple-touch-icon"> favicon_links emits, and crawlers
+# probe for it too. Sourced from the maskable variant, not favicon.svg — iOS composites a
+# transparent icon onto black and applies its own rounded-square mask, so an opaque,
+# safe-zone-padded source is the one that survives both.
+if [ ! -f dist/apple-touch-icon.png ] || [ static/favicon-maskable.svg -nt dist/apple-touch-icon.png ]; then
+    svg_to_png static/favicon-maskable.svg dist/apple-touch-icon.png 180 180
+fi
+# /favicon.ico: browsers and Googlebot-Image request this exact path unconditionally,
+# whatever <link rel="icon"> tags the page carries — 2 of the 21 requests in the
+# 2026-08-10 Search Console crawl-stats export were 404s on this and apple-touch-icon.png.
+# Built as a 32x32 PNG inside a 22-byte ICO container (the Vista+ PNG-compressed form,
+# read by every current browser) so it needs no encoder beyond the rasterizer above.
+if command -v python3 >/dev/null 2>&1; then
+    if [ ! -f dist/favicon.ico ] || [ static/favicon.svg -nt dist/favicon.ico ]; then
+        ico_src="$(mktemp -t hcg-favicon-XXXXXX.png)"
+        svg_to_png static/favicon.svg "$ico_src" 32 32
+        python3 - "$ico_src" dist/favicon.ico <<'PY'
+import struct, sys
+
+png = open(sys.argv[1], "rb").read()
+# ICONDIR(reserved, type=icon, count) + ICONDIRENTRY(w, h, palette, reserved, planes,
+# bpp, byte length, offset past this 22-byte header).
+header = struct.pack("<HHHBBBBHHII", 0, 1, 1, 32, 32, 0, 0, 1, 32, len(png), 22)
+open(sys.argv[2], "wb").write(header + png)
+PY
+        rm -f "$ico_src"
+    fi
+else
+    echo "python3 not found — skipping dist/favicon.ico (runs automatically in CI)" >&2
 fi
 """
 
