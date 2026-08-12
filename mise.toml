@@ -249,6 +249,7 @@ mise run clip tetris
 mise run clip bubble-shooter --level 3
 mise run clip minesweeper --variant hex
 mise run clip match-3 --variant score
+mise run clip game2048
 mise run generate-index
 """
 
