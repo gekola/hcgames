@@ -41,7 +41,17 @@ generate_index`, run from the repo root so relative `dist/`/`static/` paths reso
 
 Raw JS/CSS embedded in a page (the homepage's canvas art script, stylesheets) must be
 wrapped in `maud::PreEscaped(...)` — maud auto-escapes plain text nodes, which would mangle
-`<`/`&`/quotes inside a `<script>`/`<style>` block otherwise.
+`<`/`&`/quotes inside a `<script>`/`<style>` block otherwise. Every `<script>` block's JS
+content (not `<style>`/CSS, and not the compact single-line JSON-LD `PreEscaped` calls)
+should additionally go through `xtask::minify_js` before `PreEscaped` — backed by the
+`minifier` crate (whitespace/comments only, no mangling; `minify-js`, a real AST minifier,
+was tried first and panics on ordinary top-level `if` statements in both its modes, see
+`minify_js`'s doc comment). Source itself stays hand-formatted/commented for readability —
+only the emitted string is minified. Because each `<script>` block is minified
+independently, a bare top-level `function`/`var` name declared in one block can't safely be
+referenced by name from another (`window.fitCanvas`, `window.__hcgHide` are the pattern to
+follow instead) — `minifier` doesn't mangle names today so this isn't a live bug, but keep
+doing it anyway in case that ever changes.
 
 There's no per-game dev HTML template or Trunk setup — `mise run build-wasm <name>` (which
 runs `xtask`) is the only way to get a browser-testable page, so there's a single source of
