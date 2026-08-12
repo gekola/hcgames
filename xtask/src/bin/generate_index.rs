@@ -1445,20 +1445,40 @@ const QUOTES: &[(&str, &str)] = &[
     ),
 ];
 
-/// `game-card img`'s responsive tier: `dist/<game>/preview-small.png` (produced by
-/// `mise run screenshot`, see xtask's `resize_preview` binary) is a downscaled variant for
-/// small/mobile cards — absent for games whose native preview is already small enough
-/// (game2048), in which case the plain `src` alone is used, no `srcset`.
+/// `game-card img`'s responsive `srcset`: every `dist/<game>/preview-<w>.png` tier that
+/// exists, plus the full-size `preview.png` as the largest candidate. The widths are
+/// per-game — `resize_preview` derives them as exact fractions of each game's native
+/// preview rather than from a fixed list (see TIER_FRACTIONS there) — so they're read back
+/// off disk instead of being hardcoded here. A game with no tiers at all gets a plain
+/// `src` and no `srcset`.
+///
+/// Before this was tiered, the only variant was a single 640w one, which a 1x desktop
+/// pulled for a 226px-wide box — PageSpeed put the resulting waste at 132 KiB across the
+/// grid, the largest item on the page. Three games (tetris, bubble-shooter, game2048) got
+/// no `srcset` at all, their native previews being narrower than 640.
 fn preview_srcset(dist: &Path, game: &str) -> Option<String> {
-    let small = dist.join(game).join("preview-small.png");
-    if !small.exists() {
+    let dir = dist.join(game);
+    let mut widths: Vec<u32> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name().into_string().ok()?;
+            name.strip_prefix("preview-")?
+                .strip_suffix(".png")?
+                .parse::<u32>()
+                .ok()
+        })
+        .collect();
+    if widths.is_empty() {
         return None;
     }
-    let (small_w, _) = image::image_dimensions(&small).unwrap();
-    let (full_w, _) = image::image_dimensions(dist.join(game).join("preview.png")).unwrap();
-    Some(format!(
-        "{game}/preview-small.png {small_w}w, {game}/preview.png {full_w}w"
-    ))
+    widths.sort_unstable();
+    let mut entries: Vec<String> = widths
+        .iter()
+        .map(|w| format!("{game}/preview-{w}.png {w}w"))
+        .collect();
+    let (full_w, _) = image::image_dimensions(dir.join("preview.png")).unwrap();
+    entries.push(format!("{game}/preview.png {full_w}w"));
+    Some(entries.join(", "))
 }
 
 fn main() {
@@ -1575,10 +1595,17 @@ fn main() {
                     div class="game-grid" {
                         @for game in &games {
                             a class="game-card" href=(format!("{game}/")) {
+                                // 224px, though a card actually lays out at 226 — a browser
+                                // picks the first candidate at least as wide as the
+                                // density-adjusted need, so declaring the true 226 would put
+                                // a 2x display at 452 and skip straight past the 450w tier to
+                                // the full-size preview. Under-declaring by 2px keeps a 900px
+                                // game on its 225w tier at 1x and its 450w tier at 2x; the ~1%
+                                // shortfall against the real box is not visible.
                                 @let srcset = preview_srcset(dist, game);
                                 img src=(format!("{game}/preview.png"))
                                     srcset=[srcset.clone()]
-                                    sizes=[srcset.is_some().then_some("(max-width: 1010px) 48vw, 228px")]
+                                    sizes=[srcset.is_some().then_some("(max-width: 1010px) 48vw, 224px")]
                                     alt=(title(game)) loading="lazy";
                                 div class="card-body" {
                                     h3 { (title(game)) }

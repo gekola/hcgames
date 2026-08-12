@@ -68,7 +68,7 @@ fi
 
 # Capture a representative in-game screenshot: mise run screenshot snake
 [tasks.screenshot]
-description = "Capture dist/<name>/preview.png (+ a resized preview-small.png for the mobile srcset tier) by running the native build headless for a few seconds (needs xvfb-run; runs automatically in CI, skipped locally if unavailable)"
+description = "Capture dist/<name>/preview.png (+ resized preview-<w>.png srcset tiers) by running the native build headless for a few seconds (needs xvfb-run; runs automatically in CI, skipped locally if unavailable)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
@@ -76,10 +76,16 @@ name=$1
 mkdir -p "dist/$name"
 if command -v xvfb-run >/dev/null 2>&1; then
     HCG_SEED=42 HCG_SCREENSHOT="dist/$name/preview.png" xvfb-run -a cargo run --release --bin "$name"
-    # Small tier for the game-grid card srcset (see generate_index.rs) — the full-size
-    # preview.png stays untouched so hidpi/desktop/TV displays still get a crisp image.
+    # Responsive tiers for the game-grid card srcset (see generate_index.rs's
+    # preview_srcset) — one invocation writes all of them, since the widths are fractions
+    # of this game's own preview rather than a fixed list (see resize_preview's
+    # TIER_FRACTIONS). The full-size preview.png stays untouched: the wall and the OG image
+    # both use it. Stale tiers are cleared first, or a width that's no longer generated
+    # would linger in dist/ (which persists between local runs) and be picked up by the
+    # srcset, since that reads whatever preview-<w>.png files it finds.
+    rm -f "dist/$name"/preview-small.png "dist/$name"/preview-[0-9]*.png
     cargo run --release --package xtask --bin resize_preview -- \
-        "dist/$name/preview.png" "dist/$name/preview-small.png" 640
+        "dist/$name/preview.png" "dist/$name"
 else
     echo "xvfb-run not found — skipping screenshot for $name (runs automatically in CI)" >&2
 fi
