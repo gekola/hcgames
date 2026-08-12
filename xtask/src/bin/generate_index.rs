@@ -14,9 +14,11 @@ use xtask::{
 /// weight, and it's deliberately worded differently.
 const SITE_DESCRIPTION: &str = "Just games. No player needed. Zero-player browser games where AI bots solve Snake, 2048, Klondike, Minesweeper and more, live.";
 
-/// The visible pitch under the homepage header. Unlike `SITE_DESCRIPTION` this is real body
-/// text, which *is* a ranking input — so it carries both category phrasings the site should
-/// own ("zero-player", "play themselves") while opening in the site's own voice.
+/// The visible pitch on the homepage, under the "games" heading. Unlike `SITE_DESCRIPTION`
+/// this is real body text, which *is* a ranking input — so it carries both category
+/// phrasings the site should own ("zero-player", "play themselves") while opening in the
+/// site's own voice. It sat in the header until that grew to h1 + kicker + three lines +
+/// link; keep it somewhere on the page, wherever it goes.
 const SITE_PITCH: &str = "Just games. No player needed. Free zero-player browser games that play themselves — AI bots solve Snake, 2048, Klondike and more, live.";
 
 // Archivo is only ever used at its default weight (400) — the STYLE block never sets
@@ -89,12 +91,15 @@ header .kicker {
   opacity: 0.85;
 }
 
-/* Sits between the kicker's one-liner and the wall link, so it reads as the explanation that
-   follows the joke rather than competing with it: normal weight, dimmer than body text, and
-   width-capped so it stays two or three short lines instead of one wide banner. */
-header .pitch {
-  margin: 0.9rem auto 0;
-  max-width: 46ch;
+/* Sits under the "games" heading rather than in the header. It used to follow the kicker,
+   which stacked h1 + joke + three lines of prose + link before the page showed anything —
+   too tall a wall of text to open on. Down here it introduces the grid it describes, and
+   since it's still real body text on the page its ranking weight is unchanged (which is why
+   it was moved rather than cut; see SITE_PITCH). Left-aligned to the grid, not centred like
+   the header. No max-width: it was capped when it sat in the header stack, where a wide
+   banner of prose competed with the h1 — down here it just runs the grid's own width. */
+.games .pitch {
+  margin: -0.4rem 0 1.2rem;
   font-size: 0.85rem;
   line-height: 1.65;
   color: var(--text-dim);
@@ -1560,7 +1565,6 @@ fn main() {
                 header class="fade-up" {
                     h1 { "Hotel Chair Games" }
                     p class="kicker" { "The bed is taken. Sit anyway." }
-                    p class="pitch" { (SITE_PITCH) }
                     a class="wall-link" href="wall/" { "→ leave the whole wall running" }
                 }
                 main class="main" {
@@ -1592,6 +1596,7 @@ fn main() {
                 }
                 section class="games fade-up" {
                     h2 { "games" }
+                    p class="pitch" { (SITE_PITCH) }
                     div class="game-grid" {
                         @for game in &games {
                             a class="game-card" href=(format!("{game}/")) {
