@@ -2,8 +2,9 @@
 use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
-    base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json, pwa_head,
-    social_image, sw_register_bridge, title, wall_analytics_bridge, wall_json_ld, wall_live_bridge,
+    base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json, minify_js,
+    pwa_head, social_image, sw_register_bridge, title, wall_analytics_bridge, wall_json_ld,
+    wall_live_bridge,
 };
 
 /// Feeds `meta description`, `og:description`, the PWA manifest's `description` and the
@@ -1620,8 +1621,8 @@ fn main() {
                         }
                     }
                 }
-                script { (PreEscaped(HOTEL_SCENE_SCRIPT)) }
-                script { (PreEscaped(postcard_script(QUOTES, &tilts))) }
+                script { (PreEscaped(minify_js(HOTEL_SCENE_SCRIPT))) }
+                script { (PreEscaped(minify_js(&postcard_script(QUOTES, &tilts)))) }
                 (sw_register_bridge("./sw.js"))
             }
         }

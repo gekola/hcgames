@@ -1,6 +1,28 @@
 use maud::{Markup, PreEscaped, html};
 use std::path::Path;
 
+/// Minifies an embedded JS `<script>` body via the `minifier` crate — comments and
+/// whitespace stripped through a real tokenizer, not a hand-rolled regex, so it's safe
+/// around the `//` inside `gtag_head`'s `https://...` string literal, comments like
+/// `orientation_hint`'s pointer-detection rationale, etc. Source stays
+/// hand-formatted/commented in this file for readability; every `script` block's JS
+/// content should be wrapped in this before `PreEscaped`.
+///
+/// Deliberately *not* `minify-js` (a real AST-based minifier, tried first): 0.6.0 panics
+/// building the page for every single game, from two separate internal bugs — `Global`
+/// mode's `Option::unwrap()` on `None` on any top-level `if` statement at all (reproduced
+/// down to `minify(&session, TopLevelMode::Global, b"if (x) { y(); }", ...)`), and
+/// `Module` mode's `assertion failed: cons_expr.returns && alt_expr.returns` on an
+/// `if`/`else` where a branch doesn't end in `return`. `minifier` only strips
+/// comments/whitespace — no control-flow rewriting, no identifier mangling — so it can't
+/// hit either class of bug, and (unlike `Module` mode's mangling) never risks breaking a
+/// bare top-level name one `<script>` block relies on another to declare.
+pub fn minify_js(src: &str) -> String {
+    minifier::js::minify(src)
+        .unwrap_or_else(|e| panic!("failed to minify JS: {e}\n---\n{src}"))
+        .to_string()
+}
+
 /// `GITHUB_REPOSITORY` ("owner/repo") is auto-set by GitHub Actions; matches the default
 /// Pages URL when no custom domain (CNAME) is set. `BASE_URL` always overrides.
 ///
@@ -130,59 +152,63 @@ pub fn native_size_style(name: &str) -> Markup {
         }
         (mode_class_script())
         script {
-            (PreEscaped(format!(
-                "function fitCanvas() {{\n\
+            (PreEscaped(minify_js(&format!(
+                "window.fitCanvas = function() {{\n\
                  \x20 const k = Math.min(window.innerWidth / {w}, window.innerHeight / {h}, {max_scale});\n\
                  \x20 document.querySelectorAll('canvas, .loading').forEach(function(el) {{\n\
                  \x20   el.style.transform = `scale(${{k}})`;\n\
                  \x20 }});\n\
-                 }}\n\
-                 window.addEventListener('resize', fitCanvas);\n\
-                 document.addEventListener('DOMContentLoaded', fitCanvas);"
-            )))
+                 }};\n\
+                 window.addEventListener('resize', window.fitCanvas);\n\
+                 document.addEventListener('DOMContentLoaded', window.fitCanvas);"
+            ))))
         }
     }
 }
 
-/// Two classes on `<html>`, both set before first paint:
+/// Two classes on `<html>`, both set before first paint, plus `window.__hcgHide` — `true`
+/// under either query param that asks a per-game page to hide chrome meant for a human
+/// visitor (`?embed=1`, the ambient wall's tiles, too small for a 48px popup button to make
+/// sense on; or `?stream=1`, an OBS/Twitch browser-source layer, where the same button
+/// would show up on stream for no reason) — every later script that needs that check
+/// (`hotkey_popup`, `orientation_hint`, `scroll_cue`, `session_signals_bridge`,
+/// `daily_challenge_button`) reads this instead of recomputing it, since `native_size_style`
+/// (and this script with it) always runs before any of them:
 ///
 /// - `stream-mode` under `?stream=1`, for `native_size_style`'s transparent-background
 ///   rule to key off.
-/// - `hcg-bare` under `?embed=1` *or* `?stream=1` (see `HIDE_CHROME_JS`), which restores
-///   the old non-scrolling `height: 100%; overflow: hidden` page and hides
-///   `game_page_info`'s below-the-fold content entirely. An ambient-wall tile is an iframe
-///   a few hundred px tall — letting it scroll to a text section would be actively wrong
-///   there (and on an OBS browser source there's nobody to scroll it), so both those modes
-///   keep exactly the single-screen canvas page they had before that section existed.
+/// - `hcg-bare` under `window.__hcgHide`, which restores the old non-scrolling
+///   `height: 100%; overflow: hidden` page and hides `game_page_info`'s below-the-fold
+///   content entirely. An ambient-wall tile is an iframe a few hundred px tall — letting it
+///   scroll to a text section would be actively wrong there (and on an OBS browser source
+///   there's nobody to scroll it), so both those modes keep exactly the single-screen
+///   canvas page they had before that section existed.
 ///
 /// A synchronous script (not deferred to `DOMContentLoaded`) so the classes land before
 /// first paint — `document.documentElement` already exists as soon as the parser reaches
 /// the `<html>` start tag, well before `<body>`/the canvas/the WASM fetch. Deferring
 /// `hcg-bare` in particular would let a wall tile paint one scrollable frame first.
+///
+/// `window.__hcgHide` is computed once here and read as a plain variable everywhere else,
+/// rather than each site re-running its own `(function() {{...}}())` IIFE inline — one
+/// `URLSearchParams` parse instead of six, and one place to get the `?embed=1`/`?stream=1`
+/// logic right instead of six copies of it.
 fn mode_class_script() -> Markup {
     html! {
         script {
-            (PreEscaped(format!(
-                "if (new URLSearchParams(location.search).get('stream') === '1') {{\n\
+            (PreEscaped(minify_js(
+                "var hcgQs = new URLSearchParams(location.search);\n\
+                 if (hcgQs.get('stream') === '1') {\n\
                  \x20 document.documentElement.classList.add('stream-mode');\n\
-                 }}\n\
-                 if ({HIDE_CHROME_JS}) {{\n\
+                 }\n\
+                 window.__hcgHide = hcgQs.get('embed') === '1' || hcgQs.get('stream') === '1';\n\
+                 if (window.__hcgHide) {\n\
                  \x20 document.documentElement.classList.add('hcg-bare');\n\
-                 }}"
+                 }"
             )))
         }
     }
 }
-
-/// True under either query param that asks a per-game page to hide chrome meant for a
-/// human visitor — `?embed=1` (the ambient wall, `generate_index`'s `wall_page`, tiles
-/// too small for a 48px popup button to make sense on) or `?stream=1` (an OBS/Twitch
-/// browser-source layer, where the same button would show up on stream for no reason).
-/// Shared by `hotkey_popup` and `orientation_hint`, the two things that check it.
-const HIDE_CHROME_JS: &str = "(function() {\n\
-     \x20 var qs = new URLSearchParams(location.search);\n\
-     \x20 return qs.get('embed') === '1' || qs.get('stream') === '1';\n\
-     }())";
 
 /// Sarcastic one-liner shown behind the canvas while the WASM module fetches/inits.
 /// Same "watch, don't judge" tone as the homepage quotes. Sits in the same CSS grid
@@ -255,13 +281,13 @@ font-size: 18px; line-height: 32px; text-align: center; padding: 0; cursor: poin
 /// than being drawn by the game itself. Hotkeys listed here must match what
 /// `control::Control` actually reads (`=`/`-`/`0`/`Space`/`F`), plus any per-game hotkey
 /// the game's own `main.rs` reads directly (e.g. `V`). Hidden instead under `?embed=1`/
-/// `?stream=1` (see `HIDE_CHROME_JS`) — a 48px popup button is visual clutter on an
-/// ambient-wall tile or an OBS/Twitch browser-source layer. The panel also carries a
-/// `?stream=1` link — otherwise stream mode is an undocumented URL param nobody would
-/// ever find — so a streamer can turn it on from the same place they'd already look for
-/// controls, without needing to know the query param exists ahead of time; clicking it
-/// reloads into stream mode immediately, which also doubles as a live preview before they
-/// copy the URL into OBS.
+/// `?stream=1` (see `mode_class_script`'s `window.__hcgHide`) — a 48px popup button is
+/// visual clutter on an ambient-wall tile or an OBS/Twitch browser-source layer. The panel
+/// also carries a `?stream=1` link — otherwise stream mode is an undocumented URL param
+/// nobody would ever find — so a streamer can turn it on from the same place they'd
+/// already look for controls, without needing to know the query param exists ahead of
+/// time; clicking it reloads into stream mode immediately, which also doubles as a live
+/// preview before they copy the URL into OBS.
 pub fn hotkey_popup(name: &str) -> Markup {
     let has_variant_switch = matches!(
         name,
@@ -297,21 +323,21 @@ pub fn hotkey_popup(name: &str) -> Markup {
             }
         }
         script {
-            (PreEscaped(format!(
-                "if ({HIDE_CHROME_JS}) {{\n\
+            (PreEscaped(minify_js(
+                "if (window.__hcgHide) {\n\
                  \x20 document.getElementById('hotkeys-btn').style.display = 'none';\n\
-                 }} else {{\n\
-                 \x20 document.addEventListener('keydown', function(e) {{\n\
+                 } else {\n\
+                 \x20 document.addEventListener('keydown', function(e) {\n\
                  \x20   if (e.key === '?') document.getElementById('hotkeys').classList.toggle('open');\n\
                  \x20   else if (e.key === 'Escape') document.getElementById('hotkeys').classList.remove('open');\n\
-                 \x20 }});\n\
-                 \x20 document.getElementById('hotkeys-btn').addEventListener('click', function() {{\n\
+                 \x20 });\n\
+                 \x20 document.getElementById('hotkeys-btn').addEventListener('click', function() {\n\
                  \x20   document.getElementById('hotkeys').classList.toggle('open');\n\
-                 \x20 }});\n\
-                 \x20 document.getElementById('hotkeys-close').addEventListener('click', function() {{\n\
+                 \x20 });\n\
+                 \x20 document.getElementById('hotkeys-close').addEventListener('click', function() {\n\
                  \x20   document.getElementById('hotkeys').classList.remove('open');\n\
-                 \x20 }});\n\
-                 }}"
+                 \x20 });\n\
+                 }"
             )))
         }
     }
@@ -319,14 +345,15 @@ pub fn hotkey_popup(name: &str) -> Markup {
 
 /// A dismissible banner nudging a visitor to rotate their device when the viewport's
 /// orientation doesn't match this game's native one (e.g. a 900x720 landscape game
-/// opened on a portrait phone) — the `fitCanvas` scale-to-fit in `native_size_style`
+/// opened on a portrait phone) — the `window.fitCanvas` scale-to-fit in `native_size_style`
 /// already handles this case technically (it just shrinks the canvas further to fit),
 /// but on a badly-mismatched orientation that can leave the game a small fraction of the
 /// screen. Pure page-level HTML/CSS/JS, same pattern as `hotkey_popup`/`screenshot_bridge`.
 /// Dismissal is per-`sessionStorage` (not persisted across visits) so it can nudge again
 /// next session rather than being silenced forever after one tap. Never shown at all
-/// under `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`) — a tiny ambient-wall iframe
-/// tile's own viewport dimensions are a meaningless orientation signal, and an OBS/Twitch
+/// under `?embed=1`/`?stream=1` (see `mode_class_script`'s `window.__hcgHide`) — a tiny
+/// ambient-wall iframe tile's own viewport dimensions are a meaningless orientation
+/// signal, and an OBS/Twitch
 /// browser-source layer has no visitor around to rotate anything for either way.
 ///
 /// An orientation *mismatch* alone is not enough to show it: that condition is satisfied
@@ -355,9 +382,9 @@ pub fn orientation_hint(name: &str) -> Markup {
             button id="rotate-hint-close" aria-label="Dismiss" { "×" }
         }
         script {
-            (PreEscaped(format!(
+            (PreEscaped(minify_js(&format!(
                 "(function() {{\n\
-                 \x20 if ({HIDE_CHROME_JS}) return;\n\
+                 \x20 if (window.__hcgHide) return;\n\
                  \x20 var key = '{dismiss_key}';\n\
                  \x20 var gameIsLandscape = {game_is_landscape};\n\
                  \x20 var el = document.getElementById('rotate-hint');\n\
@@ -381,7 +408,7 @@ pub fn orientation_hint(name: &str) -> Markup {
                  \x20 }});\n\
                  \x20 check();\n\
                  }})();"
-            )))
+            ))))
         }
     }
 }
@@ -507,14 +534,14 @@ pub fn scroll_cue() -> Markup {
     html! {
         div class="scroll-cue" aria-hidden="true" { "⌄" }
         script {
-            (PreEscaped(format!(
-                "(function() {{\n\
+            (PreEscaped(minify_js(
+                "(function() {\n\
                  \x20 var cue = document.querySelector('.scroll-cue');\n\
-                 \x20 if ({HIDE_CHROME_JS}) {{ cue.style.display = 'none'; return; }}\n\
-                 \x20 window.addEventListener('scroll', function() {{\n\
+                 \x20 if (window.__hcgHide) { cue.style.display = 'none'; return; }\n\
+                 \x20 window.addEventListener('scroll', function() {\n\
                  \x20   cue.classList.add('gone');\n\
-                 \x20 }}, {{ once: true, passive: true }});\n\
-                 }})();"
+                 \x20 }, { once: true, passive: true });\n\
+                 })();"
             )))
         }
     }
@@ -574,14 +601,14 @@ pub fn game_page_info(name: &str) -> Markup {
             }
         }
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "document.addEventListener('keydown', function(e) {\n\
                  \x20 if (e.key !== ' ') return;\n\
                  \x20 var tag = (e.target && e.target.tagName) || '';\n\
                  \x20 if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT') return;\n\
                  \x20 e.preventDefault();\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -601,7 +628,7 @@ pub fn game_page_info(name: &str) -> Markup {
 pub fn analytics_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "miniquad_add_plugin({\n\
                  \x20 register_plugin: function(importObject) {\n\
                  \x20   importObject.env.hcg_ga_event = function(namePtr, nameLen, paramsPtr, paramsLen) {\n\
@@ -616,7 +643,7 @@ pub fn analytics_bridge() -> Markup {
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_analytics\"\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -646,18 +673,19 @@ pub fn analytics_bridge() -> Markup {
 /// sent while a page is going away. Passing it here would just ride along as a junk custom
 /// event parameter and show up as one in reports.
 ///
-/// Suppressed entirely under `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`): the wall
-/// (`generate_index`'s `wall_page`) runs up to 11 of these pages at once in iframes, and
-/// a `game_switch`/`session_end` from every tile on every wall view would flood the
+/// Suppressed entirely under `?embed=1`/`?stream=1` (see `mode_class_script`'s
+/// `window.__hcgHide`): the wall (`generate_index`'s `wall_page`) runs up to 11 of these
+/// pages at once in iframes, and a `game_switch`/`session_end` from every tile on every
+/// wall view would flood the
 /// property with events nobody could use — the wall has its own, separate signal
 /// (`wall_analytics_bridge`). Dropped instead of sent when `window.gtag` is undefined
 /// (GTAG_ID unset locally), same convention as every other bridge here.
 pub fn session_signals_bridge(name: &str) -> Markup {
     html! {
         script {
-            (PreEscaped(format!(
+            (PreEscaped(minify_js(&format!(
                 "(function() {{\n\
-                 \x20 if ({HIDE_CHROME_JS}) return;\n\
+                 \x20 if (window.__hcgHide) return;\n\
                  \x20 var GAME = \"{name}\";\n\
                  \x20 var prev = sessionStorage.getItem('hcg_last_game');\n\
                  \x20 if (prev && prev !== GAME && window.gtag) {{\n\
@@ -682,7 +710,7 @@ pub fn session_signals_bridge(name: &str) -> Markup {
                  \x20 }});\n\
                  \x20 window.addEventListener('pagehide', sendSessionEnd);\n\
                  }})();"
-            )))
+            ))))
         }
     }
 }
@@ -705,7 +733,7 @@ pub fn session_signals_bridge(name: &str) -> Markup {
 pub fn wall_analytics_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "(function() {\n\
                  \x20 if (window.gtag) window.gtag('event', 'wall_view', {});\n\
                  \x20 window.addEventListener('blur', function() {\n\
@@ -717,7 +745,7 @@ pub fn wall_analytics_bridge() -> Markup {
                  \x20   }, 0);\n\
                  \x20 });\n\
                  })();"
-            ))
+            )))
         }
     }
 }
@@ -777,7 +805,7 @@ pub fn wall_analytics_bridge() -> Markup {
 pub fn wall_live_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "(function() {\n\
                  \x20 var reduceMotion = window.matchMedia &&\n\
                  \x20   window.matchMedia('(prefers-reduced-motion: reduce)').matches;\n\
@@ -860,7 +888,7 @@ pub fn wall_live_bridge() -> Markup {
                  \x20   tiles.forEach(function(tile) { io.observe(tile); });\n\
                  \x20 }\n\
                  })();"
-            ))
+            )))
         }
     }
 }
@@ -873,7 +901,7 @@ pub fn wall_live_bridge() -> Markup {
 pub fn variant_query_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "miniquad_add_plugin({\n\
                  \x20 register_plugin: function(importObject) {\n\
                  \x20   importObject.env.hcg_initial_variant_is_hex = function() {\n\
@@ -883,7 +911,7 @@ pub fn variant_query_bridge() -> Markup {
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_variant_query\"\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -898,7 +926,7 @@ pub fn variant_query_bridge() -> Markup {
 pub fn stream_mode_query_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "miniquad_add_plugin({\n\
                  \x20 register_plugin: function(importObject) {\n\
                  \x20   importObject.env.hcg_is_stream_mode = function() {\n\
@@ -908,7 +936,7 @@ pub fn stream_mode_query_bridge() -> Markup {
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_stream_mode\"\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -920,7 +948,7 @@ pub fn stream_mode_query_bridge() -> Markup {
 pub fn daily_mode_query_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "miniquad_add_plugin({\n\
                  \x20 register_plugin: function(importObject) {\n\
                  \x20   importObject.env.hcg_is_daily_mode = function() {\n\
@@ -930,7 +958,7 @@ pub fn daily_mode_query_bridge() -> Markup {
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_daily_mode\"\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -951,7 +979,7 @@ pub fn daily_mode_query_bridge() -> Markup {
 pub fn screenshot_bridge(name: &str) -> Markup {
     html! {
         script {
-            (PreEscaped(format!(
+            (PreEscaped(minify_js(&format!(
                 "miniquad_add_plugin({{\n\
                  \x20 register_plugin: function(importObject) {{\n\
                  \x20   importObject.env.hcg_save_screenshot = function(rgbaPtr, rgbaLen, width, height, namePtr, nameLen) {{\n\
@@ -974,7 +1002,7 @@ pub fn screenshot_bridge(name: &str) -> Markup {
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_screenshot\"\n\
                  }});"
-            )))
+            ))))
         }
     }
 }
@@ -994,8 +1022,9 @@ html.hcg-fullscreen #daily-btn { display: none; }";
 /// something that makes sense mid-episode, so there's nothing to bind a keypress to.
 /// Label/href are set by script at load time (from the *current* URL) rather than baked
 /// in statically, since the same generated HTML serves both states. Hidden under
-/// `?embed=1`/`?stream=1` (see `HIDE_CHROME_JS`), same as `hotkeys-btn`; also hidden under
-/// the `hcg-fullscreen` class `fullscreen_bridge` toggles on `<html>` — clicking it
+/// `?embed=1`/`?stream=1` (see `mode_class_script`'s `window.__hcgHide`), same as
+/// `hotkeys-btn`; also hidden under the `hcg-fullscreen` class `fullscreen_bridge` toggles
+/// on `<html>` — clicking it
 /// reloads the page, which would silently kick a fullscreened visitor back out, so it's
 /// pointless clutter to show there. The click itself fires a `daily_challenge_click` GA
 /// event (`entering`/leaving flag, since the same button does both) straight from this
@@ -1009,19 +1038,19 @@ pub fn daily_challenge_button() -> Markup {
             title="You may watch closely. That won't help either."
             { "📅 Daily Challenge" }
         script {
-            (PreEscaped(format!(
-                "(function() {{\n\
+            (PreEscaped(minify_js(
+                "(function() {\n\
                  \x20 var btn = document.getElementById('daily-btn');\n\
-                 \x20 if ({HIDE_CHROME_JS}) {{ btn.style.display = 'none'; return; }}\n\
+                 \x20 if (window.__hcgHide) { btn.style.display = 'none'; return; }\n\
                  \x20 var isDaily = new URLSearchParams(location.search).get('daily') === '1';\n\
-                 \x20 if (isDaily) {{\n\
+                 \x20 if (isDaily) {\n\
                  \x20   btn.textContent = '🎲 Random Run';\n\
                  \x20   btn.href = location.pathname;\n\
-                 \x20 }}\n\
-                 \x20 btn.addEventListener('click', function() {{\n\
-                 \x20   if (window.gtag) window.gtag('event', 'daily_challenge_click', {{ entering: !isDaily }});\n\
-                 \x20 }});\n\
-                 }})();"
+                 \x20 }\n\
+                 \x20 btn.addEventListener('click', function() {\n\
+                 \x20   if (window.gtag) window.gtag('event', 'daily_challenge_click', { entering: !isDaily });\n\
+                 \x20 });\n\
+                 })();"
             )))
         }
     }
@@ -1052,7 +1081,7 @@ pub fn share_result_bridge() -> Markup {
         style { (PreEscaped(SHARE_BTN_CSS)) }
         button id="share-btn" { "📤 Share Result" }
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "(function() {\n\
                  \x20 var shareText = '';\n\
                  \x20 var btn = document.getElementById('share-btn');\n\
@@ -1080,7 +1109,7 @@ pub fn share_result_bridge() -> Markup {
                  \x20   }\n\
                  \x20 });\n\
                  })();"
-            ))
+            )))
         }
     }
 }
@@ -1094,9 +1123,9 @@ pub fn share_result_bridge() -> Markup {
 /// into a canvas that's now some unrelated size — the visible symptom was drawing that
 /// read as "shrunk"/"downscaled" once fullscreen, and on some pages looked like nothing
 /// had happened at all. Fullscreening `<html>` instead leaves the canvas element itself
-/// completely unconstrained by the UA style, so its own pinned size and `fitCanvas()`
+/// completely unconstrained by the UA style, so its own pinned size and `window.fitCanvas()`
 /// scale-to-fit transform keep working unchanged — just re-evaluated against a bigger
-/// viewport, which is also why `fullscreenchange` re-runs `fitCanvas` (the transition
+/// viewport, which is also why `fullscreenchange` re-runs `window.fitCanvas` (the transition
 /// doesn't reliably fire its own `resize` event). Native builds toggle fullscreen from
 /// `control::Control` instead, straight through `macroquad::window::set_fullscreen` — no
 /// DOM/canvas-target issue there since it's a real OS window, not a styled element.
@@ -1124,7 +1153,7 @@ pub fn share_result_bridge() -> Markup {
 pub fn fullscreen_bridge() -> Markup {
     html! {
         script {
-            (PreEscaped(
+            (PreEscaped(minify_js(
                 "function hcgIsFullscreen() {\n\
                  \x20 return !!(document.fullscreenElement || document.webkitFullscreenElement);\n\
                  }\n\
@@ -1152,11 +1181,11 @@ pub fn fullscreen_bridge() -> Markup {
                  }, { passive: false });\n\
                  ['fullscreenchange', 'webkitfullscreenchange'].forEach(function(ev) {\n\
                  \x20 document.addEventListener(ev, function() {\n\
-                 \x20   if (typeof fitCanvas === 'function') fitCanvas();\n\
+                 \x20   if (typeof window.fitCanvas === 'function') window.fitCanvas();\n\
                  \x20   document.documentElement.classList.toggle('hcg-fullscreen', hcgIsFullscreen());\n\
                  \x20 });\n\
                  });"
-            ))
+            )))
         }
     }
 }
@@ -1193,7 +1222,7 @@ pub fn gtag_head() -> Markup {
     }
     html! {
         script {
-            (PreEscaped(format!(
+            (PreEscaped(minify_js(&format!(
                 "window.dataLayer = window.dataLayer || [];\n\
                  function gtag(){{dataLayer.push(arguments);}}\n\
                  gtag('js', new Date());\n\
@@ -1210,7 +1239,7 @@ pub fn gtag_head() -> Markup {
                  ['pointerdown', 'keydown', 'touchstart', 'scroll'].forEach(function(e) {{\n\
                  \x20 document.addEventListener(e, hcgLoadGtag, {{ once: true, passive: true }});\n\
                  }});",
-            )))
+            ))))
         }
     }
 }
@@ -1311,13 +1340,13 @@ pub fn manifest_json(
 pub fn sw_register_bridge(sw_path: &str) -> Markup {
     html! {
         script {
-            (PreEscaped(format!(
+            (PreEscaped(minify_js(&format!(
                 "if ('serviceWorker' in navigator) {{\n\
                  \x20 window.addEventListener('load', function() {{\n\
                  \x20   navigator.serviceWorker.register('{sw_path}');\n\
                  \x20 }});\n\
                  }}"
-            )))
+            ))))
         }
     }
 }
