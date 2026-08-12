@@ -72,10 +72,14 @@ draws on top, same split as klondike/spider's card table.
   drawing a grid line directly on the board's own outer edge partially overwrites the
   border rect there, asymmetrically enough between edges to read as a visibly thinner
   border on one side.
-- The side panel (next-piece boxes + stat lines) gets the same bordered
+- The side panel (next-piece box + stat lines) gets the same bordered
   container/full-height treatment as the board itself — without it, the panel's actual
   content only fills part of its height, leaving bare background below that reads as
   "more empty space" next to the board.
+- The "NEXT" panel shows only `queue.front()` — 1 piece, the classic (NES-era) Tetris
+  convention, not modern guideline Tetris's 3-6-deep queue. `game::LOOKAHEAD` (3) is
+  unrelated and unchanged: it's retained depth for the solver's `BEAM_DEPTH = 2`
+  lookahead, not display count — don't conflate the two if either changes again.
 
 ## Running
 

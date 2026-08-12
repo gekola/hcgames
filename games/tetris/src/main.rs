@@ -701,10 +701,14 @@ fn draw_hud(session: &Session, control: &control::Control) {
 
     draw_text("NEXT", PANEL_X, BOARD_Y + 16.0, 20.0, dim);
     let mut y = BOARD_Y + 26.0;
-    for &piece in session.game.queue.iter().take(3) {
-        draw_rectangle(PANEL_X, y, PANEL_W, 68.0, rgb(24, 24, 32));
-        draw_piece_preview(PANEL_X, y, PANEL_W, 68.0, piece);
-        y += 80.0;
+    // Classic (NES-era) Tetris convention: one next piece, not a modern-guideline
+    // multi-piece queue — see games/tetris/CLAUDE.md. Box is taller than the old
+    // per-slot 68px so the single preview doesn't read as shrunken inside the panel.
+    const NEXT_BOX_H: f32 = 96.0;
+    if let Some(&piece) = session.game.queue.front() {
+        draw_rectangle(PANEL_X, y, PANEL_W, NEXT_BOX_H, rgb(24, 24, 32));
+        draw_piece_preview(PANEL_X, y, PANEL_W, NEXT_BOX_H, piece);
+        y += NEXT_BOX_H;
     }
 
     y += 16.0;
