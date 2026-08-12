@@ -5,3 +5,9 @@ edition = "2024"
 
 [dependencies]
 macroquad = "0.4"
+
+[features]
+# Y4M-over-named-pipe gameplay clip capture (see Mode::Stream in src/lib.rs) — opt-in
+# per game (see mise.toml's clip task and the games that enable this feature in their
+# own Cargo.toml) since most games never use it.
+stream = []

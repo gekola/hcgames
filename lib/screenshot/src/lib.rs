@@ -27,41 +27,171 @@ pub fn seed() -> u64 {
         .unwrap_or_else(|| macroquad::miniquad::date::now() as u64)
 }
 
-/// Saves a PNG screenshot after a few seconds of (real, wall-clock) play and exits the
-/// process, when `HCG_SCREENSHOT` is set. No-op (near-zero cost) when unset, so it's safe
-/// to leave wired into every game's loop.
+enum Mode {
+    None,
+    /// Single PNG after `after_secs`, then exit.
+    Single {
+        after_secs: f64,
+        path: String,
+    },
+    /// Y4M frames at `fps` written to a named pipe (`HCG_CLIP_FIFO`) until `total_secs`
+    /// elapsed, then exit — `mise run clip` has an `ffmpeg` already reading the other end
+    /// of that pipe, encoding straight to `dist/<game>/clip.mp4`. No intermediate files on
+    /// this side: `file` opens lazily on the first captured frame (not in `from_env`),
+    /// since the Y4M stream header needs the real captured width/height, which is only
+    /// known once `get_screen_data()` has been called at least once.
+    #[cfg(feature = "stream")]
+    Stream {
+        fifo_path: String,
+        file: Option<std::fs::File>,
+        fps: f64,
+        total_secs: f64,
+        next_index: u32,
+    },
+}
+
+/// Saves screenshot(s) after a few seconds of (real, wall-clock) play and exits the
+/// process, when `HCG_SCREENSHOT` (single PNG) or, with the `stream` feature enabled,
+/// `HCG_CLIP_FIFO` (Y4M frame stream) is set. No-op (near-zero cost) when neither is set,
+/// so it's safe to leave wired into every game's loop.
 ///
 /// Triggers on elapsed wall-clock time rather than frame count: headless/software-rendered
 /// runs are unthrottled and can blow through hundreds of frames in milliseconds, which would
 /// capture the game barely past its initial state instead of a representative mid-play frame.
 pub struct Capture {
     start: f64,
-    after_secs: f64,
-    path: Option<String>,
+    mode: Mode,
 }
 
 impl Capture {
     pub fn from_env() -> Self {
-        let path = std::env::var("HCG_SCREENSHOT").ok();
-        let after_secs = std::env::var("HCG_SCREENSHOT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3.0);
+        let mode = if let Ok(path) = std::env::var("HCG_SCREENSHOT") {
+            let after_secs = std::env::var("HCG_SCREENSHOT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3.0);
+            Mode::Single { after_secs, path }
+        } else if let Some(mode) = stream_mode_from_env() {
+            mode
+        } else {
+            Mode::None
+        };
         Self {
             start: macroquad::miniquad::date::now(),
-            after_secs,
-            path,
+            mode,
         }
     }
 
     /// Call once per frame, after drawing, before `next_frame().await`.
     pub fn tick(&mut self) {
-        let Some(path) = &self.path else { return };
-        if macroquad::miniquad::date::now() - self.start >= self.after_secs {
-            get_screen_data().export_png(path);
-            std::process::exit(0);
+        let elapsed = macroquad::miniquad::date::now() - self.start;
+        match &mut self.mode {
+            Mode::None => {}
+            Mode::Single { after_secs, path } => {
+                if elapsed >= *after_secs {
+                    get_screen_data().export_png(path);
+                    std::process::exit(0);
+                }
+            }
+            #[cfg(feature = "stream")]
+            Mode::Stream {
+                fifo_path,
+                file,
+                fps,
+                total_secs,
+                next_index,
+            } => {
+                if elapsed >= *total_secs {
+                    // Drop the write end so the reader (ffmpeg) sees EOF and finishes
+                    // muxing on its own — this process doesn't own or wait on it.
+                    *file = None;
+                    std::process::exit(0);
+                }
+                // Capture whenever wall-clock has caught up to the next frame's slot,
+                // rather than every tick — headless runs render far faster than `fps`.
+                if elapsed < *next_index as f64 / *fps {
+                    return;
+                }
+                let img = get_screen_data();
+                let f = file.get_or_insert_with(|| {
+                    // Opening a FIFO for writing blocks until a reader attaches — `mise
+                    // run clip` starts ffmpeg reading it before launching the game, so
+                    // this returns immediately in practice.
+                    let mut f = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&*fifo_path)
+                        .expect("open HCG_CLIP_FIFO — start the reader before the game");
+                    use std::io::Write;
+                    writeln!(
+                        f,
+                        "YUV4MPEG2 W{} H{} F{}:1 Ip A1:1 C444",
+                        img.width, img.height, *fps as u32
+                    )
+                    .expect("write Y4M header");
+                    f
+                });
+                write_y4m_frame(f, &img);
+                *next_index += 1;
+            }
         }
     }
+}
+
+#[cfg(feature = "stream")]
+fn stream_mode_from_env() -> Option<Mode> {
+    let fifo_path = std::env::var("HCG_CLIP_FIFO").ok()?;
+    let fps = std::env::var("HCG_CLIP_FPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0);
+    let total_secs = std::env::var("HCG_CLIP_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15.0);
+    Some(Mode::Stream {
+        fifo_path,
+        file: None,
+        fps,
+        total_secs,
+        next_index: 0,
+    })
+}
+
+#[cfg(not(feature = "stream"))]
+fn stream_mode_from_env() -> Option<Mode> {
+    None
+}
+
+/// Encodes one captured frame as a Y4M `FRAME` (BT.601 full-range RGB→YCbCr, `C444` — no
+/// chroma subsampling, so no separate downsample pass) and writes it straight to `file`.
+/// Folds in the same bottom-row-first→top-row-first flip `export_png`/the WASM hotkey
+/// path already need (`get_screen_data()` reads in OpenGL's native bottom-up order),
+/// rather than a separate pass over the pixels.
+#[cfg(feature = "stream")]
+fn write_y4m_frame(file: &mut std::fs::File, img: &Image) {
+    use std::io::Write;
+    let (w, h) = (img.width as usize, img.height as usize);
+    let mut y_plane = vec![0u8; w * h];
+    let mut u_plane = vec![0u8; w * h];
+    let mut v_plane = vec![0u8; w * h];
+    for row in 0..h {
+        let src_row = h - 1 - row;
+        for col in 0..w {
+            let si = (src_row * w + col) * 4;
+            let di = row * w + col;
+            let r = img.bytes[si] as f32;
+            let g = img.bytes[si + 1] as f32;
+            let b = img.bytes[si + 2] as f32;
+            let clamp = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+            y_plane[di] = clamp(0.299 * r + 0.587 * g + 0.114 * b);
+            u_plane[di] = clamp(-0.168736 * r - 0.331264 * g + 0.5 * b + 128.0);
+            v_plane[di] = clamp(0.5 * r - 0.418688 * g - 0.081312 * b + 128.0);
+        }
+    }
+    file.write_all(b"FRAME\n").expect("write Y4M frame marker");
+    file.write_all(&y_plane).expect("write Y4M Y plane");
+    file.write_all(&u_plane).expect("write Y4M U plane");
+    file.write_all(&v_plane).expect("write Y4M V plane");
 }
 
 /// `S` hotkey: save a screenshot of the current frame. Native writes a timestamped PNG

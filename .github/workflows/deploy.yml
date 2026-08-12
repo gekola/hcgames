@@ -51,6 +51,11 @@ jobs:
       - name: Install binaryen (wasm-opt)
         run: sudo apt-get install -y binaryen
 
+      # ffmpeg encodes gameplay frame captures into dist/<game>/clip.mp4 (see mise.toml's
+      # clip task) — used for og:video and eventually Web Stories.
+      - name: Install ffmpeg
+        run: sudo apt-get install -y ffmpeg
+
       - uses: jdx/mise-action@v4
 
       - name: Build all games and generate dist/

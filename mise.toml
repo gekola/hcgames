@@ -91,6 +91,60 @@ else
 fi
 """
 
+# Capture a gameplay clip: mise run clip tetris [-- extra game CLI args, e.g. --variant score]
+[tasks.clip]
+description = "Generate dist/<name>/clip.mp4: a muted ~15s loopable MP4, streamed as Y4M frames over a named pipe straight from a native headless run into ffmpeg (no intermediate frame files; needs xvfb-run + ffmpeg; runs automatically in CI, skipped locally if unavailable; skips if the game's wasm hasn't changed since the last clip). Extra args after the name are forwarded to the game's own CLI (e.g. --variant/--level) to pin a specific stage/mode for the capture."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+name=$1
+shift
+mkdir -p "dist/$name"
+wasm="dist/$name/$name.wasm"
+out="dist/$name/clip.mp4"
+if [ -f "$out" ] && [ -f "$wasm" ] && [ ! "$wasm" -nt "$out" ]; then
+    echo "$name: wasm unchanged, skipping clip" >&2
+    exit 0
+fi
+if ! command -v xvfb-run >/dev/null 2>&1 || ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "xvfb-run/ffmpeg not found — skipping clip for $name (runs automatically in CI)" >&2
+    exit 0
+fi
+# Named pipe, not a temp dir of numbered PNGs: the game (built with --features stream)
+# writes Y4M frames straight to this FIFO — no intermediate files, no PNG encode/decode
+# round-trip. ffmpeg must already be reading it before the game opens it for writing, or
+# that open() blocks forever (FIFO open-for-write blocks until a reader attaches).
+fifo_dir="$(mktemp -d)"
+fifo="$fifo_dir/clip.y4m"
+mkfifo "$fifo"
+trap 'rm -rf "$fifo_dir"' EXIT
+
+# H.264 stays the codec (not HEVC/AV1) since this feeds og:video — Facebook's crawler
+# requires H.264, and Discord/Slack/Twitter unfurl support for HEVC/AV1-in-MP4 is still
+# spotty. `-tune animation` fits this content specifically (flat solid-color UI/board
+# cells, not filmed video) — raises deblocking strength and ref-frame use for exactly
+# that kind of source, at negligible cost regardless of preset. `-crf 18` (below the
+# default 23) for a real quality bump; file size stays trivial either way (~100-200KB/15s)
+# since the content compresses this well regardless.
+#
+# Preset is `medium` (ffmpeg's own default), not `veryslow`: this ffmpeg runs
+# *concurrently* with the game process (both under xvfb-run, competing for the same
+# cores), fed frame-by-frame through a pipe whose OS buffer (64KB) is far smaller than
+# one Y4M frame (~1.3MB) — so `veryslow`'s much heavier per-frame search (ref=16 vs
+# medium's ref=3, me=umh vs hex, ...) shows up as real wall-clock time here, unlike a
+# batch pass over an already-complete file where the same setting is sub-second.
+# Measured on tetris (same pipe, same crf/tune, only preset varied): `veryslow` added
+# ~1s to the ~16s floor (game's own 15s capture window + startup/mux overhead) for a
+# ~19% smaller file (100KB vs ~118KB) — a bad trade for output this small already.
+ffmpeg -y -f yuv4mpegpipe -i "$fifo" -vf "format=yuv420p" \
+    -c:v libx264 -preset medium -tune animation -crf 18 -movflags +faststart -an "$out" &
+ffmpeg_pid=$!
+
+HCG_SEED=42 HCG_CLIP_FIFO="$fifo" HCG_CLIP_SECS=15 HCG_CLIP_FPS=10 xvfb-run -a cargo run --release --features stream --bin "$name" -- "$@"
+
+wait "$ffmpeg_pid"
+"""
+
 # Rasterize SVG art to PNG: mise run rasterize
 [tasks.rasterize]
 description = "Rasterize static/hotel-scene.svg and static/favicon.svg to PNG, plus favicon.ico and apple-touch-icon.png (needs resvg or rsvg-convert; runs automatically in CI, skipped locally if neither is available; skips per-file if already up to date)"
@@ -187,6 +241,14 @@ mise run rasterize
 for game in games/*/; do
     mise run build-wasm "$(basename "$game")"
 done
+# Gameplay clips are opt-in per game (see mise.toml's clip task) — add a game to this
+# list once it has one; not every game does yet. Extra args pin a specific stage/mode
+# so the capture shows something representative rather than whatever a fresh session
+# starts at (level 0 / a random Auto variant).
+mise run clip tetris
+mise run clip bubble-shooter --level 3
+mise run clip minesweeper --variant hex
+mise run clip match-3 --variant score
 mise run generate-index
 """
 

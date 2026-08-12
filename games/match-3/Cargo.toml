@@ -10,3 +10,8 @@ control = { path = "../../lib/control" }
 render_cache = { path = "../../lib/render_cache" }
 game_common = { path = "../../lib/game_common" }
 beam_solver = { path = "../../lib/beam_solver" }
+
+[features]
+# Opt-in gameplay clip capture — see mise.toml's clip task and lib/screenshot's `stream`
+# feature (Y4M frames over a named pipe, no intermediate files).
+stream = ["screenshot/stream"]

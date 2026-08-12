@@ -1327,6 +1327,14 @@ pub struct SocialImage {
     pub twitter_card: &'static str,
 }
 
+/// Absolute URL to this game's gameplay clip, if `mise run clip` has produced one for it
+/// — clips are opt-in per game (see the explicit game list in `mise.toml`'s `deploy`
+/// task), so most games don't have one yet and this returns `None` for them.
+pub fn social_video(base_url: &str, dist: &Path, name: &str) -> Option<String> {
+    let rel = format!("{name}/clip.mp4");
+    dist.join(&rel).exists().then(|| format!("{base_url}{rel}"))
+}
+
 /// Picks the best available image for `og:image`/`twitter:image`: a real in-game
 /// screenshot (see `mise run screenshot`) beats the rasterized favicon, which beats the
 /// bare favicon SVG that most crawlers won't render. All fall back locally, where those

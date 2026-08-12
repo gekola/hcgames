@@ -4,9 +4,9 @@ use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
     favicon_links, fullscreen_bridge, game_json_ld, game_page_info, gtag_head, hotkey_popup,
-    loading_screen, manifest_json, native_size_style, orientation_hint, pwa_head,
+    loading_screen, manifest_json, native_size, native_size_style, orientation_hint, pwa_head,
     screenshot_bridge, scroll_cue, session_signals_bridge, share_result_bridge, social_image,
-    stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
+    social_video, stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
 };
 
 fn main() {
@@ -20,6 +20,7 @@ fn main() {
     let description = description(&name);
     let page_url = format!("{base_url}{name}/");
     let og = social_image(&base_url, dist, Some(&format!("{name}/preview.png")));
+    let video = social_video(&base_url, dist, &name);
 
     let page = html! {
         (DOCTYPE)
@@ -41,6 +42,14 @@ fn main() {
                 meta property="og:image:alt" content=(format!("{title} being played automatically by an AI"));
                 meta name="twitter:card" content=(og.twitter_card);
                 meta name="twitter:image" content=(og.url);
+                @if let Some(video_url) = &video {
+                    meta property="og:video" content=(video_url);
+                    meta property="og:video:secure_url" content=(video_url);
+                    meta property="og:video:type" content="video/mp4";
+                    @let (w, h) = native_size(&name);
+                    meta property="og:video:width" content=(w.to_string());
+                    meta property="og:video:height" content=(h.to_string());
+                }
                 link rel="preload" href=(format!("{name}.wasm")) as="fetch" crossorigin="anonymous";
                 (game_json_ld(&base_url, &title, &description, &page_url, &og.url))
                 (gtag_head())

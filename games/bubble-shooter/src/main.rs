@@ -437,20 +437,43 @@ struct CliArgs {
     once: bool,
     #[cfg(not(target_arch = "wasm32"))]
     no_ui: bool,
+    /// 0-based index into `game::LEVELS`, pinning the starting level instead of the
+    /// default (always-0, "Warm-Up") rotation start — used to capture a gameplay clip
+    /// at a specific difficulty tier rather than whatever a fresh session starts at.
+    level: u32,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_cli_args() -> CliArgs {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (base, rest) = game_common::parse_base_args(&args);
-    if let Some(other) = rest.first() {
-        eprintln!("unknown argument '{other}' (expected --debug, --once, --no-ui)");
-        std::process::exit(2);
+    let mut level = 0u32;
+    let mut iter = rest.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--level" => {
+                let Some(v) = iter.next() else {
+                    eprintln!("--level requires a value (0-based index into game::LEVELS)");
+                    std::process::exit(2);
+                };
+                level = v.parse().unwrap_or_else(|_| {
+                    eprintln!("--level value must be a non-negative integer, got '{v}'");
+                    std::process::exit(2);
+                });
+            }
+            other => {
+                eprintln!(
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --level <n>)"
+                );
+                std::process::exit(2);
+            }
+        }
     }
     CliArgs {
         debug: base.debug,
         once: base.once,
         no_ui: base.no_ui,
+        level,
     }
 }
 
@@ -459,6 +482,7 @@ fn parse_cli_args() -> CliArgs {
     CliArgs {
         debug: false,
         once: false,
+        level: 0,
     }
 }
 
@@ -486,7 +510,7 @@ fn print_result(session: &Session) {
 #[cfg(not(target_arch = "wasm32"))]
 fn run_headless(cli: CliArgs) -> ! {
     macroquad::rand::srand(screenshot::seed());
-    let mut session = Session::new(0);
+    let mut session = Session::new(cli.level);
 
     loop {
         match session.game.phase {
@@ -547,7 +571,7 @@ fn main() {
 async fn amain(cli: CliArgs) {
     let mut control = control::Control::new();
     rand::srand(control.seed());
-    let mut session = Session::new(0);
+    let mut session = Session::new(cli.level);
     let mut view = View::new(&session);
     let mut shot = screenshot::Capture::from_env();
     // Set once the daily-challenge run ends (see `control::Control::daily_mode`) — the

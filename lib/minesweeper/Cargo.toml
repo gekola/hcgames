@@ -13,3 +13,6 @@ screenshot = { path = "../screenshot" }
 control = { path = "../control" }
 render_cache = { path = "../render_cache" }
 game_common = { path = "../game_common" }
+
+[features]
+stream = ["screenshot/stream"]
