@@ -1462,7 +1462,11 @@ const QUOTES: &[(&str, &str)] = &[
 /// pulled for a 226px-wide box — PageSpeed put the resulting waste at 132 KiB across the
 /// grid, the largest item on the page. Three games (tetris, bubble-shooter, game2048) got
 /// no `srcset` at all, their native previews being narrower than 640.
-fn preview_srcset(dist: &Path, game: &str) -> Option<String> {
+///
+/// `prefix` is prepended to each candidate URL so the same tiers can be referenced from
+/// pages at different depths (homepage at `dist/index.html` passes `""`, the wall at
+/// `dist/wall/index.html` passes `"../"`).
+fn preview_srcset(dist: &Path, game: &str, prefix: &str) -> Option<String> {
     let dir = dist.join(game);
     let mut widths: Vec<u32> = std::fs::read_dir(&dir)
         .ok()?
@@ -1480,10 +1484,10 @@ fn preview_srcset(dist: &Path, game: &str) -> Option<String> {
     widths.sort_unstable();
     let mut entries: Vec<String> = widths
         .iter()
-        .map(|w| format!("{game}/preview-{w}.png {w}w"))
+        .map(|w| format!("{prefix}{game}/preview-{w}.png {w}w"))
         .collect();
     let (full_w, _) = image::image_dimensions(dir.join("preview.png")).unwrap();
-    entries.push(format!("{game}/preview.png {full_w}w"));
+    entries.push(format!("{prefix}{game}/preview.png {full_w}w"));
     Some(entries.join(", "))
 }
 
@@ -1608,7 +1612,7 @@ fn main() {
                                 // the full-size preview. Under-declaring by 2px keeps a 900px
                                 // game on its 225w tier at 1x and its 450w tier at 2x; the ~1%
                                 // shortfall against the real box is not visible.
-                                @let srcset = preview_srcset(dist, game);
+                                @let srcset = preview_srcset(dist, game, "");
                                 img src=(format!("{game}/preview.png"))
                                     srcset=[srcset.clone()]
                                     sizes=[srcset.is_some().then_some("(max-width: 1010px) 48vw, 224px")]
@@ -1675,10 +1679,13 @@ fn main() {
                     h1 { "Ambient Wall" }
                     p { (format!("{} AIs. Zero players. Maximum efficiency.", games.len())) }
                 }
-                div class="wall-grid" {
+                main class="wall-grid" {
                     @for (game, game_title) in &wall_items {
                         div class="wall-tile" title=(game_title) data-game=(game) {
+                            @let srcset = preview_srcset(dist, game, "../");
                             img class="wall-preview" src=(format!("../{game}/preview.png"))
+                                srcset=[srcset.clone()]
+                                sizes=[srcset.is_some().then_some("(max-width: 620px) 92vw, (max-width: 950px) 46vw, (max-width: 1300px) 24vw, 19vw")]
                                 alt=(format!("{game_title} being played by an AI")) loading="lazy";
                             a class="wall-label" href=(format!("../{game}/")) { (game_title) " ↗" }
                         }
