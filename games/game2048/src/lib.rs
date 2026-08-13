@@ -1,3 +1,13 @@
+/// Rendering + game loop (was this crate's `main.rs` before the lib/thin-bin split, so
+/// the merged multi-game binary can call `play::play()` without a `main()` of its own).
+pub mod play;
+
+/// Re-exported at the crate root so this game has the same `conf()`/`play()`/`start()`
+/// surface every other game crate exposes — `bundle/`'s dispatch table stays one uniform
+/// line per game instead of special-casing the one crate whose loop lives in a submodule
+/// (its `lib.rs` was already the pure-logic half before the split).
+pub use play::{play, start, window_conf as conf};
+
 pub const N: usize = 4;
 
 pub const SNAKE: [[f64; N]; N] = [

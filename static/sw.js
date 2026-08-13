@@ -1,7 +1,8 @@
 // Minimal offline static-asset cache, shared by every page (homepage + each game's own
 // manifest-scoped app — see xtask::sw_register_bridge). Network-first, falling back to
 // cache only when the network fetch fails outright (offline): none of these assets are
-// content-hashed (a game's .wasm keeps the same filename across every deploy), so
+// content-hashed (the shared hcg.wasm every game page loads keeps its filename across
+// every deploy, and now changes whenever *any* of the 11 games does), so
 // stale-while-revalidate — this worker's original strategy — would keep serving an
 // infrequent visitor's old cached copy indefinitely; it only "heals" on that visitor's
 // *next* load after a deploy, which for a rarely-revisited page can be arbitrarily far in
@@ -10,8 +11,7 @@
 // Pages sets a real max-age on — it just means "online" always means "current", and the
 // Cache Storage entries this worker maintains are purely a last-resort fallback for
 // genuinely offline revisits. No precache list — assets fill in as they're visited, which
-// is enough for that without hand-maintaining a manifest of every game's .wasm/preview/
-// font files.
+// is enough for that without hand-maintaining a manifest of every page's assets.
 const CACHE = "hcg-v2";
 
 self.addEventListener("install", () => {

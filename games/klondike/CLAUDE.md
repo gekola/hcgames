@@ -1,6 +1,6 @@
 # Klondike
 
-Self-playing Klondike (American Patience). `game.rs`/`solver.rs`/`main.rs` split per
+Self-playing Klondike (American Patience). `game.rs`/`solver.rs`/`lib.rs` split per
 root CLAUDE.md's "Self-playing solver games" section — first game in that family; card
 primitives (`Card`, suit rendering, card face/back drawing) were extracted to
 `lib/cards` here for reuse by Spider (and any future FreeCell/etc.). Suit-symbol

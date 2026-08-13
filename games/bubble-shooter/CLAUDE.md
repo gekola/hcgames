@@ -11,7 +11,8 @@ Tetris) — the board is inherently tall and narrow.
 |------|----------|
 | `src/game.rs` | Grid geometry, `Board`/`Game`/`Move`/`Resolution`, shot raymarch physics, connectivity BFS, row-descend |
 | `src/solver.rs` | `choose_move` — `beam_solver`-backed depth-2 search scored by `score_resolution` |
-| `src/main.rs` | Rendering (`draw_bubble`/board frame/death line), `View`/`StepPhase` flight-pop-fall animation state machine, CLI |
+| `src/lib.rs` | Rendering (`draw_bubble`/board frame/death line), `View`/`StepPhase` flight-pop-fall animation state machine, CLI |
+| `src/main.rs` | Thin standalone binary — `bubble_shooter::start()` and nothing else |
 
 ## Grid: doubled-width hex coordinates, not axial or plain offset
 
@@ -66,7 +67,7 @@ score_gained, descended, .. }`: place the bubble, BFS-flood same color from the 
 cell (`flood_same_color`), pop if the group is ≥3, then — only if a pop happened — a
 **global** BFS from every `row == 0` cell (`find_floating`) finds bubbles no longer
 connected to the ceiling and drops those too, scored at 2x a direct pop
-(`FLOATER_POINTS` vs `POP_POINTS`). `main.rs`'s `View`/`StepPhase` plays this back
+(`FLOATER_POINTS` vs `POP_POINTS`). `lib.rs`'s `View`/`StepPhase` plays this back
 cosmetically as `Flying` → (`Popping` → `Falling`, only if there was a pop) → `Idle`,
 mirroring match-3's `Swap` → `Flash` → `Fall` → `Idle` shape exactly. `--no-ui`/`--once`
 skips straight to the resolved state, same as every move-paced (not real-dt-paced) game

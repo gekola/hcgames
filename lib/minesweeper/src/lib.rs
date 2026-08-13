@@ -94,6 +94,65 @@ pub fn parse_cli_args() -> CliArgs {
     }
 }
 
+// ── Entry points ──────────────────────────────────────────────────────────────
+// `games/minesweeper`'s binary is a one-liner over `start()`; the merged multi-game
+// binary calls `play()` instead (it owns the window itself).
+
+pub fn conf() -> Conf {
+    Conf {
+        window_title: "Minesweeper".to_owned(),
+        window_width: 900,
+        window_height: 720,
+        high_dpi: true,
+        ..Default::default()
+    }
+}
+
+/// Entry point for the standalone per-game binary — same window/`--no-ui` branching
+/// `main()` used to do. `--no-ui` has to be handled here, *before*
+/// `Window::from_config`, since there's no way to un-create a window afterwards.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start() {
+    let cli = parse_cli_args();
+    let kind = cli.variant.unwrap_or(GridKind::Square);
+    if cli.no_ui {
+        run_headless(kind, cli);
+    } else {
+        macroquad::Window::from_config(conf(), run(kind, cli));
+    }
+}
+
+/// Entry point for the standalone per-game binary — same window branching `main()` used
+/// to do. `initial_wasm_variant()` reads `?variant=hex`, which is what the retired
+/// `/minesweeper-hex` URL's redirect stub relies on to land in Hex mode.
+#[cfg(target_arch = "wasm32")]
+pub fn start() {
+    macroquad::Window::from_config(conf(), run(initial_wasm_variant(), parse_cli_args()));
+}
+
+/// Entry point for the merged multi-game binary (see `bundle/`): no argv parsing —
+/// the bundled build gets the same `CliArgs` the browser build does. Keeps the
+/// `?variant=hex` redirect working on wasm; native has no query string, so it starts in
+/// the same Square default the native binary uses.
+pub async fn play() {
+    #[cfg(target_arch = "wasm32")]
+    let kind = initial_wasm_variant();
+    #[cfg(not(target_arch = "wasm32"))]
+    let kind = GridKind::Square;
+    run(
+        kind,
+        CliArgs {
+            debug: false,
+            once: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            no_ui: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            variant: None,
+        },
+    )
+    .await
+}
+
 fn log_action(debug: bool, board: &Board) {
     if !debug {
         return;

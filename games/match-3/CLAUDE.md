@@ -10,7 +10,8 @@ package name has the dash; `xtask::title` renders it "Match 3".
 |------|----------|
 | `src/game.rs` | `Board`/`Tile`/`Special`/`Color`, `Game`, `resolve()` (swap → cascade), board gen |
 | `src/solver.rs` | `choose_move` — `beam_solver`-backed depth-2 search scored by `score_resolution`'s tuned eval over `Game::simulate` |
-| `src/main.rs` | `GemShape`/`draw_gem`/`draw_tile`, `View`/`StepPhase` animation state machine, CLI |
+| `src/lib.rs` | `GemShape`/`draw_gem`/`draw_tile`, `View`/`StepPhase` animation state machine, CLI |
+| `src/main.rs` | Thin standalone binary — `match_3::start()` and nothing else |
 
 ## Solver: beam search, not greedy — promoted from an opt-in experiment
 
@@ -70,7 +71,7 @@ happens around it.
 ## Goal variants
 
 `V`-cycles like Tetris's piece-gen modes (`VariantMode::Auto` rotates by
-`generation % 6`, see `main.rs`):
+`generation % 6`, see `lib.rs`):
 
 | Variant | Goal | Paced by |
 |---|---|---|
@@ -442,7 +443,7 @@ Deliberately **not** one of `Auto`'s `generation % 6` rotation targets — per r
 CLAUDE.md's "In-game controls" note, `Auto` should never land on a mode only reachable
 by explicit select. Only reachable via the `V` cycle or `--variant levels`.
 
-**Session-level state, not derivable from `generation` alone**: `main.rs`'s `Session`
+**Session-level state, not derivable from `generation` alone**: `lib.rs`'s `Session`
 carries `level_index`/`level_attempts` fields alongside `mode`/`game`, since "which
 level" and "how many times has the bot failed it" depend on win/loss history, not just
 an episode counter. `Session::next_generation` is where this is judged: a win or
@@ -702,7 +703,7 @@ solver's candidate scoring) resolve a swap into `Resolution { waves: Vec<Wave>, 
 each `Wave` is one clear+gravity+refill round, cascades are just more waves. Gravity
 (`compact_and_refill`) records per-tile `FallEntry { from_row, to_row }` so the renderer
 can tween exact fall distances, including tiles queued above the board (`from_row`
-negative) for freshly-spawned refills. `main.rs`'s `View`/`StepPhase` plays this back as
+negative) for freshly-spawned refills. `lib.rs`'s `View`/`StepPhase` plays this back as
 Swap → (Flash → Fall) per wave → Idle, matching the already-decided outcome cosmetically
 — same "compute first, animate after" pattern as Tetris's `FallAnim`.
 

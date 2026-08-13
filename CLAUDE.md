@@ -18,6 +18,8 @@ games/
   snake/            one crate per game
 lib/                shared crates (cards, minesweeper, screenshot, control, beam_solver,
                     render_cache, game_common)
+bundle/             every game in one binary, game chosen at runtime (see "Merged wasm
+                    bundle" below) — deliberately NOT under games/
 xtask/              native-only site generator (see "Site generation" below)
 static/             assets copied verbatim into dist/ (favicon.svg, hotel-scene.svg, robots.txt)
 dist/               build output (git-ignored), served via python HTTP
@@ -78,7 +80,9 @@ Two things are load-bearing:
   that adds hundreds of px of dead scroll region between the canvas and the text.
 - **`hcg-bare`** (set on `<html>` by `mode_class_script` under `?embed=1`/`?stream=1`, the
   same `HIDE_CHROME_JS` condition every other chrome element uses) restores the old
-  non-scrolling `height: 100%; overflow: hidden` page and hides the section outright. An
+  non-scrolling `height: 100%; overflow: hidden` page, which clips the section out of reach
+  rather than `display: none`-ing it — it's still in the layout (body `scrollHeight` 1422 vs
+  document 720), just unreachable, since the page can no longer scroll at all. An
   ambient-wall tile is a few-hundred-px iframe and an OBS browser source has no reader —
   neither should scroll to a text block. **Any new below-fold/page-level content must be
   hidden under `hcg-bare` too.**
@@ -137,15 +141,67 @@ Manifest icons follow the same `dist/favicon.png` / `dist/icon-512.png` exists-o
 fallback pattern as `favicon_links`/`social_image` (both rasterized from `static/favicon.svg`
 by `mise run rasterize`, skipped locally without resvg).
 
+## Merged wasm bundle (one binary, every game)
+
+Every game page loads the **same** wasm: `dist/hcg.wasm`, built from `bundle/` (bin `hcg`),
+which contains all 11 games and picks which one to run at startup. There is no per-game
+`dist/<name>/<name>.wasm` any more.
+
+Why: ~99% of a game's shipped wasm is framework (macroquad/miniquad/fontdue/ttf_parser/std,
+plus the default font and GL shaders in rodata) and only ~22–25KB is the game's own logic, so
+11 separate binaries paid for the same framework 11 times. Measured: 613,234 bytes for all 11
+merged, against 4,196,365 bytes for the 11 separate binaries they replace (each 366–410KB).
+Marginal cost is linear in games (366KB for 1, 391KB for 2, 613KB for 11), which is why
+there's **one** bundle rather than several smaller ones: every extra bundle re-pays ~366KB of
+framework, and splitting could save at most the ~250KB of game logic it excluded.
+
+Shape (keep it for new games):
+
+- Each game crate is **lib + thin bin**: everything that used to be in `src/main.rs` is now
+  `src/lib.rs` (same crate root, so `mod`/`crate::` paths inside `game.rs`/`solver.rs` are
+  untouched), and `src/main.rs` is three lines — `fn main() { <crate>::start(); }`.
+  game2048 is the one exception: its `lib.rs` was already the pure-logic half, so its loop
+  lives in `src/play.rs` and is re-exported at the crate root to keep the API uniform.
+- Each game lib exposes `conf()`, `start()`, and `play()`. `start()` is the old `main()`
+  verbatim (native `--no-ui` branching included) and belongs to the standalone binary;
+  `play()` is what the bundle calls — an `async fn` that runs the game with exactly the
+  `CliArgs` the *browser* build produces and does **not** call `Window::from_config` itself.
+  `CliArgs` fields can stay private; nothing outside the crate needs them.
+- **Per-game standalone binaries stay** (`mise run run <name>`, screenshots, clips,
+  `--debug`/`--once`/`--no-ui` benchmarking). The bundle is an additional target, not a
+  replacement, and native CLI flags live on the per-game binary only — `mise run run-bundle
+  <name>` just picks a game (`hcg --game <name>`).
+- Dispatch is a hand-written `match` in `bundle/src/main.rs` with one
+  `Window::from_config(<game>::conf(), <game>::play())` arm per game (one call per arm, since
+  every `play()` future is its own type). `GAME_NAMES` there is a **positional** contract:
+  index → game, plain-alphabetical by `games/<dir>`, baked into each page by
+  `xtask::game_id_bridge` / `xtask::bundle_game_index`. Not `xtask::all_games()`'s order —
+  that sorts by display `title()`, so a retitled game would silently renumber every page.
+  `bundle`'s own `bundle_list_matches_games_dir` test fails if the array drifts from `games/`.
+- **Every JS bridge must be registered on every game page.** The merged module carries all 11
+  games' imports whatever game a page runs, and a wasm import the page never registered fails
+  instantiation with a LinkError — that's why `variant_query_bridge` (only minesweeper reads
+  it) is no longer gated behind `name == "minesweeper"`.
+- One game per process/page load. Each game's `play()` never returns, seeds the global RNG
+  itself, and prewarms only its own glyphs — mounting a second game in the same process would
+  need the `prewarm_glyphs` font-atlas invariant re-checked across games first.
+
+`dist/hcg.wasm` is not content-hashed (same as the per-game wasm it replaces), so cross-page
+reuse rests on the browser's HTTP cache plus `static/sw.js`'s network-first strategy. It now
+changes whenever *any* game changes; content-hashing the filename is the open follow-up if
+that reuse should be a guarantee rather than a heuristic.
+
 ## Task runner (mise)
 
 All tasks take the game name as `$1` unless noted.
 
 | Command | What it does |
 |---------|-------------|
-| `mise run run snake` | Native debug build + launch |
-| `mise run build-wasm snake` | Release WASM → `dist/snake/` (fetches `dist/mq_js_bundle.js`, shared across games, if not already present) |
-| `mise run deploy` | Rebuilds all games into `dist/` (incremental — skips a game whose wasm *and* xtask's HTML generator are both unchanged since the last run) |
+| `mise run run snake` | Native debug build + launch (the game's own binary) |
+| `mise run run-bundle snake` | Same game, but through the merged `hcg` binary — the dispatch path the browser takes |
+| `mise run build-bundle` | Release WASM of all games → `dist/hcg.wasm` (fetches `dist/mq_js_bundle.js` if not already present) |
+| `mise run build-wasm snake` | Stages one game's *page* → `dist/snake/` (index.html, manifest, preview). Builds no wasm — that's `build-bundle` |
+| `mise run deploy` | Builds the bundle once, then stages every game's page (incremental — skips a game whose sources are unchanged since its last screenshot, and HTML regen when xtask's generator is unchanged) |
 | `mise run clean` | `rm -rf dist` — force a full rebuild next time for any other reason, e.g. fresh screenshots |
 | `mise run serve` | `python3 -m http.server 8080 --directory dist` |
 | `mise run check` | `cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings` |
@@ -160,22 +216,30 @@ config core.hooksPath .githooks` once per clone/worktree to activate it.
 
 ## Adding a new game
 
-1. `cargo new --bin games/<name>`
+1. `cargo new --bin games/<name>`, then split it lib + thin bin as described in "Merged wasm
+   bundle" above (game code in `src/lib.rs` exposing `conf()`/`start()`/`play()`, `src/main.rs`
+   just calling `start()`)
 2. Add `"games/<name>"` to workspace `members` in root `Cargo.toml`
 3. Add `macroquad = "0.4"` and `control = { path = "../../lib/control" }` to the game's `Cargo.toml`
 4. Wire `control::Control` into the main loop (see "In-game controls" below)
 5. If `window_width`/`window_height` in `Conf` isn't 900×720, add a case to `xtask::native_size`
-6. `mise run run <name>` to test natively; `mise run build-wasm <name>` for WASM (also generates `dist/<name>/index.html` — there's no separate dev HTML template to maintain)
-7. Add a `description(name)` and a `game_flavor(name)` arm in `xtask/src/lib.rs` — without
+6. Register it in `bundle/`: a path dependency in `bundle/Cargo.toml`, an entry in
+   `GAME_NAMES` (keep the array plain-alphabetical by directory name — the test enforces it),
+   and a dispatch arm. Without this the game's page loads the shared wasm and runs whatever
+   game sits at index 0
+7. `mise run run <name>` to test natively; `mise run build-bundle` + `mise run build-wasm <name>`
+   for the browser (the latter generates `dist/<name>/index.html` — there's no separate dev HTML
+   template to maintain)
+8. Add a `description(name)` and a `game_flavor(name)` arm in `xtask/src/lib.rs` — without
    the latter the new page falls back to generic text and reads as a near-duplicate of the
    other games (see "Game page structure" above)
-8. Once the game's design has settled, add `games/<name>/CLAUDE.md` documenting it — source layout table, key types/constants, algorithm/solver design, rendering notes, any real gotchas, a "Running" section. See `games/snake/CLAUDE.md` (terse) or `games/match-3/CLAUDE.md` (fuller) for the shape. Don't duplicate what's already covered in this root file (CLI flags, RenderCache, control/hotkeys, WASM caveats) — only game-specific content.
+9. Once the game's design has settled, add `games/<name>/CLAUDE.md` documenting it — source layout table, key types/constants, algorithm/solver design, rendering notes, any real gotchas, a "Running" section. See `games/snake/CLAUDE.md` (terse) or `games/match-3/CLAUDE.md` (fuller) for the shape. Don't duplicate what's already covered in this root file (CLI flags, RenderCache, control/hotkeys, WASM caveats) — only game-specific content.
 
 ## Self-playing solver games (klondike, spider, and similar)
 
 Games where an AI plays itself (not just a level-solving bot like snake/2048) split into
 `game.rs` (rules/state — `Game`, `Move`, `legal_moves()`, `apply()`, `state_hash()`),
-`solver.rs` (move selection), and `main.rs` (rendering + game loop, ticks the solver at a
+`solver.rs` (move selection), and `lib.rs` (rendering + game loop, ticks the solver at a
 fixed interval for watchability). Keep that split for new games in this family.
 
 For move selection smarter than a 1-ply greedy pick, use `lib/beam_solver`
@@ -215,12 +279,12 @@ made progress toward it.
 ## Native CLI flags (every game)
 
 Every game — not just this solver family — takes the same native-only CLI flags (see
-any game's `main.rs` `parse_cli_args`/`run_headless`, or `lib/minesweeper/src/lib.rs`
+any game's `lib.rs` `parse_cli_args`/`run_headless`, or `lib/minesweeper/src/lib.rs`
 for a game sharing one `run`/`run_headless` pair across two thin binaries).
 `--debug`/`--once`/`--no-ui` parsing is identical across every game, so `parse_cli_args`
 should call `game_common::parse_base_args(&args)` and only handle its own extra flags
-(if any) from the returned leftover tokens — see `games/snake/src/main.rs` for a game
-with no extra flags, or `games/sudoku/src/main.rs` for one parsing `--variant` on top:
+(if any) from the returned leftover tokens — see `games/snake/src/lib.rs` for a game
+with no extra flags, or `games/sudoku/src/lib.rs` for one parsing `--variant` on top:
 
 | Flag | Behavior |
 |------|----------|
@@ -242,9 +306,10 @@ drives a fixed virtual `dt` forward each iteration instead of reading
 `get_frame_time()`/`miniquad::date::now()`, so it still runs flat-out with no window.
 
 Add these flags to any new game in the same shape, even one-off scripts: a plain
-(non-`#[macroquad::main]`) `fn main()` that parses args first, then either calls
-`run_headless(cli)` directly or `macroquad::Window::from_config(conf(), amain(cli))` —
-never the macro, since it initializes the window before `main()`'s body runs at all.
+(non-`#[macroquad::main]`) `start()` — called by the crate's three-line `main.rs`, see
+"Merged wasm bundle" — that parses args first, then either calls `run_headless(cli)` directly
+or `macroquad::Window::from_config(conf(), amain(cli))`; never the macro, since it initializes
+the window before any of our code runs at all.
 
 ## Rendering perf: cache static content, don't redraw every frame
 
@@ -264,7 +329,7 @@ draw call) either way. Draw the live/animated part directly, every frame, on top
 If the region's on-screen position/size depends on `screen_width()`/`screen_height()`
 (most games do; game2048 draws at a fixed absolute size and doesn't need this), rebuild
 the `RenderCache` when those change — see any of klondike/spider/snake/minesweeper/
-arrow-blocks' `main.rs` for the resize-tracking pattern. Sudoku's board doesn't depend
+arrow-blocks' `lib.rs` for the resize-tracking pattern. Sudoku's board doesn't depend
 on screen size, so its `RenderCache` is constructed once and never rebuilt.
 
 **Font atlas gotcha**: rasterizing a text glyph for the first time (growing macroquad's
@@ -282,7 +347,7 @@ frame time through `scale(dt)`) for hotkeys: `=`/`-` adjust simulation speed 10%
 `0` resets to 1x, `Space` pauses (`scale` returns 0). On native only, `Control` also reads
 `F`/double-click to toggle fullscreen via `macroquad::window::set_fullscreen`. Draw
 `control.label()` (`"x1.000"` / `"PAUSED"`) somewhere in the game's own header, near
-score/level — see any game's `main.rs` for the pattern (right-aligned, same baseline as
+score/level — see any game's `lib.rs` for the pattern (right-aligned, same baseline as
 the existing HUD text).
 
 Call `control.episode_complete(game_name, score)` at the point each game resets for a new

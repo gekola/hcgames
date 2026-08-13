@@ -1,8 +1,8 @@
 # Minesweeper
 
-AI minesweeper, no player input. `games/minesweeper` is a thin binary (35-line
-`main.rs`) — essentially all logic (board, solver, rendering, CLI, `run`/`run_headless`)
-lives in `lib/minesweeper`, a separate workspace crate. Nothing else depends on
+AI minesweeper, no player input. `games/minesweeper` is a thin binary (3-line
+`main.rs`) — essentially all logic (board, solver, rendering, CLI, `conf`/`start`/`play`,
+`run`/`run_headless`) lives in `lib/minesweeper`, a separate workspace crate. Nothing else depends on
 `lib/minesweeper`, so this doc covers both together.
 
 Package name `minesweeper-game` with `[[bin]] name = "minesweeper"` — can't be named
@@ -13,10 +13,10 @@ workspace.
 
 | File | Contents |
 |------|----------|
-| `games/minesweeper/src/main.rs` | `conf()`, native/WASM `main()` — just wires CLI args into `minesweeper::run`/`run_headless` |
+| `games/minesweeper/src/main.rs` | Thin standalone binary — `minesweeper::start()` and nothing else |
 | `lib/minesweeper/src/board.rs` | `GridKind`, `Cell`/`CellState`, `Phase`, `Board` (mine placement, `neighbors`, flood-fill `reveal`) |
 | `lib/minesweeper/src/solver.rs` | `next_action` — constraint-satisfaction (subset-reduction) solver + probability fallback |
-| `lib/minesweeper/src/lib.rs` | `CliArgs`, `run`/`run_headless`, all rendering (`draw_board`/`draw_square`/`draw_hex_grid`/HUD) |
+| `lib/minesweeper/src/lib.rs` | `CliArgs`, `conf()`, `start()`/`play()` entry points, `run`/`run_headless`, all rendering (`draw_board`/`draw_square`/`draw_hex_grid`/HUD) |
 
 ## Square vs Hex
 

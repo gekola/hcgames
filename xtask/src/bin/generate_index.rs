@@ -2,9 +2,9 @@
 use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
-    base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json, minify_js,
-    pwa_head, social_image, sw_register_bridge, title, wall_analytics_bridge, wall_json_ld,
-    wall_live_bridge,
+    all_games, base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json,
+    minify_js, pwa_head, social_image, sw_register_bridge, title, wall_analytics_bridge,
+    wall_json_ld, wall_live_bridge,
 };
 
 /// Feeds `meta description`, `og:description`, the PWA manifest's `description` and the
@@ -1495,21 +1495,15 @@ fn main() {
     let dist = Path::new("dist");
     let base_url = base_url();
 
-    // A directory only counts as a game if it shipped a .wasm build — this excludes
-    // static redirect stubs (e.g. static/2048/index.html -> game2048/) that live
-    // alongside real games in dist/ but aren't ones themselves.
-    let mut games: Vec<String> = std::fs::read_dir(dist)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().is_dir())
-        .filter(|entry| {
-            std::fs::read_dir(entry.path())
-                .into_iter()
-                .flatten()
-                .filter_map(|f| f.ok())
-                .any(|f| f.path().extension().is_some_and(|ext| ext == "wasm"))
-        })
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+    // A dist/ directory only counts as a game if it has a `games/<name>` source crate
+    // *and* a built page — that excludes static redirect stubs (e.g. static/2048/index.html
+    // -> game2048/), which live alongside real games in dist/ but aren't ones. It used to
+    // key off "the directory contains a .wasm", which stopped distinguishing anything once
+    // every game page started loading the one shared `dist/hcg.wasm` instead of its own
+    // per-game binary (see `xtask::BUNDLE_WASM`) — that check would have found zero games.
+    let mut games: Vec<String> = all_games()
+        .into_iter()
+        .filter(|name| dist.join(name).join("index.html").is_file())
         .collect();
     games.sort_by_key(|name| title(name));
 

@@ -12,7 +12,8 @@ level table.
 |------|----------|
 | `src/game.rs` | `Bottle`, `Game`, `Move`, `LevelParams` (difficulty scaling), generation + solvability probe |
 | `src/solver.rs` | `Solver::choose_move` — `beam_solver`-backed pour selection |
-| `src/main.rs` | Rendering (bottle segments, fog, lock badge), pour animation, CLI |
+| `src/lib.rs` | Rendering (bottle segments, fog, lock badge), pour animation, CLI |
+| `src/main.rs` | Thin standalone binary — `water_sort::start()` and nothing else |
 
 ## Bottle model (`game.rs`)
 
@@ -55,7 +56,7 @@ palette is bigger than a single bottle can span.
 
 `Bottle.fog` (bottom N slots obscured until the bottle drains down to `fog` units or
 fewer — see its doc comment) is never read by any *legality* rule in `game.rs`, only
-by `main.rs`'s rendering — same "AI knows the true state, the *drawing* hides it"
+by `lib.rs`'s rendering — same "AI knows the true state, the *drawing* hides it"
 split every self-playing game in this workspace uses for anything visually withheld
 (there's no real hidden-information search here, unlike a game where an opponent's
 hand is genuinely unknown).
@@ -66,7 +67,7 @@ draining crosses the threshold. **Fixed bug**: this used to be a live comparison
 one-way reveal — so a bottle that had drained low enough to reveal its fogged bottom,
 then was later poured back into (e.g. becoming a merge destination) and refilled past
 the old threshold, would show the fog panel again over units the viewer had already
-seen. `main.rs`'s render check didn't need to change at all once `fog` itself becomes
+seen. `lib.rs`'s render check didn't need to change at all once `fog` itself becomes
 permanently `0` on reveal — the same live comparison is now correct by construction.
 
 ## Generation: shuffle-and-deal, biased toward solvable (not guaranteed)
@@ -185,7 +186,7 @@ bottle bottom-to-top, `*` marking a locked one — so a long soak can be audited
 That's what caught the bug above; the "avoidable pour" numbers in the table are counted
 straight off those logs.
 
-## Rendering (`main.rs`)
+## Rendering (`lib.rs`)
 
 Bottles laid out in a grid (`Layout::compute`, up to 8 columns, wrapping to more rows as
 bottle count grows) inside the default 900x720 canvas — no `xtask::native_size`

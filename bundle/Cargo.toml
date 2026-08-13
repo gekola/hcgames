@@ -1,0 +1,28 @@
+[package]
+name = "hcg-bundle"
+version = "0.1.0"
+edition = "2024"
+
+# One binary carrying every game, dispatched at runtime — see src/main.rs. Named `hcg`
+# because the wasm it produces is served as the site-wide `dist/hcg.wasm`, shared by
+# every game page.
+[[bin]]
+name = "hcg"
+path = "src/main.rs"
+
+# Deliberately NOT under games/: `xtask::all_games()` discovers games by listing that
+# directory, so a crate living there would show up as a fake 12th game in the sitemap,
+# the homepage grid and every page's related-game links.
+[dependencies]
+macroquad = "0.4"
+arrow-blocks = { path = "../games/arrow-blocks" }
+bubble-shooter = { path = "../games/bubble-shooter" }
+game2048 = { path = "../games/game2048" }
+klondike = { path = "../games/klondike" }
+match-3 = { path = "../games/match-3" }
+minesweeper = { path = "../lib/minesweeper" }
+snake = { path = "../games/snake" }
+spider = { path = "../games/spider" }
+sudoku = { path = "../games/sudoku" }
+tetris = { path = "../games/tetris" }
+water-sort = { path = "../games/water-sort" }

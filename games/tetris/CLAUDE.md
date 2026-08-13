@@ -11,7 +11,8 @@ see `xtask::native_size`/`max_fit_scale`'s `"tetris"` arms.
 | `src/game.rs` | `Piece`, `Board`, rotation-shape derivation, `Game` (rules/state), scoring |
 | `src/generator.rs` | `PieceGenerator`/`GenMode` — the 4 piece-randomizer algorithms |
 | `src/solver.rs` | `beam_solver::SearchState` impl + the board-evaluation heuristic |
-| `src/main.rs` | `Session`/`View`/`FallAnim`, `VariantMode` (piece-gen mode cycle), CLI, rendering |
+| `src/lib.rs` | `Session`/`View`/`FallAnim`, `VariantMode` (piece-gen mode cycle), CLI, rendering |
+| `src/main.rs` | Thin standalone binary — `tetris::start()` and nothing else |
 
 ## Piece generation (`generator.rs`)
 
@@ -51,7 +52,7 @@ W_HOLES            = -0.35663
 W_BUMPINESS        = -0.184483
 ```
 
-## Animation (`main.rs`)
+## Animation (`lib.rs`)
 
 `Game::apply` places pieces and clears lines instantly (pure/discrete — headless mode
 is a plain tight loop, no virtual-dt stepping). `FallAnim::pose()` fakes a real

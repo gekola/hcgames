@@ -10,7 +10,8 @@ candidate pencil-marks and a technique-colored fill.
 |------|----------|
 | `src/game.rs` | `Game`, grid/candidate bitmask helpers, `generate_solved_grid`, `dig`/`carve`, `Difficulty` |
 | `src/solver.rs` | `Solver::choose_move` — the technique escalation order |
-| `src/main.rs` | `DigitMetrics`, `VariantMode`, render loop, CLI |
+| `src/lib.rs` | `DigitMetrics`, `VariantMode`, render loop, CLI |
+| `src/main.rs` | Thin standalone binary — `sudoku::start()` and nothing else |
 
 ## Why no `beam_solver`
 

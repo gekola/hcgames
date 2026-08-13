@@ -3,10 +3,11 @@ use maud::{DOCTYPE, html};
 use std::path::Path;
 use xtask::{
     analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
-    favicon_links, fullscreen_bridge, game_json_ld, game_page_info, gtag_head, hotkey_popup,
-    loading_screen, manifest_json, native_size, native_size_style, orientation_hint, pwa_head,
-    screenshot_bridge, scroll_cue, session_signals_bridge, share_result_bridge, social_image,
-    social_video, stream_mode_query_bridge, sw_register_bridge, title, variant_query_bridge,
+    favicon_links, fullscreen_bridge, game_id_bridge, game_json_ld, game_page_info, gtag_head,
+    hotkey_popup, loading_screen, manifest_json, native_size, native_size_style, orientation_hint,
+    pwa_head, screenshot_bridge, scroll_cue, session_signals_bridge, share_result_bridge,
+    social_image, social_video, stream_mode_query_bridge, sw_register_bridge, title,
+    variant_query_bridge,
 };
 
 fn main() {
@@ -50,7 +51,8 @@ fn main() {
                     meta property="og:video:width" content=(w.to_string());
                     meta property="og:video:height" content=(h.to_string());
                 }
-                link rel="preload" href=(format!("{name}.wasm")) as="fetch" crossorigin="anonymous";
+                // Shared across every game page (see `BUNDLE_WASM`) — one URL, one cache entry.
+                link rel="preload" href=(format!("../{}", xtask::BUNDLE_WASM)) as="fetch" crossorigin="anonymous";
                 (game_json_ld(&base_url, &title, &description, &page_url, &og.url))
                 (gtag_head())
                 (pwa_head("#000000"))
@@ -75,10 +77,14 @@ fn main() {
                 (daily_mode_query_bridge())
                 (screenshot_bridge(&name))
                 (share_result_bridge())
-                @if name == "minesweeper" {
-                    (variant_query_bridge())
-                }
-                script { (maud::PreEscaped(format!("load(\"{name}.wasm\");"))) }
+                // Every page, not just minesweeper's: the shared binary links in
+                // `lib/minesweeper`'s `hcg_initial_variant_is_hex` import whichever game a
+                // page runs, and an unregistered import fails instantiation with a LinkError.
+                (variant_query_bridge())
+                // Which game the shared binary should run — must be registered before
+                // `load(...)`, like every other bridge above.
+                (game_id_bridge(&name))
+                script { (maud::PreEscaped(format!("load(\"../{}\");", xtask::BUNDLE_WASM))) }
                 (hotkey_popup(&name))
                 (daily_challenge_button())
                 (fullscreen_bridge())

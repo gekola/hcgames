@@ -458,6 +458,59 @@ pub fn all_games() -> Vec<String> {
     games
 }
 
+/// Filename of the one wasm binary every game page loads — `bundle/`'s merged build, which
+/// picks its game at runtime from `game_id_bridge`'s baked index. Site-root-relative
+/// (`dist/hcg.wasm`), not per-game, so a second page visit and the wall's 11 iframes hit the
+/// browser cache instead of downloading another copy of the framework.
+pub const BUNDLE_WASM: &str = "hcg.wasm";
+
+/// This game's index in the merged bundle's dispatch table (`bundle/src/main.rs`'s
+/// `GAME_NAMES`) — what `game_id_bridge` bakes into the page.
+///
+/// Deliberately its own directory listing rather than `all_games()`: that one sorts by
+/// display `title()` ("2048" before "Arrow Blocks"), so renaming a game's *title* would
+/// silently renumber every index and point pages at the wrong game. Directory names are
+/// stable, and `bundle`'s own `bundle_list_matches_games_dir` test asserts its array matches
+/// this same plain-sorted listing.
+pub fn bundle_game_index(name: &str) -> Option<usize> {
+    let mut games: Vec<String> = std::fs::read_dir("games")
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    games.sort();
+    games.iter().position(|g| g == name)
+}
+
+/// Registers a miniquad plugin exposing `env.hcg_game_id`, which tells the merged wasm
+/// binary (`bundle/`) which of the 11 games *this* page is. Must run before `load(...)`,
+/// same ordering constraint as `analytics_bridge` — and the id has to be readable before
+/// `Window::from_config`, since it selects the game's window title and native canvas size,
+/// not just its draw loop.
+///
+/// The index is baked in at generation time rather than read from a URL query or the path:
+/// the id is a property of the page, not of how a visitor arrived at it, and a query param
+/// would leak into canonical URLs and be trivially spoofable into a mismatch with the page's
+/// own title/OG tags.
+pub fn game_id_bridge(name: &str) -> Markup {
+    let id = bundle_game_index(name).unwrap_or(0);
+    html! {
+        script {
+            (PreEscaped(minify_js(&format!(
+                "miniquad_add_plugin({{\n\
+                 \x20 register_plugin: function(importObject) {{\n\
+                 \x20   importObject.env.hcg_game_id = function() {{ return {id}; }};\n\
+                 \x20 }},\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_game_id\"\n\
+                 }});"
+            ))))
+        }
+    }
+}
+
 /// The one line on a game page that is unique to that game. Two jobs, in this order: name the
 /// specific bad habit a human has in *this* game, then have the AI be insufferable about it.
 ///
@@ -898,6 +951,11 @@ pub fn wall_live_bridge() -> Markup {
 /// `/minesweeper-hex` redirect stub (`static/minesweeper-hex/index.html`) so it lands
 /// directly in Hex mode instead of the Square default. Must run before `load(...)`, same
 /// ordering constraint as `analytics_bridge`.
+///
+/// Registered on *every* game page even though only minesweeper reads it: since all pages
+/// load the one merged binary (see `BUNDLE_WASM`), `lib/minesweeper`'s import of this
+/// function is present in the module whatever game the page runs, and a wasm import the page
+/// never registered fails instantiation with a LinkError.
 pub fn variant_query_bridge() -> Markup {
     html! {
         script {
@@ -920,9 +978,8 @@ pub fn variant_query_bridge() -> Markup {
 /// `control::Control::stream_mode()` read the page's `?stream=1` query param at startup
 /// so a game can skip drawing its own in-canvas HUD (score, speed label) for an OBS/Twitch
 /// browser-source layer. Must run before `load(...)`, same ordering constraint as
-/// `analytics_bridge`/`variant_query_bridge`. Registered unconditionally for every game
-/// (unlike `variant_query_bridge`, which only minesweeper needs) since every game has a
-/// HUD worth hiding.
+/// `analytics_bridge`/`variant_query_bridge`. Registered unconditionally for every game,
+/// since every game has a HUD worth hiding.
 pub fn stream_mode_query_bridge() -> Markup {
     html! {
         script {

@@ -8,7 +8,8 @@ heuristic, modeling both 2-tile (90%) and 4-tile (10%) spawns at chance nodes.
 | File | Contents |
 |------|----------|
 | `src/lib.rs` | Pure game/AI logic: board transforms, `heuristic`, `slide`/`merge_row`, `expectimax`, `choose_dir` |
-| `src/main.rs` | Rendering, animation (slide/merge/pop-bounce — see root CLAUDE.md's `RenderCache` section, which uses this game's animation as its "genuinely animates every frame" example), CLI |
+| `src/play.rs` | Rendering, animation (slide/merge/pop-bounce — see root CLAUDE.md's `RenderCache` section, which uses this game's animation as its "genuinely animates every frame" example), CLI |
+| `src/main.rs` | Thin standalone binary — `game2048::play::start()` and nothing else |
 | `src/bin/bench.rs` | Headless benchmark binary — runs N games with a seeded xorshift RNG, reports score percentiles + max-tile distribution |
 
 ## AI
@@ -18,7 +19,7 @@ heuristic, modeling both 2-tile (90%) and 4-tile (10%) spawns at chance nodes.
 maximized over all 8 rotations/reflections (so the AI doesn't care which physical corner
 the snake starts in). `expectimax`: player nodes pick the best of the 4 `slide`
 directions; chance nodes model both a 2 (90%) and a 4 (10%) spawn at every empty cell,
-averaged. `choose_dir` (`main.rs`/`bench.rs`'s entry point) uses **adaptive depth** —
+averaged. `choose_dir` (`play.rs`/`bench.rs`'s entry point) uses **adaptive depth** —
 depth 5 with ≤3 empty cells, depth 4 with 4-9, depth 3 otherwise (fewer empties = fewer
 chance-node branches, so deeper search stays cheap when the board is nearly full, which
 is also when search quality matters most).

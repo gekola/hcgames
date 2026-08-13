@@ -6,7 +6,8 @@ AI snake game. No player input — the snake drives itself. Grid 40×30, window 
 
 | File | Contents |
 |------|----------|
-| `src/main.rs` | Constants, `Pt`, `conf()`, render loop, RNG seed |
+| `src/lib.rs` | Constants, `Pt`, `conf()`, render loop, RNG seed, `start()`/`play()` entry points |
+| `src/main.rs` | Thin standalone binary — `snake::start()` and nothing else |
 | `src/game.rs` | `Game` struct, `tick()`, AI (`choose_dir` → `bfs_to` → `time_flood` → `max_space_dir`) |
 | `src/blocks.rs` | `generate_blocks()`, `is_valid_layout()`, `no_articulation_points()` |
 
@@ -53,7 +54,7 @@ as non-causes: `max_space_dir`'s `best = self.dir` default (reachable, but only 
 (`n+1` cells needed, tail doesn't vacate when the candidate cell is the food) — worth 0pp.
 
 `DESPERATE_TICKS_MULT`/`STARVING_TICKS_MULT` (both `pub` in `game.rs`) are these two
-thresholds, `2` and `6`. `main.rs` reads them to drive the head's hunger tint (blue →
+thresholds, `2` and `6`. `lib.rs` reads them to drive the head's hunger tint (blue →
 white at `2n` ticks hungry, white → purple at `6n`; body segments stay plain blue) so
 the on-screen color tracks the AI's actual risk stage instead of an independently-tuned
 scale that could drift from it.

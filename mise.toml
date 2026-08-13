@@ -10,38 +10,31 @@ run = """
 cargo run --bin "$1"
 """
 
-# Build one game to WASM: mise run build-wasm snake
-[tasks.build-wasm]
-description = "Compile one game to WASM (+ native screenshot) and stage it in dist/<name>/, skipping wasm-opt/screenshot when the built wasm hasn't changed and HTML regen when xtask's generator hasn't, independently"
+# Run a game out of the merged binary natively: mise run run-bundle snake
+[tasks.run-bundle]
+description = "Run one game through the merged multi-game binary (bundle/) natively — the same dispatch path the browser takes. Per-game CLI flags live on the per-game binary (`mise run run <name>`) instead"
+run = """
+#!/usr/bin/env bash
+cargo run --bin hcg -- --game "$1"
+"""
+
+# Build the one shared all-games wasm: mise run build-bundle
+[tasks.build-bundle]
+description = "Compile bundle/ (every game in one binary, game chosen at runtime) to dist/hcg.wasm — the single wasm every game page loads; skips wasm-opt when the build didn't change"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-name=$1
-RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin "$name"
-mkdir -p "dist/$name"
-
-# Same no-op-build-leaves-mtime-untouched trick as the wasm check below, applied to
-# xtask itself — so editing xtask/src/lib.rs (the HTML templates) forces regeneration
-# even for a game whose own wasm didn't change, without needing `mise run clean`.
-cargo build --release --package xtask --bin generate_game_html
-xtask_bin="target/release/generate_game_html"
+mkdir -p dist
+RUSTFLAGS="-C link-arg=--import-undefined" cargo build --target "$WASM_TARGET" --release --bin hcg
 
 # Cargo only rewrites this file's mtime when it actually rebuilt the binary (a no-op
 # build leaves it untouched), so comparing it against the previous dist/ copy is a
-# reliable, dependency-graph-aware "did anything this game depends on actually change"
-# check — covers edits to the game itself as well as any shared lib/ crate it uses.
-src="target/$WASM_TARGET/release/$name.wasm"
-out="dist/$name/$name.wasm"
-html_out="dist/$name/index.html"
-
-# Two independent checks, not one combined — wasm-opt/screenshot only cares whether the
-# game's own build changed (a screenshot is pixels of gameplay, unaffected by page-chrome
-# HTML/CSS/JS), while HTML regen only cares whether xtask's generator changed. Bundling
-# both behind a single check used to force a full xvfb screenshot recapture for every
-# game on the next build-wasm after ANY xtask/src/lib.rs edit — including page-chrome-only
-# changes (a CSS tweak, a new hotkey-popup link) with zero effect on rendered gameplay.
+# reliable, dependency-graph-aware "did anything change" check — covering every game and
+# every shared lib/ crate, since the bundle depends on all of them.
+src="target/$WASM_TARGET/release/hcg.wasm"
+out="dist/hcg.wasm"
 if [ -f "$out" ] && [ ! "$src" -nt "$out" ]; then
-  echo "$name: wasm unchanged, skipping wasm-opt/screenshot" >&2
+  echo "bundle: wasm unchanged, skipping wasm-opt" >&2
 else
   # --all-features made wasm-opt enable engine features (reference-types, multivalue,
   # ...) beyond what rustc's wasm32-unknown-unknown target actually emits, and combining
@@ -53,6 +46,47 @@ else
   else
     cp "$src" "$out"
   fi
+fi
+# Shared across all games (dist/mq_js_bundle.js, not dist/<name>/) so it's fetched and
+# stored once total instead of once per game — and, since dist/ now persists between
+# deploys (see [tasks.deploy]), once ever rather than once per deploy.
+[ -f dist/mq_js_bundle.js ] || curl -sSfL "$MQ_JS" -o dist/mq_js_bundle.js
+"""
+
+# Stage one game's page + preview: mise run build-wasm snake
+[tasks.build-wasm]
+description = "Stage one game in dist/<name>/: its page (index.html + manifest) and its gameplay preview. No longer builds a per-game wasm — every page loads the shared dist/hcg.wasm from `mise run build-bundle` instead. Skips the screenshot when the game's sources haven't changed and HTML regen when xtask's generator hasn't, independently"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+name=$1
+mkdir -p "dist/$name"
+
+# Same no-op-build-leaves-mtime-untouched trick as build-bundle's check, applied to
+# xtask itself — so editing xtask/src/lib.rs (the HTML templates) forces regeneration
+# even for a game whose own code didn't change, without needing `mise run clean`.
+cargo build --release --package xtask --bin generate_game_html
+xtask_bin="target/release/generate_game_html"
+
+html_out="dist/$name/index.html"
+shot_out="dist/$name/preview.png"
+
+# Two independent checks, not one combined — the screenshot only cares whether the game's
+# own code changed (a screenshot is pixels of gameplay, unaffected by page-chrome
+# HTML/CSS/JS), while HTML regen only cares whether xtask's generator changed. Bundling
+# both behind a single check used to force a full xvfb screenshot recapture for every
+# game on the next build-wasm after ANY xtask/src/lib.rs edit — including page-chrome-only
+# changes (a CSS tweak, a new hotkey-popup link) with zero effect on rendered gameplay.
+#
+# Source mtimes, not a cargo artifact's: the old check compared this game's built wasm
+# against its dist/ copy, but per-game wasm builds are gone (see build-bundle), and the
+# obvious substitute — the native release binary — thrashes, because the clip task builds
+# the same path with `--features stream` and the screenshot task without, so its mtime
+# changes on every alternate run regardless of source edits.
+if [ -f "$shot_out" ] && \
+   [ -z "$(find "games/$name" lib Cargo.lock -name target -prune -o -newer "$shot_out" -print -quit)" ]; then
+  echo "$name: sources unchanged, skipping screenshot" >&2
+else
   mise run screenshot "$name"
 fi
 if [ -f "$html_out" ] && [ ! "$xtask_bin" -nt "$html_out" ]; then
@@ -60,10 +94,9 @@ if [ -f "$html_out" ] && [ ! "$xtask_bin" -nt "$html_out" ]; then
 else
   cargo run --release --package xtask --bin generate_game_html -- "$name"
 fi
-# Shared across all games (dist/mq_js_bundle.js, not dist/<name>/) so it's fetched and
-# stored once total instead of once per game — and, since dist/ now persists between
-# deploys (see [tasks.deploy]), once ever rather than once per deploy.
-[ -f dist/mq_js_bundle.js ] || curl -sSfL "$MQ_JS" -o dist/mq_js_bundle.js
+# Left over from the per-game-wasm era: dist/ persists between deploys, so an old
+# dist/<name>/<name>.wasm would otherwise sit there forever, served to nobody.
+rm -f "dist/$name/$name.wasm"
 """
 
 # Capture a representative in-game screenshot: mise run screenshot snake
@@ -100,10 +133,14 @@ set -euo pipefail
 name=$1
 shift
 mkdir -p "dist/$name"
-wasm="dist/$name/$name.wasm"
 out="dist/$name/clip.mp4"
-if [ -f "$out" ] && [ -f "$wasm" ] && [ ! "$wasm" -nt "$out" ]; then
-    echo "$name: wasm unchanged, skipping clip" >&2
+# Source mtimes rather than the built wasm this used to compare against: per-game wasm
+# builds are gone (every page loads the shared dist/hcg.wasm, see build-bundle), and the
+# native binary's mtime is unusable here because this task builds it with
+# `--features stream` and the screenshot task builds the same path without.
+if [ -f "$out" ] && \
+   [ -z "$(find "games/$name" lib Cargo.lock -name target -prune -o -newer "$out" -print -quit)" ]; then
+    echo "$name: sources unchanged, skipping clip" >&2
     exit 0
 fi
 if ! command -v xvfb-run >/dev/null 2>&1 || ! command -v ffmpeg >/dev/null 2>&1; then
@@ -238,6 +275,10 @@ for dir in dist/*/; do
     [ -d "games/$name" ] || [ -d "static/$name" ] || rm -rf "$dir"
 done
 mise run rasterize
+# One wasm for every game (bundle/), built once — each game page just bakes its own id
+# into the shared binary. Must run before the per-game loop only in spirit; the pages it
+# generates reference dist/hcg.wasm by name either way.
+mise run build-bundle
 for game in games/*/; do
     mise run build-wasm "$(basename "$game")"
 done

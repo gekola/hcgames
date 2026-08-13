@@ -1,0 +1,781 @@
+use cards::card::Card;
+use cards::render::{draw_card_back, draw_card_face, draw_empty_slot, draw_suit_symbol};
+use macroquad::prelude::*;
+use render_cache::RenderCache;
+use std::collections::HashSet;
+
+mod game;
+mod solver;
+
+use game::{Game, Move, Phase, Variant};
+use solver::Solver;
+
+const TICK: f32 = 0.20;
+const ANIM_DURATION: f32 = 0.24;
+const RESTART_DELAY: f64 = 2.8;
+const HUD_H: f32 = 34.0;
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+struct Layout {
+    cw: f32,
+    ch: f32,
+    gap: f32,
+    ox: f32,
+    top_y: f32,
+    tab_y: f32,
+    sh: f32,
+}
+
+impl Layout {
+    fn from_screen() -> Self {
+        let sw = screen_width();
+        let sh = screen_height();
+        let avail_w = sw - 20.0;
+        let cw = ((avail_w - 6.0 * 12.0) / 7.0).clamp(36.0, 105.0);
+        let ch = cw * 1.40;
+        let gap = ((avail_w - 7.0 * cw) / 6.0).max(4.0);
+        let top_y = 42.0;
+        let tab_y = top_y + ch + 16.0;
+        Self {
+            cw,
+            ch,
+            gap,
+            ox: 10.0,
+            top_y,
+            tab_y,
+            sh,
+        }
+    }
+
+    fn col_x(&self, i: usize) -> f32 {
+        self.ox + i as f32 * (self.cw + self.gap)
+    }
+
+    fn waste_top_pos(&self, game: &Game) -> (f32, f32) {
+        let wx = self.col_x(1);
+        if game.draw_count == 3 {
+            let n = game.waste.len().min(3);
+            if n > 1 {
+                let fan = (self.cw * 0.26).min(24.0);
+                return (wx + (n - 1) as f32 * fan, self.top_y);
+            }
+        }
+        (wx, self.top_y)
+    }
+
+    fn foundation_pos(&self, suit: usize) -> (f32, f32) {
+        (self.col_x(suit + 3), self.top_y)
+    }
+
+    fn tableau_offsets(&self, game: &Game, pile: usize) -> (f32, f32) {
+        let nd = game.n_down[pile];
+        let n_up = game.tableau[pile].len().saturating_sub(nd);
+        let avail_h = self.sh - self.tab_y - 8.0;
+        let down_off = (self.ch * 0.155).max(10.0);
+        let up_off_ideal = (self.ch * 0.265).max(14.0);
+        let up_off = if n_up > 1 {
+            let needed = nd as f32 * down_off + (n_up as f32 - 1.0) * up_off_ideal + self.ch;
+            if needed > avail_h {
+                ((avail_h - self.ch - nd as f32 * down_off) / (n_up as f32 - 1.0)).max(8.0)
+            } else {
+                up_off_ideal
+            }
+        } else {
+            up_off_ideal
+        };
+        (down_off, up_off)
+    }
+
+    fn tableau_card_pos(&self, game: &Game, pile: usize, card_idx: usize) -> (f32, f32) {
+        let tx = self.col_x(pile);
+        let nd = game.n_down[pile];
+        let (down_off, up_off) = self.tableau_offsets(game, pile);
+        let mut cy = self.tab_y;
+        for i in 0..card_idx {
+            cy += if i < nd { down_off } else { up_off };
+        }
+        (tx, cy)
+    }
+
+    fn tableau_top_pos(&self, game: &Game, pile: usize) -> (f32, f32) {
+        let len = game.tableau[pile].len();
+        if len == 0 {
+            (self.col_x(pile), self.tab_y)
+        } else {
+            self.tableau_card_pos(game, pile, len - 1)
+        }
+    }
+}
+
+// ── Animation ─────────────────────────────────────────────────────────────────
+
+struct FlyingCard {
+    card: Card,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
+fn compute_flying_cards(game: &Game, m: Move, layout: &Layout) -> Vec<FlyingCard> {
+    let mut after = game.clone();
+    after.apply(m);
+
+    match m {
+        Move::DrawStock | Move::ResetStock => vec![],
+
+        Move::WasteToFoundation => {
+            let card = *game.waste.last().unwrap();
+            let (x0, y0) = layout.waste_top_pos(game);
+            let (x1, y1) = layout.foundation_pos(card.suit as usize);
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
+        }
+        Move::WasteToTableau(to) => {
+            let card = *game.waste.last().unwrap();
+            let (x0, y0) = layout.waste_top_pos(game);
+            let (x1, y1) = layout.tableau_top_pos(&after, to);
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
+        }
+        Move::TableauToFoundation(from) => {
+            let card = *game.tableau[from].last().unwrap();
+            let (x0, y0) = layout.tableau_top_pos(game, from);
+            let (x1, y1) = layout.foundation_pos(card.suit as usize);
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
+        }
+        Move::TableauToTableau { from, n, to } => {
+            let t = &game.tableau[from];
+            (0..n)
+                .map(|i| {
+                    let card_idx = t.len() - n + i;
+                    let card = t[card_idx];
+                    let (x0, y0) = layout.tableau_card_pos(game, from, card_idx);
+                    let (x1, y1) =
+                        layout.tableau_card_pos(&after, to, after.tableau[to].len() - n + i);
+                    FlyingCard {
+                        card,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                    }
+                })
+                .collect()
+        }
+        Move::FoundationToTableau { suit, to } => {
+            let card = *game.foundations[suit].last().unwrap();
+            let (x0, y0) = layout.foundation_pos(suit);
+            let (x1, y1) = layout.tableau_top_pos(&after, to);
+            vec![FlyingCard {
+                card,
+                x0,
+                y0,
+                x1,
+                y1,
+            }]
+        }
+    }
+}
+
+fn ease_in_out(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0_f32).powi(3) / 2.0
+    }
+}
+
+// ── Variant mode ──────────────────────────────────────────────────────────────
+// `V` cycles Draw-1 → Draw-3 → Auto → Yukon → Draw-1 …; Auto rematches the
+// original alternate-every-round behaviour (derived from `generation`). Yukon
+// only ever starts from an explicit `V` press — the automatic Auto mode
+// alternates strictly between Draw-1/Draw-3 and never lands on it itself — but
+// it's still reachable through the same key rather than a dedicated hotkey.
+
+#[derive(Clone, Copy, PartialEq)]
+enum VariantMode {
+    Draw1,
+    Draw3,
+    Auto,
+    Yukon,
+}
+
+impl VariantMode {
+    fn next(self) -> Self {
+        match self {
+            VariantMode::Draw1 => VariantMode::Draw3,
+            VariantMode::Draw3 => VariantMode::Auto,
+            VariantMode::Auto => VariantMode::Yukon,
+            VariantMode::Yukon => VariantMode::Draw1,
+        }
+    }
+
+    fn variant(self) -> Variant {
+        match self {
+            VariantMode::Yukon => Variant::Yukon,
+            _ => Variant::Klondike,
+        }
+    }
+
+    fn draw_count(self, generation: u32) -> u8 {
+        match self {
+            VariantMode::Draw1 => 1,
+            VariantMode::Draw3 => 3,
+            VariantMode::Auto => {
+                if generation.is_multiple_of(2) {
+                    1
+                } else {
+                    3
+                }
+            }
+            VariantMode::Yukon => 1, // unused: Yukon has no stock/waste
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            VariantMode::Auto => " (auto)",
+            _ => "",
+        }
+    }
+}
+
+fn new_game_for(mode: VariantMode, generation: u32) -> Game {
+    Game::new(mode.variant(), generation, mode.draw_count(generation))
+}
+
+// ── CLI args (native only — meaningless in a browser tab) ───────────────────────
+
+pub struct CliArgs {
+    /// `--debug`: print every move the solver makes to stderr.
+    debug: bool,
+    /// `--once`: play a single game to Won/Stuck, print a result line, then exit
+    /// instead of looping through new generations forever. Meant for scripted runs
+    /// (`klondike --variant yukon --once --debug`) rather than manual `timeout`/`kill`.
+    once: bool,
+    /// `--variant <1|3|auto|yukon>`: pin the starting variant instead of always
+    /// booting into Auto (which still rotates 1/3 across generations as before).
+    variant: Option<VariantMode>,
+    /// `--no-ui`: skip macroquad/window/GL setup entirely and drive the solver in a
+    /// plain loop, gated by nothing but CPU. The windowed loop paces moves at `TICK`
+    /// (0.2s each, for watchability) — fine interactively, but it means a 2000-move
+    /// Draw-1 game can take minutes of real time to reach Won/Stuck, which makes
+    /// scripted algorithm testing (`--once`, or repeated soak runs) unnecessarily
+    /// slow. `--no-ui` is for that: same solver, no window, no throttle.
+    no_ui: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn parse_cli_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (base, rest) = game_common::parse_base_args(&args);
+
+    let mut variant = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--variant" => {
+                i += 1;
+                let v = rest.get(i).unwrap_or_else(|| {
+                    eprintln!("--variant requires a value: 1, 3, auto, or yukon");
+                    std::process::exit(2);
+                });
+                variant = Some(match v.as_str() {
+                    "1" => VariantMode::Draw1,
+                    "3" => VariantMode::Draw3,
+                    "auto" => VariantMode::Auto,
+                    "yukon" => VariantMode::Yukon,
+                    other => {
+                        eprintln!(
+                            "unknown --variant value '{other}': expected 1, 3, auto, or yukon"
+                        );
+                        std::process::exit(2);
+                    }
+                });
+            }
+            other => {
+                eprintln!(
+                    "unknown argument '{other}' (expected --debug, --once, --no-ui, --variant <1|3|auto|yukon>)"
+                );
+                std::process::exit(2);
+            }
+        }
+        i += 1;
+    }
+
+    CliArgs {
+        debug: base.debug,
+        once: base.once,
+        variant,
+        no_ui: base.no_ui,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn parse_cli_args() -> CliArgs {
+    CliArgs {
+        debug: false,
+        once: false,
+        variant: None,
+        no_ui: false,
+    }
+}
+
+fn variant_label(mode_variant: Variant, draw_count: u8) -> String {
+    match mode_variant {
+        Variant::Klondike => format!("draw-{draw_count}"),
+        Variant::Yukon => "yukon".to_owned(),
+    }
+}
+
+fn log_move(game: &Game, m: Move) {
+    eprintln!(
+        "move={:?} n_down={:?} foundation={}/52 stock={} waste={} moves={} gen={}",
+        m,
+        game.n_down,
+        game.foundations.iter().map(|f| f.len()).sum::<usize>(),
+        game.stock.len(),
+        game.waste.len(),
+        game.moves,
+        game.generation + 1,
+    );
+}
+
+fn log_stall(game: &Game) {
+    eprintln!(
+        "STALL at moves={} gen={}: raw legal_moves={:?}",
+        game.moves,
+        game.generation + 1,
+        game.legal_moves(),
+    );
+}
+
+fn print_result(game: &Game) {
+    println!(
+        "result={} variant={} moves={} foundation={}/52",
+        if game.phase == Phase::Won {
+            "won"
+        } else {
+            "stuck"
+        },
+        variant_label(game.variant, game.draw_count),
+        game.moves,
+        game.foundations.iter().map(|f| f.len()).sum::<usize>(),
+    );
+}
+
+/// `--no-ui`: no `Conf`/`Window::from_config`/GL context of any kind — just the solver
+/// looping against `Game` at full CPU speed. Prints one `result=...` line per game
+/// (unlike the windowed loop, which stays silent unless `--once`) since nothing else
+/// makes a headless run's progress visible.
+pub fn run_headless(cli: CliArgs) {
+    macroquad::rand::srand(screenshot::seed());
+
+    let mode = cli.variant.unwrap_or(VariantMode::Auto);
+    let mut game = new_game_for(mode, 0);
+    let mut solver = Solver::new();
+
+    loop {
+        match game.phase {
+            Phase::Playing => {
+                if let Some(m) = solver.choose_move(&game) {
+                    if cli.debug {
+                        log_move(&game, m);
+                    }
+                    game.apply(m);
+                } else {
+                    if cli.debug {
+                        log_stall(&game);
+                    }
+                    game.phase = Phase::Stuck;
+                }
+            }
+            Phase::Won | Phase::Stuck => {
+                print_result(&game);
+                if cli.once {
+                    return;
+                }
+                game = new_game_for(mode, game.generation + 1);
+                solver = Solver::new();
+            }
+        }
+    }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+pub fn conf() -> Conf {
+    Conf {
+        window_title: "Klondike".to_owned(),
+        window_width: 900,
+        window_height: 720,
+        high_dpi: true,
+        ..Default::default()
+    }
+}
+
+// Manual entry point instead of `#[macroquad::main(conf)]`: that attribute expands to
+// exactly this (see macroquad_macro), but unconditionally calls `Window::from_config`
+// before any of our code runs — too late to skip window/GL setup for `--no-ui`. Parsing
+// args first and branching ourselves is the only way to avoid creating a window at all.
+/// Entry point for the standalone per-game binary — same window/`--no-ui` branching
+/// `main()` used to do.
+pub fn start() {
+    let cli = parse_cli_args();
+    if cli.no_ui {
+        run_headless(cli);
+        return;
+    }
+    macroquad::Window::from_config(conf(), run_ui(cli));
+}
+
+/// The `CliArgs` a browser build gets: no argv to parse, so every flag is off and
+/// `variant` stays `None` (i.e. the game keeps its Auto variant rotation).
+fn bundled_cli() -> CliArgs {
+    CliArgs {
+        debug: false,
+        once: false,
+        variant: None,
+        no_ui: false,
+    }
+}
+
+/// Entry point for the merged multi-game binary (see `bundle/`): no argv parsing —
+/// the bundled build gets the same `CliArgs` the browser build does.
+pub async fn play() {
+    run_ui(bundled_cli()).await;
+}
+
+pub async fn run_ui(cli: CliArgs) {
+    let mut control = control::Control::new();
+    macroquad::rand::srand(control.seed());
+
+    let mut mode = cli.variant.unwrap_or(VariantMode::Auto);
+    let mut game = new_game_for(mode, 0);
+    let mut display_game = game.clone();
+    let mut solver = Solver::new();
+    let mut accum = 0.0f32;
+    let mut anim_t: f32 = 1.0; // start settled so first move fires immediately
+    let mut flying: Vec<FlyingCard> = Vec::new();
+    let mut end_time: Option<f64> = None;
+    let mut shot = screenshot::Capture::from_env();
+    // Set once the daily-challenge run reaches Won/Stuck (see `control::Control::daily_mode`)
+    // — the board freezes there instead of restarting into a new deal.
+    let mut daily_done = false;
+
+    // See `render_cache::prewarm_glyphs` — must run before `board_cache` (or any
+    // RenderCache) exists. 16.0 is the stock-pile count label's fixed font size.
+    let init_fs = (Layout::from_screen().ch * 0.175).max(9.0) as u16;
+    render_cache::prewarm_glyphs(&cards::render::RANK_STRS, &[init_fs, 16]);
+
+    // `draw_game` (cell backgrounds, card faces/backs, empty-slot outlines — up to 52
+    // bezier-heavy suit symbols) only actually changes when `display_game`/`in_flight`
+    // change, which happens at exactly two discrete moments (a move starts or an
+    // animation settles), not every render frame. See `render_cache::RenderCache` for
+    // why this matters — unbounded per-frame redraw of card art was pushing this page's
+    // Lighthouse mobile Total Blocking Time past 90 seconds. Sized to everything below
+    // the HUD strip; rebuilt if the canvas itself resizes (native window resize only —
+    // the deployed WASM canvas is pinned to a fixed backing resolution).
+    let mut cached_size = (screen_width(), screen_height());
+    let mut board_cache =
+        RenderCache::new(Rect::new(0.0, HUD_H, cached_size.0, cached_size.1 - HUD_H));
+
+    loop {
+        control.handle_keys();
+        let now = macroquad::miniquad::date::now();
+        let dt = control.scale(get_frame_time().min(0.1));
+        let layout = Layout::from_screen();
+
+        let cur_size = (screen_width(), screen_height());
+        if cur_size != cached_size {
+            board_cache = RenderCache::new(Rect::new(0.0, HUD_H, cur_size.0, cur_size.1 - HUD_H));
+            cached_size = cur_size;
+        }
+
+        if is_key_pressed(KeyCode::V) || control.variant_swipe() {
+            mode = mode.next();
+            game = new_game_for(mode, game.generation + 1);
+            display_game = game.clone();
+            solver = Solver::new();
+            end_time = None;
+            accum = 0.0;
+            anim_t = 1.0;
+            flying.clear();
+            board_cache.mark_dirty();
+        }
+
+        // Advance animation; when it settles (not every frame it stays settled), sync
+        // display_game to actual game.
+        let was_animating = anim_t < 1.0;
+        anim_t = (anim_t + dt / ANIM_DURATION).min(1.0);
+        if was_animating && anim_t >= 1.0 {
+            display_game = game.clone();
+            flying.clear();
+            board_cache.mark_dirty();
+        }
+
+        match game.phase {
+            Phase::Playing => {
+                accum += dt;
+                if anim_t >= 1.0 && accum >= TICK {
+                    accum -= TICK;
+                    if let Some(m) = solver.choose_move(&game) {
+                        if cli.debug {
+                            log_move(&game, m);
+                        }
+                        flying = compute_flying_cards(&game, m, &layout);
+                        game.apply(m);
+                        board_cache.mark_dirty();
+                        if flying.is_empty() {
+                            // No animation needed (draw/reset); snap display immediately.
+                            display_game = game.clone();
+                        } else {
+                            anim_t = 0.0;
+                            // display_game already holds the pre-move snapshot from above.
+                        }
+                    } else {
+                        if cli.debug {
+                            log_stall(&game);
+                        }
+                        // True dead end (no stock cycle left to fall back on, common in
+                        // Yukon): the move-count/lap counters that normally flip Stuck
+                        // never advance here since nothing gets applied, so force it.
+                        game.phase = Phase::Stuck;
+                    }
+                }
+            }
+            Phase::Won | Phase::Stuck => {
+                if cli.once {
+                    print_result(&game);
+                    std::process::exit(0);
+                }
+
+                let t = *end_time.get_or_insert(now);
+                if !daily_done && now - t > RESTART_DELAY {
+                    let score: i64 = game.foundations.iter().map(|f| f.len() as i64).sum();
+                    control.episode_complete("klondike", score);
+                    if control.daily_mode() {
+                        let result_clause = if game.phase == Phase::Won {
+                            format!("win with all {score} cards home")
+                        } else {
+                            format!("get stuck with {score} cards home")
+                        };
+                        control::share_result(&control::daily_verdict_text(
+                            "Klondike",
+                            control::daily_puzzle_number(),
+                            &result_clause,
+                        ));
+                        daily_done = true;
+                    } else {
+                        game = new_game_for(mode, game.generation + 1);
+                        display_game = game.clone();
+                        solver = Solver::new();
+                        end_time = None;
+                        accum = 0.0;
+                        anim_t = 1.0;
+                        flying.clear();
+                        board_cache.mark_dirty();
+                    }
+                }
+            }
+        }
+
+        let in_flight: HashSet<Card> = flying.iter().map(|fc| fc.card).collect();
+
+        clear_background(Color::new(0.10, 0.28, 0.10, 1.0));
+        if !control.stream_mode() {
+            draw_hud(&game, mode.label(), &control.label(), control.daily_mode());
+        }
+        board_cache.draw(|| draw_game(&display_game, &layout, &in_flight));
+
+        // Overlay flying cards at their interpolated position.
+        let t = ease_in_out(anim_t);
+        for fc in &flying {
+            let x = fc.x0 + (fc.x1 - fc.x0) * t;
+            let y = fc.y0 + (fc.y1 - fc.y0) * t;
+            draw_card_face(x, y, layout.cw, layout.ch, fc.card);
+        }
+
+        shot.tick();
+        screenshot::handle_hotkey();
+        next_frame().await;
+    }
+}
+
+// ── HUD ───────────────────────────────────────────────────────────────────────
+
+fn draw_hud(game: &Game, mode_label: &str, speed_label: &str, daily_mode: bool) {
+    let sw = screen_width();
+    let (hud_bg, txt_col) = match game.phase {
+        Phase::Won => (
+            Color::new(0.05, 0.18, 0.08, 1.0),
+            Color::new(0.28, 1.0, 0.52, 1.0),
+        ),
+        Phase::Stuck => (
+            Color::new(0.18, 0.05, 0.05, 1.0),
+            Color::new(1.0, 0.38, 0.38, 1.0),
+        ),
+        Phase::Playing => (
+            Color::new(0.07, 0.07, 0.12, 1.0),
+            Color::new(0.68, 0.68, 0.85, 1.0),
+        ),
+    };
+    draw_rectangle(0.0, 0.0, sw, 34.0, hud_bg);
+
+    // Daily-challenge runs freeze here rather than restarting (see
+    // `control::Control::daily_mode`) — "Restarting..." would be an outright lie.
+    let status = match game.phase {
+        Phase::Playing => String::new(),
+        Phase::Won if daily_mode => "  - WON!".to_owned(),
+        Phase::Stuck if daily_mode => "  - STUCK.".to_owned(),
+        Phase::Won => "  - WON! Restarting...".to_owned(),
+        Phase::Stuck => "  - STUCK. Restarting...".to_owned(),
+    };
+    let variant_label = match game.variant {
+        Variant::Klondike => format!("Draw-{}{}", game.draw_count, mode_label),
+        Variant::Yukon => "Yukon".to_owned(),
+    };
+    let msg = format!(
+        "Klondike  {}   Moves: {}   Gen: {}{}",
+        variant_label,
+        game.moves,
+        game.generation + 1,
+        status,
+    );
+    draw_text(&msg, 10.0, 24.0, 20.0, txt_col);
+
+    let sd = measure_text(speed_label, None, 20, 1.0);
+    draw_text(speed_label, sw - 8.0 - sd.width, 24.0, 20.0, txt_col);
+}
+
+// ── Game board ────────────────────────────────────────────────────────────────
+
+fn draw_game(game: &Game, layout: &Layout, in_flight: &HashSet<Card>) {
+    let Layout {
+        cw,
+        ch,
+        top_y,
+        tab_y,
+        ..
+    } = *layout;
+
+    // ── Stock ─────────────────────────────────────────────────────────────────
+    let sx = layout.col_x(0);
+    if game.stock.is_empty() {
+        draw_empty_slot(sx, top_y, cw, ch);
+    } else {
+        draw_card_back(sx, top_y, cw, ch);
+        let cnt = game.stock.len().to_string();
+        let d = measure_text(&cnt, None, 16, 1.0);
+        draw_text(
+            &cnt,
+            sx + cw * 0.5 - d.width * 0.5,
+            top_y + ch + 14.0,
+            16.0,
+            Color::new(0.55, 0.65, 0.55, 0.75),
+        );
+    }
+
+    // ── Waste ─────────────────────────────────────────────────────────────────
+    let wx = layout.col_x(1);
+    if game.waste.is_empty() {
+        draw_empty_slot(wx, top_y, cw, ch);
+    } else if game.draw_count == 3 {
+        let start = game.waste.len().saturating_sub(3);
+        let fan = (cw * 0.26).min(24.0);
+        for (i, &card) in game.waste[start..].iter().enumerate() {
+            if !in_flight.contains(&card) {
+                draw_card_face(wx + i as f32 * fan, top_y, cw, ch, card);
+            }
+        }
+    } else {
+        let card = *game.waste.last().unwrap();
+        if !in_flight.contains(&card) {
+            draw_card_face(wx, top_y, cw, ch, card);
+        }
+    }
+
+    // ── Foundations ───────────────────────────────────────────────────────────
+    for s in 0..4usize {
+        let fx = layout.col_x(s + 3);
+        let f = &game.foundations[s];
+        let gcol = if s == 1 || s == 2 {
+            Color::new(0.55, 0.20, 0.20, 0.50)
+        } else {
+            Color::new(0.32, 0.36, 0.52, 0.50)
+        };
+        if f.is_empty() {
+            draw_empty_slot(fx, top_y, cw, ch);
+            draw_suit_symbol(
+                fx + cw * 0.5,
+                top_y + ch * 0.52,
+                (ch * 0.32).max(12.0),
+                s as u8,
+                gcol,
+            );
+        } else {
+            let top = *f.last().unwrap();
+            if !in_flight.contains(&top) {
+                draw_card_face(fx, top_y, cw, ch, top);
+            } else if f.len() >= 2 {
+                draw_card_face(fx, top_y, cw, ch, f[f.len() - 2]);
+            } else {
+                draw_empty_slot(fx, top_y, cw, ch);
+                draw_suit_symbol(
+                    fx + cw * 0.5,
+                    top_y + ch * 0.52,
+                    (ch * 0.32).max(12.0),
+                    s as u8,
+                    gcol,
+                );
+            }
+        }
+    }
+
+    // ── Tableau ───────────────────────────────────────────────────────────────
+    for p in 0..7usize {
+        let tx = layout.col_x(p);
+        let t = &game.tableau[p];
+        let nd = game.n_down[p];
+
+        if t.is_empty() {
+            draw_empty_slot(tx, tab_y, cw, ch);
+            continue;
+        }
+
+        let (down_off, up_off) = layout.tableau_offsets(game, p);
+        let mut cy = tab_y;
+        for (i, &card) in t.iter().enumerate() {
+            let is_last = i == t.len() - 1;
+            if i < nd {
+                draw_card_back(tx, cy, cw, ch);
+                cy += down_off;
+            } else {
+                if !in_flight.contains(&card) {
+                    draw_card_face(tx, cy, cw, ch, card);
+                }
+                if !is_last {
+                    cy += up_off;
+                }
+            }
+        }
+    }
+}

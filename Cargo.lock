@@ -192,6 +192,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hcg-bundle"
+version = "0.1.0"
+dependencies = [
+ "arrow-blocks",
+ "bubble-shooter",
+ "game2048",
+ "klondike",
+ "macroquad",
+ "match-3",
+ "minesweeper",
+ "snake",
+ "spider",
+ "sudoku",
+ "tetris",
+ "water-sort",
+]
+
+[[package]]
 name = "image"
 version = "0.24.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

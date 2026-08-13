@@ -1,6 +1,6 @@
 # Spider
 
-Self-playing Spider solitaire, `game.rs`/`solver.rs`/`main.rs` split (see root
+Self-playing Spider solitaire, `game.rs`/`solver.rs`/`lib.rs` split (see root
 CLAUDE.md's "Self-playing solver games"). 10 tableau columns, 104-card deck, 3 variants
 (1/2/4 distinct suits — 8/4/2 copies of each rank respectively), cycled via `V` or
 pinned with `--variant <1|2|4|auto>` (default `auto`, rotates by `generation % 3`).
@@ -11,7 +11,8 @@ pinned with `--variant <1|2|4|auto>` (default `auto`, rotates by `generation % 3
 |------|----------|
 | `src/game.rs` | `Game`, `Move`, `Phase`, `legal_moves`/`apply`, `suited_run_len`, `state_hash` |
 | `src/solver.rs` | `Solver` (wraps `beam_solver::BeamSearch<Game>`), `is_pointless`, `score`/`score_core`, `diagnose_stuck` |
-| `src/main.rs` | CLI (`--variant`), `run_headless`, render loop, `VariantMode` V-cycle |
+| `src/lib.rs` | CLI (`--variant`), `run_headless`, render loop, `VariantMode` V-cycle |
+| `src/main.rs` | Thin standalone binary — `spider::start()` and nothing else |
 
 ## Solver
 
