@@ -32,7 +32,7 @@ fn main() {
                 title { (title) " — Hotel Chair Games" }
                 meta name="description" content=(description);
                 link rel="canonical" href=(page_url);
-                meta property="og:type" content="website";
+                meta property="og:type" content=(if video.is_some() { "video.other" } else { "website" });
                 meta property="og:site_name" content="Hotel Chair Games";
                 meta property="og:locale" content="en_US";
                 meta property="og:title" content=(format!("{title} — Hotel Chair Games"));
