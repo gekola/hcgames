@@ -197,6 +197,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-blocks",
  "bubble-shooter",
+ "control",
  "game2048",
  "klondike",
  "macroquad",
@@ -207,6 +208,7 @@ dependencies = [
  "sudoku",
  "tetris",
  "water-sort",
+ "xtask",
 ]
 
 [[package]]

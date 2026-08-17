@@ -98,6 +98,13 @@ pub struct Control {
     fullscreen: bool,
     #[cfg(not(target_arch = "wasm32"))]
     last_click: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    popup_open: bool,
+    /// Set by `handle_keys()`, read (not recomputed) by `exit_requested()` — see that
+    /// method's doc comment for why the two are split like this instead of
+    /// `exit_requested()` reading raw input itself.
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_exit: Option<ExitReason>,
     /// (avg x of the two touches, `mult` at gesture start) while a two-finger drag is live.
     two_finger_anchor: Option<(f32, f32)>,
     /// (x, y, start time) of an in-progress single-finger touch.
@@ -107,8 +114,21 @@ pub struct Control {
     daily_mode: bool,
 }
 
+/// Why a game's `play_until_exit()` loop returned control to the standalone shell (see
+/// `.notes/steam-standalone-menu-handoff.md`) — `Menu` lands back on the game grid,
+/// `Quit` ends the process. Not `#[cfg]`-gated to WASM even though only the native shell
+/// produces it: a per-game `play_until_exit()` needs one return type usable from both
+/// `#[cfg(...)]` arms of its own signature without the type itself vanishing on WASM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitReason {
+    Menu,
+    Quit,
+}
+
 impl Control {
     pub fn new() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        prevent_quit();
         Self {
             mult: 1.0,
             paused: false,
@@ -117,6 +137,10 @@ impl Control {
             fullscreen: false,
             #[cfg(not(target_arch = "wasm32"))]
             last_click: f64::NEG_INFINITY,
+            #[cfg(not(target_arch = "wasm32"))]
+            popup_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_exit: None,
             two_finger_anchor: None,
             one_finger_start: None,
             variant_swipe: false,
@@ -211,6 +235,32 @@ impl Control {
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
             }
+
+            // `get_char_pressed` (layout-aware text input, unlike `KeyCode` which is a
+            // physical key) rather than checking `KeyCode::Slash` + shift by hand — same
+            // reasoning the web build gets for free from `e.key === '?'`.
+            while let Some(c) = get_char_pressed() {
+                if c == '?' {
+                    self.popup_open = !self.popup_open;
+                }
+            }
+
+            // Computed here, once, rather than in `exit_requested()` itself: closing the
+            // popup has to *consume* this frame's Esc press so it doesn't also fire an
+            // exit-to-menu the same frame, and only `handle_keys` (called before
+            // `exit_requested` every frame, see that method's doc comment) can both read
+            // input and mutate `popup_open` in the same pass. Only ever *sets*
+            // `pending_exit`, never resets it to `None` — see `draw_overlay`, which can
+            // also set it (from a mouse click) after this method already ran this frame.
+            if is_quit_requested() {
+                self.pending_exit = Some(ExitReason::Quit);
+            } else if is_key_pressed(KeyCode::Escape) {
+                if self.popup_open {
+                    self.popup_open = false;
+                } else {
+                    self.pending_exit = Some(ExitReason::Menu);
+                }
+            }
         }
 
         self.handle_touch();
@@ -269,6 +319,126 @@ impl Control {
     /// of the `V` variant-cycle hotkey. Games without a variant cycle can ignore it.
     pub fn variant_swipe(&self) -> bool {
         self.variant_swipe
+    }
+
+    /// Native-only: `Some(Menu)` when the player pressed Esc (and the hotkey popup wasn't
+    /// open — Esc closes that first) or clicked `draw_overlay`'s "back to menu" corner
+    /// hint, `Some(Quit)` when they closed the window (only fires because `Control::new`
+    /// calls `prevent_quit()` — without that, a close click kills the process before this
+    /// is ever read), else `None`. Always `None` on WASM — a browser tab has nothing to
+    /// "return to", and Esc there is page-level JS for the hotkey popup
+    /// (`xtask::hotkey_popup`), not a Rust binding. A game's `play_until_exit()` checks
+    /// this once per frame, right after `handle_keys()` (which is what actually computes
+    /// the value returned here — see its doc comment); `play()` (the browser entry point)
+    /// never calls it.
+    pub fn exit_requested(&self) -> Option<ExitReason> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.pending_exit
+        }
+        #[cfg(target_arch = "wasm32")]
+        None
+    }
+
+    /// No-op on WASM (the browser's own hotkey popup is page-level HTML/JS,
+    /// `xtask::hotkey_popup` — this would be a second, redundant one drawn over the
+    /// canvas) — an unconditional signature so every game can call it every frame without
+    /// its own `#[cfg]`, same reasoning as `exit_requested`. Natively, draws two things,
+    /// always in this order so the popup paints over the hint: a small always-visible
+    /// "back to menu" hint in the bottom-right corner (chosen to avoid the top-left corner
+    /// every game's own score/generation HUD text uses), clickable as a mouse-first
+    /// equivalent of pressing Esc; and, when `?` has toggled `popup_open` on, a full
+    /// hotkey-reference panel mirroring the web build's own `?`-key popup. Call once per
+    /// frame, after a game's own drawing is done (typically right before
+    /// `next_frame().await`) — safe to call there specifically because nothing here draws
+    /// for the first time inside an active `RenderCache` render-target camera (see root
+    /// CLAUDE.md's "Font atlas gotcha"), only on the default camera after a frame's cache
+    /// draws are already done.
+    pub fn draw_overlay(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let hint = "Esc  Menu    ?  Help";
+            let fs = 16.0;
+            let pad = 8.0;
+            let td = measure_text(hint, None, fs as u16, 1.0);
+            let w = td.width + pad * 2.0;
+            let h = td.height + pad * 2.0;
+            let x = screen_width() - w - 10.0;
+            let y = screen_height() - h - 10.0;
+            draw_rectangle(x, y, w, h, Color::new(0.0, 0.0, 0.0, 0.45));
+            draw_text(
+                hint,
+                x + pad,
+                y + h - pad - 2.0,
+                fs,
+                Color::new(0.85, 0.85, 0.9, 1.0),
+            );
+            if !self.popup_open
+                && is_mouse_button_pressed(MouseButton::Left)
+                && Rect::new(x, y, w, h).contains(vec2(mouse_position().0, mouse_position().1))
+            {
+                self.pending_exit = Some(ExitReason::Menu);
+            }
+
+            if self.popup_open {
+                self.draw_popup();
+            }
+        }
+    }
+
+    /// The panel half of `draw_overlay` — split out only for readability, not meant to be
+    /// called on its own (it doesn't check `popup_open`).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_popup(&self) {
+        const LINES: [(&str, &str); 9] = [
+            ("=", "speed up"),
+            ("-", "slow down"),
+            ("0", "reset speed"),
+            ("Space", "pause / resume"),
+            ("F", "toggle fullscreen (or double-click)"),
+            ("V", "switch game variant (games that have one)"),
+            ("S", "save screenshot"),
+            ("?", "toggle this help"),
+            ("Esc", "back to menu (or close this help)"),
+        ];
+
+        let sw = screen_width();
+        let sh = screen_height();
+        draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.6));
+
+        let line_h = 30.0;
+        let desc_x = 120.0;
+        // Sized off the actual longest desc rather than a fixed guess — "toggle
+        // fullscreen (or double-click)" was overflowing a hardcoded 440px panel.
+        let max_desc_w = LINES
+            .iter()
+            .map(|(_, desc)| measure_text(desc, None, 20, 1.0).width)
+            .fold(0.0f32, f32::max);
+        let panel_w = desc_x + max_desc_w + 20.0;
+        let panel_h = 70.0 + LINES.len() as f32 * line_h;
+        let px = (sw - panel_w) * 0.5;
+        let py = (sh - panel_h) * 0.5;
+        draw_rectangle(px, py, panel_w, panel_h, Color::new(0.1, 0.1, 0.15, 0.97));
+        draw_rectangle_lines(
+            px,
+            py,
+            panel_w,
+            panel_h,
+            2.0,
+            Color::new(0.4, 0.75, 1.0, 1.0),
+        );
+        draw_text("Hotkeys", px + 20.0, py + 38.0, 26.0, WHITE);
+        for (i, (key, desc)) in LINES.iter().enumerate() {
+            let ly = py + 70.0 + i as f32 * line_h;
+            draw_text(key, px + 20.0, ly, 20.0, Color::new(0.5, 0.8, 1.0, 1.0));
+            draw_text(
+                desc,
+                px + desc_x,
+                ly,
+                20.0,
+                Color::new(0.85, 0.85, 0.9, 1.0),
+            );
+        }
     }
 
     /// Zero while paused, otherwise `dt` scaled by the speed multiplier.

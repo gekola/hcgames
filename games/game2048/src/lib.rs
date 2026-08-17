@@ -2,6 +2,8 @@
 /// the merged multi-game binary can call `play::play()` without a `main()` of its own).
 pub mod play;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use play::play_until_exit;
 /// Re-exported at the crate root so this game has the same `conf()`/`play()`/`start()`
 /// surface every other game crate exposes — `bundle/`'s dispatch table stays one uniform
 /// line per game instead of special-casing the one crate whose loop lives in a submodule

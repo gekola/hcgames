@@ -26,3 +26,11 @@ spider = { path = "../games/spider" }
 sudoku = { path = "../games/sudoku" }
 tetris = { path = "../games/tetris" }
 water-sort = { path = "../games/water-sort" }
+control = { path = "../lib/control" }
+
+# xtask (title-casing a game's directory name for the menu) is native-only shell
+# machinery — kept off the wasm dependency graph entirely (its own deps, e.g. `image`,
+# have no reason to build for wasm32) via a target-specific dependency rather than an
+# unconditional one.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+xtask = { path = "../xtask" }

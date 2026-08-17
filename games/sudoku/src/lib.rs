@@ -271,7 +271,9 @@ pub fn start() {
         run_headless(cli);
         return;
     }
-    macroquad::Window::from_config(conf(), run_ui(cli));
+    macroquad::Window::from_config(conf(), async move {
+        run_ui(cli).await;
+    });
 }
 
 /// The `CliArgs` a browser build gets: no argv to parse, so every flag is off and
@@ -291,7 +293,16 @@ pub async fn play() {
     run_ui(bundled_cli()).await;
 }
 
-pub async fn run_ui(cli: CliArgs) {
+/// Entry point for the standalone shell (see
+/// `.notes/steam-standalone-menu-handoff.md`): runs until the player asks to leave
+/// (Esc) or closes the window, then returns instead of looping forever. `play()` above
+/// stays as-is for the browser, where there is nothing to return to.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn play_until_exit() -> control::ExitReason {
+    run_ui(bundled_cli()).await
+}
+
+pub async fn run_ui(cli: CliArgs) -> control::ExitReason {
     let mut control = control::Control::new();
     macroquad::rand::srand(control.seed());
 
@@ -316,6 +327,9 @@ pub async fn run_ui(cli: CliArgs) {
 
     loop {
         control.handle_keys();
+        if let Some(reason) = control.exit_requested() {
+            break reason;
+        }
         let now = macroquad::miniquad::date::now();
         let dt = control.scale(get_frame_time().min(0.1));
 
@@ -384,6 +398,7 @@ pub async fn run_ui(cli: CliArgs) {
 
         shot.tick();
         screenshot::handle_hotkey();
+        control.draw_overlay();
         next_frame().await;
     }
 }

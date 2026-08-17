@@ -118,7 +118,9 @@ pub fn start() {
     if cli.no_ui {
         run_headless(kind, cli);
     } else {
-        macroquad::Window::from_config(conf(), run(kind, cli));
+        macroquad::Window::from_config(conf(), async move {
+            run(kind, cli).await;
+        });
     }
 }
 
@@ -127,7 +129,9 @@ pub fn start() {
 /// `/minesweeper-hex` URL's redirect stub relies on to land in Hex mode.
 #[cfg(target_arch = "wasm32")]
 pub fn start() {
-    macroquad::Window::from_config(conf(), run(initial_wasm_variant(), parse_cli_args()));
+    macroquad::Window::from_config(conf(), async move {
+        run(initial_wasm_variant(), parse_cli_args()).await;
+    });
 }
 
 /// Entry point for the merged multi-game binary (see `bundle/`): no argv parsing —
@@ -147,6 +151,25 @@ pub async fn play() {
             #[cfg(not(target_arch = "wasm32"))]
             no_ui: false,
             #[cfg(not(target_arch = "wasm32"))]
+            variant: None,
+        },
+    )
+    .await;
+}
+
+/// Entry point for the standalone shell (see
+/// `.notes/steam-standalone-menu-handoff.md`): runs until the player asks to leave
+/// (Esc) or closes the window, then returns instead of looping forever. `play()` above
+/// stays as-is for the browser, where there is nothing to return to. Native has no
+/// query string, so it starts in the same Square default `start()` does.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn play_until_exit() -> control::ExitReason {
+    run(
+        GridKind::Square,
+        CliArgs {
+            debug: false,
+            once: false,
+            no_ui: false,
             variant: None,
         },
     )
@@ -244,7 +267,7 @@ pub fn run_headless(kind: GridKind, cli: CliArgs) -> ! {
     }
 }
 
-pub async fn run(kind: GridKind, cli: CliArgs) {
+pub async fn run(kind: GridKind, cli: CliArgs) -> control::ExitReason {
     let mut control = control::Control::new();
     rand::srand(control.seed());
     let mut kind = kind;
@@ -268,6 +291,9 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
 
     loop {
         control.handle_keys();
+        if let Some(reason) = control.exit_requested() {
+            break reason;
+        }
         accum += control.scale(get_frame_time().min(0.1));
 
         let cur_size = (screen_width(), screen_height());
@@ -335,6 +361,7 @@ pub async fn run(kind: GridKind, cli: CliArgs) {
         );
         shot.tick();
         screenshot::handle_hotkey();
+        control.draw_overlay();
         next_frame().await;
     }
 }

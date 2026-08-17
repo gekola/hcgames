@@ -12,6 +12,17 @@
 //! screenshot/clip capture) — this is an additional target, not a replacement. Native CLI
 //! flags (`--debug`/`--once`/`--no-ui`) live there, not here: `play()` deliberately feeds
 //! every game the same `CliArgs` its browser build gets.
+//!
+//! Native-only, this binary is also the standalone desktop shell: `shell` (see
+//! `shell.rs`) owns one window, a game-selection menu, and dispatches into each game's
+//! `play_until_exit()` instead of `play()` so a game can hand control back instead of
+//! running forever — see `.notes/steam-standalone-menu-handoff.md`. The web build (the
+//! `#[cfg(target_arch = "wasm32")]` half of this file) is untouched by any of that.
+
+#[cfg(not(target_arch = "wasm32"))]
+mod menu_art;
+#[cfg(not(target_arch = "wasm32"))]
+mod shell;
 
 /// Games in the order their `hcg_game_id` index is assigned: plain alphabetical by
 /// `games/<dir>`, which is what `xtask::bundle_game_index` indexes into when it bakes each
@@ -54,43 +65,19 @@ fn selected_game() -> &'static str {
         .unwrap_or(GAME_NAMES[0])
 }
 
+/// Native entry point: the standalone desktop shell (see `shell.rs`) — one window, a
+/// game-selection menu, `--game <name>` still boots straight into a game (the path
+/// `mise run run-bundle <name>` drives).
 #[cfg(not(target_arch = "wasm32"))]
-fn selected_game() -> &'static str {
-    let mut args = std::env::args().skip(1);
-    let mut wanted: Option<String> = None;
-    while let Some(arg) = args.next() {
-        match arg.strip_prefix("--game=") {
-            Some(v) => wanted = Some(v.to_owned()),
-            None if arg == "--game" => wanted = args.next(),
-            _ => {
-                eprintln!("unknown argument '{arg}' (expected --game <name>)");
-                std::process::exit(2);
-            }
-        }
-    }
-    let Some(wanted) = wanted else {
-        eprintln!(
-            "usage: hcg --game <name>\n  names: {}\n\nPer-game CLI flags (--debug/--once/--no-ui) live on each game's own\nbinary instead: cargo run --bin <name> -- --once",
-            GAME_NAMES.join(", ")
-        );
-        std::process::exit(2);
-    };
-    match GAME_NAMES.iter().find(|g| **g == wanted) {
-        Some(g) => g,
-        None => {
-            eprintln!(
-                "unknown game '{wanted}' (expected one of: {})",
-                GAME_NAMES.join(", ")
-            );
-            std::process::exit(2);
-        }
-    }
+fn main() {
+    shell::run();
 }
 
 /// One `Window::from_config` call per arm, not one shared call after a lookup: every
 /// game's `play()` returns its own distinct `Future` type, so they can't be selected into
 /// a single value without boxing (which would need an allocation and a `Pin<Box<dyn
 /// Future>>` that `from_config` doesn't take).
+#[cfg(target_arch = "wasm32")]
 fn main() {
     match selected_game() {
         "arrow-blocks" => {

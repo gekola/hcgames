@@ -1089,14 +1089,18 @@ pub fn start() {
     if cli.no_ui {
         run_headless(cli);
     }
-    macroquad::Window::from_config(conf(), amain(cli));
+    macroquad::Window::from_config(conf(), async move {
+        amain(cli).await;
+    });
 }
 
 /// Entry point for the standalone per-game binary — same window/`--no-ui` branching
 /// `main()` used to do.
 #[cfg(target_arch = "wasm32")]
 pub fn start() {
-    macroquad::Window::from_config(conf(), amain(parse_cli_args()));
+    macroquad::Window::from_config(conf(), async move {
+        amain(parse_cli_args()).await;
+    });
 }
 
 /// Entry point for the merged multi-game binary (see `bundle/`): no argv parsing —
@@ -1105,7 +1109,16 @@ pub async fn play() {
     amain(bundled_cli()).await;
 }
 
-pub async fn amain(cli: CliArgs) {
+/// Entry point for the standalone shell (see
+/// `.notes/steam-standalone-menu-handoff.md`): runs until the player asks to leave
+/// (Esc) or closes the window, then returns instead of looping forever. `play()` above
+/// stays as-is for the browser, where there is nothing to return to.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn play_until_exit() -> control::ExitReason {
+    amain(bundled_cli()).await
+}
+
+pub async fn amain(cli: CliArgs) -> control::ExitReason {
     let mut control = control::Control::new();
     rand::srand(control.seed());
     let mode = cli.variant.unwrap_or(VariantMode::Auto);
@@ -1158,6 +1171,9 @@ pub async fn amain(cli: CliArgs) {
 
     loop {
         control.handle_keys();
+        if let Some(reason) = control.exit_requested() {
+            break reason;
+        }
         let dt = control.scale(get_frame_time());
 
         if is_key_pressed(KeyCode::V) || control.variant_swipe() {
@@ -1252,6 +1268,7 @@ pub async fn amain(cli: CliArgs) {
 
         shot.tick();
         screenshot::handle_hotkey();
+        control.draw_overlay();
         next_frame().await;
     }
 }

@@ -182,14 +182,87 @@ Shape (keep it for new games):
   games' imports whatever game a page runs, and a wasm import the page never registered fails
   instantiation with a LinkError — that's why `variant_query_bridge` (only minesweeper reads
   it) is no longer gated behind `name == "minesweeper"`.
-- One game per process/page load. Each game's `play()` never returns, seeds the global RNG
-  itself, and prewarms only its own glyphs — mounting a second game in the same process would
-  need the `prewarm_glyphs` font-atlas invariant re-checked across games first.
+- One game per process/page load **on the web build**. `play()` never returns, seeds the
+  global RNG itself, and prewarms only its own glyphs. The native standalone shell (below)
+  does run multiple games in the same process one after another via `play_until_exit()`
+  instead — each game's own existing prewarm-before-first-`RenderCache` call already
+  covers this safely on every fresh entry, so no extra cross-game prewarm step was needed;
+  see "Native standalone shell" for why.
 
 `dist/hcg.wasm` is not content-hashed (same as the per-game wasm it replaces), so cross-page
 reuse rests on the browser's HTTP cache plus `static/sw.js`'s network-first strategy. It now
 changes whenever *any* game changes; content-hashing the filename is the open follow-up if
 that reuse should be a guarantee rather than a heuristic.
+
+## Native standalone shell
+
+`bundle/src/shell.rs` (native-only, `#[cfg(not(target_arch = "wasm32"))]`) turns the same
+`hcg` binary into a desktop app: one window, a game-selection menu, and the ability to
+return to that menu from any game — the shape a Steam-style build needs instead of `hcg
+--game snake` jumping into one game and never coming back. The web build (`main.rs`'s
+`#[cfg(target_arch = "wasm32")]` half, `dist/hcg.wasm`) is untouched by any of this — it
+still calls each game's `play()` exactly as before.
+
+- **`hcg` with no arguments now lands on the menu**; `hcg --game <name>` still boots
+  straight into that game (the path `mise run run-bundle <name>` drives) — Esc or the
+  window's close button returns to the menu instead of exiting the process. Unknown
+  `--game`/argument values still print usage and `exit(2)`, same as before the shell.
+- **`control::ExitReason` / `Control::exit_requested()`** (`lib/control`) is what makes a
+  game loop return instead of looping forever: `Some(ExitReason::Menu)` on Esc,
+  `Some(ExitReason::Quit)` when the window is closed (only fires because
+  `Control::new()` now calls `prevent_quit()` on native — without that a close click kills
+  the process before Rust ever reads the event), `None` on WASM always (nothing to return
+  to there; Esc there is `xtask::hotkey_popup`'s page-level JS, not a Rust binding). Every
+  game's inner loop function (`amain`/`run_ui`, or `run` for minesweeper) now returns
+  `control::ExitReason` and checks `exit_requested()` once per frame, right after
+  `control.handle_keys()`, breaking with the reason. `play()` (browser) and `start()`
+  (standalone per-game binary) both still discard that return value via `.await;` or an
+  `async move { ... }` wrapper around the `Window::from_config` call — neither of them
+  ever sees anything but the loop running forever in practice, since nothing native calls
+  `prevent_quit()`/produces `Some(_)` on those paths outside the shell.
+- **`play_until_exit()`** is each game's third native-only entry point alongside
+  `conf()`/`play()`/`start()`: `bundle/src/shell.rs`'s `run_game` dispatches to it with one
+  `match` arm per game (same reasoning as the wasm dispatch `match` — every game's future
+  is its own distinct type, so no shared call after a lookup). A new game needs this arm
+  too, or the shell's menu will `panic!` selecting it.
+- **One shell window, 11 native sizes**: each game's `Conf::window_width`/`window_height`
+  still differs (tetris 600×720, game2048 500×610, the rest 900×720 — same as
+  `xtask::native_size`, just not read from there natively). `run_game` calls
+  `request_new_screen_size` to the selected game's native size before awaiting
+  `play_until_exit()`, and the shell resizes back to its own 900×720 on the way back to
+  the menu. This was the simplest of the three options considered (the alternatives were
+  letterboxing to one fixed size, or drawing each game into an offscreen `render_target`
+  and blitting it scaled) — the tradeoff is a real, visible window resize on every
+  menu↔game transition, and up to a frame or two of mismatched canvas size right after
+  (`request_new_screen_size` only applies on the next `next_frame().await`, not
+  immediately) since games draw at absolute pixel coordinates rather than scaling to
+  `screen_width()`/`screen_height()` (see "Canvas sizing is load-bearing" below — same
+  constraint, different consequence natively than on the web).
+- **Menu itself** (`run_menu` in `shell.rs`) is a plain, uncached per-frame redraw (no
+  `RenderCache`) — arrow-key/mouse/one-finger-tap navigation, Enter/Space/click/tap to
+  play. `xtask` is a native-only (`[target.'cfg(not(...))'.dependencies]` in
+  `bundle/Cargo.toml`) dependency of `bundle` for its `title()` helper (game-name display
+  casing) — kept off the wasm dependency graph so its own deps (`image`, `maud`, …) never
+  have a reason to build for `wasm32`.
+- **Menu art** (`bundle/src/menu_art.rs`): each tile is that game's own site
+  `preview.png` (`include_bytes!("../../dist/<game>/preview.png")`, decoded once at shell
+  startup and drawn "cover"-fit) with a translucent label strip on top — meaning
+  **`bundle`'s native build now depends on the site build having already run**
+  (`mise run deploy`/`build-wasm <game>`); a fresh clone building `hcg` before ever
+  building the web pages gets a missing-file `include_bytes!` compile error. The header
+  reuses the homepage's hero *scene* (`static/hotel-scene.svg`, tracked in git — not a
+  `dist/` artifact) without its JS dissolve/swivel/hue-cycle animation (web-only pixel
+  canvas code, no macroquad port attempted): the SVG is ~100 flat `<rect>` fills on an
+  80x60 grid, hand-parsed once and redrawn as plain rectangles rather than rasterized
+  through an SVG library or `resvg`/`rsvg-convert` (which `mise run rasterize` already
+  needs and isn't guaranteed present).
+- **Deliberately not built yet** (see `.notes/steam-standalone-menu-handoff.md` for the
+  full reasoning): persisted save data (bests/last-played — every game re-seeds fresh on
+  each entry today, same as a brand-new process) and Steamworks/packaging — the latter is
+  a product decision (Steam Direct's $100 fee is real money, which is this project's
+  standing no-spend constraint) before it's an engineering one, not something to build
+  toward speculatively. `.notes/cross-platform-distribution-scope.md` scopes free
+  Windows/macOS/Android/Linux distribution instead.
 
 ## Task runner (mise)
 
