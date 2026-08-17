@@ -3,8 +3,8 @@ use maud::{DOCTYPE, PreEscaped, html};
 use std::path::Path;
 use xtask::{
     all_games, base_url, description, favicon_links, gtag_head, homepage_json_ld, manifest_json,
-    minify_js, pwa_head, social_image, sw_register_bridge, title, wall_analytics_bridge,
-    wall_json_ld, wall_live_bridge,
+    minify_js, preview_srcset, pwa_head, social_image, sw_register_bridge, title,
+    wall_analytics_bridge, wall_json_ld, wall_live_bridge,
 };
 
 /// Feeds `meta description`, `og:description`, the PWA manifest's `description` and the
@@ -1450,46 +1450,6 @@ const QUOTES: &[(&str, &str)] = &[
         "a marriage counselor, billing by the session",
     ),
 ];
-
-/// `game-card img`'s responsive `srcset`: every `dist/<game>/preview-<w>.png` tier that
-/// exists, plus the full-size `preview.png` as the largest candidate. The widths are
-/// per-game — `resize_preview` derives them as exact fractions of each game's native
-/// preview rather than from a fixed list (see TIER_FRACTIONS there) — so they're read back
-/// off disk instead of being hardcoded here. A game with no tiers at all gets a plain
-/// `src` and no `srcset`.
-///
-/// Before this was tiered, the only variant was a single 640w one, which a 1x desktop
-/// pulled for a 226px-wide box — PageSpeed put the resulting waste at 132 KiB across the
-/// grid, the largest item on the page. Three games (tetris, bubble-shooter, game2048) got
-/// no `srcset` at all, their native previews being narrower than 640.
-///
-/// `prefix` is prepended to each candidate URL so the same tiers can be referenced from
-/// pages at different depths (homepage at `dist/index.html` passes `""`, the wall at
-/// `dist/wall/index.html` passes `"../"`).
-fn preview_srcset(dist: &Path, game: &str, prefix: &str) -> Option<String> {
-    let dir = dist.join(game);
-    let mut widths: Vec<u32> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|e| {
-            let name = e.ok()?.file_name().into_string().ok()?;
-            name.strip_prefix("preview-")?
-                .strip_suffix(".png")?
-                .parse::<u32>()
-                .ok()
-        })
-        .collect();
-    if widths.is_empty() {
-        return None;
-    }
-    widths.sort_unstable();
-    let mut entries: Vec<String> = widths
-        .iter()
-        .map(|w| format!("{prefix}{game}/preview-{w}.png {w}w"))
-        .collect();
-    let (full_w, _) = image::image_dimensions(dir.join("preview.png")).unwrap();
-    entries.push(format!("{prefix}{game}/preview.png {full_w}w"));
-    Some(entries.join(", "))
-}
 
 fn main() {
     let dist = Path::new("dist");

@@ -458,6 +458,47 @@ pub fn all_games() -> Vec<String> {
     games
 }
 
+/// A `<img>`'s responsive `srcset`: every `dist/<game>/preview-<w>.png` tier that exists
+/// (`resize_preview` writes these, per-game exact fractions of that game's native preview
+/// — see `TIER_FRACTIONS` there), plus the full-size `preview.png` as the largest
+/// candidate. Read back off disk rather than hardcoded, since the tiers are per-game. A
+/// game with no tiers at all (none generated yet, or a preview narrower than the smallest
+/// tier) gets a plain `src` and no `srcset` — `None`.
+///
+/// Shared by the homepage/wall grids (`generate_index.rs`) and each game page's
+/// related-games cards (`game_page_info`) — before this was wired into the latter, a
+/// game page shipped the *full* ~900px-wide preview.png for each of its 3 related-game
+/// cards despite displaying them at ~300px, the single largest image-delivery waste
+/// Lighthouse flagged on a game page.
+///
+/// `prefix` is prepended to each candidate URL so the same tiers can be referenced from
+/// pages at different depths (homepage at `dist/index.html` passes `""`, a page one
+/// level deep — the wall, or any game page's related cards — passes `"../"`).
+pub fn preview_srcset(dist: &Path, game: &str, prefix: &str) -> Option<String> {
+    let dir = dist.join(game);
+    let mut widths: Vec<u32> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|e| {
+            let name = e.ok()?.file_name().into_string().ok()?;
+            name.strip_prefix("preview-")?
+                .strip_suffix(".png")?
+                .parse::<u32>()
+                .ok()
+        })
+        .collect();
+    if widths.is_empty() {
+        return None;
+    }
+    widths.sort_unstable();
+    let mut entries: Vec<String> = widths
+        .iter()
+        .map(|w| format!("{prefix}{game}/preview-{w}.png {w}w"))
+        .collect();
+    let (full_w, _) = image::image_dimensions(dir.join("preview.png")).ok()?;
+    entries.push(format!("{prefix}{game}/preview.png {full_w}w"));
+    Some(entries.join(", "))
+}
+
 /// Filename of the one wasm binary every game page loads — `bundle/`'s merged build, which
 /// picks its game at runtime from `game_id_bridge`'s baked index. Site-root-relative
 /// (`dist/hcg.wasm`), not per-game, so a second page visit and the wall's 11 iframes hit the
@@ -621,7 +662,7 @@ pub fn scroll_cue() -> Markup {
 /// down. `preventDefault` (not `stopPropagation`) leaves the event reaching miniquad's
 /// own listener, so pause still works. Skipped when a button/link has focus, where Space
 /// means "activate this" (e.g. the hotkey popup's own buttons).
-pub fn game_page_info(name: &str) -> Markup {
+pub fn game_page_info(dist: &Path, name: &str) -> Markup {
     let game_title = title(name);
     let related = related_games(name, 3);
     let all_count = all_games().len();
@@ -640,8 +681,11 @@ pub fn game_page_info(name: &str) -> Markup {
                 h2 { "More self-playing games" }
                 div class="related" {
                     @for game in &related {
+                        @let srcset = preview_srcset(dist, game, "../");
                         a href=(format!("../{game}/")) {
                             img src=(format!("../{game}/preview.png"))
+                                srcset=[srcset.clone()]
+                                sizes=[srcset.is_some().then_some("(max-width: 480px) 90vw, (max-width: 900px) 45vw, 220px")]
                                 alt=(format!("{} being played by an AI", title(game)))
                                 loading="lazy";
                             span { (title(game)) }

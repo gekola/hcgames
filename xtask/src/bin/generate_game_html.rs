@@ -68,7 +68,7 @@ fn main() {
                     }
                     (scroll_cue())
                 }
-                (game_page_info(&name))
+                (game_page_info(dist, &name))
                 script src="../mq_js_bundle.js" {}
                 (analytics_bridge())
                 (session_signals_bridge(&name))
