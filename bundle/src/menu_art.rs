@@ -7,40 +7,56 @@ use macroquad::prelude::*;
 /// Each game's already-generated site preview screenshot — the same PNG a game's own
 /// page uses for its social-share image (see `xtask::social_image`), reused here rather
 /// than capturing a separate native-only screenshot. **This means `bundle`'s native build
-/// now depends on the site build having run first**: `dist/<game>/preview.png` only
-/// exists after `mise run deploy` (or `mise run build-wasm <game>` per game) — a fresh
-/// clone that tries `cargo build --bin hcg` / `mise run run-bundle` before ever running
-/// the web build will fail with a missing-file `include_bytes!` compile error, not a
-/// runtime one. See root `CLAUDE.md`'s "Native standalone shell" section.
+/// depends on the site build having run first** to get the *real* art: `build.rs` stages
+/// `dist/<game>/preview.png` into `OUT_DIR` for each game, substituting a placeholder
+/// when the real file doesn't exist yet (fresh clone, `mise run clean`) — so `cargo
+/// check`/clippy/`mise run run-bundle` never fail to compile over this, they just show
+/// placeholder art natively until `mise run deploy` (or `build-wasm <game>`) has run. See
+/// `build.rs` and root `CLAUDE.md`'s "Native standalone shell" section.
 const PREVIEW_BYTES: [(&str, &[u8]); 11] = [
     (
         "arrow-blocks",
-        include_bytes!("../../dist/arrow-blocks/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_arrow-blocks.png")),
     ),
     (
         "bubble-shooter",
-        include_bytes!("../../dist/bubble-shooter/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_bubble-shooter.png")),
     ),
     (
         "game2048",
-        include_bytes!("../../dist/game2048/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_game2048.png")),
     ),
     (
         "klondike",
-        include_bytes!("../../dist/klondike/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_klondike.png")),
     ),
-    ("match-3", include_bytes!("../../dist/match-3/preview.png")),
+    (
+        "match-3",
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_match-3.png")),
+    ),
     (
         "minesweeper",
-        include_bytes!("../../dist/minesweeper/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_minesweeper.png")),
     ),
-    ("snake", include_bytes!("../../dist/snake/preview.png")),
-    ("spider", include_bytes!("../../dist/spider/preview.png")),
-    ("sudoku", include_bytes!("../../dist/sudoku/preview.png")),
-    ("tetris", include_bytes!("../../dist/tetris/preview.png")),
+    (
+        "snake",
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_snake.png")),
+    ),
+    (
+        "spider",
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_spider.png")),
+    ),
+    (
+        "sudoku",
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_sudoku.png")),
+    ),
+    (
+        "tetris",
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_tetris.png")),
+    ),
     (
         "water-sort",
-        include_bytes!("../../dist/water-sort/preview.png"),
+        include_bytes!(concat!(env!("OUT_DIR"), "/preview_water-sort.png")),
     ),
 ];
 

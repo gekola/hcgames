@@ -245,11 +245,17 @@ still calls each game's `play()` exactly as before.
   casing) — kept off the wasm dependency graph so its own deps (`image`, `maud`, …) never
   have a reason to build for `wasm32`.
 - **Menu art** (`bundle/src/menu_art.rs`): each tile is that game's own site
-  `preview.png` (`include_bytes!("../../dist/<game>/preview.png")`, decoded once at shell
-  startup and drawn "cover"-fit) with a translucent label strip on top — meaning
-  **`bundle`'s native build now depends on the site build having already run**
-  (`mise run deploy`/`build-wasm <game>`); a fresh clone building `hcg` before ever
-  building the web pages gets a missing-file `include_bytes!` compile error. The header
+  `preview.png` (decoded once at shell startup and drawn "cover"-fit) with a translucent
+  label strip on top. `bundle/build.rs` stages each game's `dist/<game>/preview.png` into
+  `OUT_DIR` (substituting a hardcoded 1x1 stub when the real file doesn't exist yet — a
+  fresh clone or `mise run clean`'d tree), and `menu_art.rs` `include_bytes!`s from
+  `OUT_DIR` rather than `dist/` directly — so `cargo check`/clippy/`mise run check` always
+  compile, and only the *art itself* (not the build) depends on the site build having run
+  (`mise run deploy`/`build-wasm <game>`) for real thumbnails instead of a black square.
+  Don't reintroduce a task-level "write a placeholder into `dist/<game>/preview.png` if
+  missing" fix instead — `build-wasm`'s screenshot step skips recapture whenever that path
+  already exists, so a stub written there poisons every future real deploy permanently.
+  The header
   reuses the homepage's hero *scene* (`static/hotel-scene.svg`, tracked in git — not a
   `dist/` artifact) without its JS dissolve/swivel/hue-cycle animation (web-only pixel
   canvas code, no macroquad port attempted): the SVG is ~100 flat `<rect>` fills on an
