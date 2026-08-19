@@ -1251,6 +1251,12 @@ pub fn share_result_bridge() -> Markup {
 /// given browser would have silently dropped the *entire* rule, including the plain
 /// `:fullscreen` half — reusing `hcgIsFullscreen()`'s own already-correct cross-browser
 /// detection sidesteps that class of bug entirely.
+///
+/// Also grabs a Screen Wake Lock while fullscreen (feature-detected — silently
+/// no-ops on browsers without `navigator.wakeLock`), released on exit. A wake
+/// lock is auto-released by the browser whenever the tab goes hidden, with no
+/// event fired on re-fullscreen, so `visibilitychange` re-requests it on
+/// return rather than relying on the `fullscreenchange` listener alone.
 pub fn fullscreen_bridge() -> Markup {
     html! {
         script {
@@ -1266,6 +1272,19 @@ pub fn fullscreen_bridge() -> Markup {
                  \x20   (el.requestFullscreen || el.webkitRequestFullscreen).call(el);\n\
                  \x20 }\n\
                  }\n\
+                 var hcgWakeLock = null;\n\
+                 function hcgUpdateWakeLock() {\n\
+                 \x20 if (!navigator.wakeLock) return;\n\
+                 \x20 if (hcgIsFullscreen()) {\n\
+                 \x20   navigator.wakeLock.request('screen').then(function(lock) { hcgWakeLock = lock; }).catch(function() {});\n\
+                 \x20 } else if (hcgWakeLock) {\n\
+                 \x20   hcgWakeLock.release().catch(function() {});\n\
+                 \x20   hcgWakeLock = null;\n\
+                 \x20 }\n\
+                 }\n\
+                 document.addEventListener('visibilitychange', function() {\n\
+                 \x20 if (document.visibilityState === 'visible') hcgUpdateWakeLock();\n\
+                 });\n\
                  document.addEventListener('keydown', function(e) {\n\
                  \x20 if (e.key === 'f' || e.key === 'F') hcgToggleFullscreen();\n\
                  });\n\
@@ -1284,6 +1303,7 @@ pub fn fullscreen_bridge() -> Markup {
                  \x20 document.addEventListener(ev, function() {\n\
                  \x20   if (typeof window.fitCanvas === 'function') window.fitCanvas();\n\
                  \x20   document.documentElement.classList.toggle('hcg-fullscreen', hcgIsFullscreen());\n\
+                 \x20   hcgUpdateWakeLock();\n\
                  \x20 });\n\
                  });"
             )))

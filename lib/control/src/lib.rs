@@ -96,6 +96,11 @@ pub struct Control {
     episode: u64,
     #[cfg(not(target_arch = "wasm32"))]
     fullscreen: bool,
+    /// Held only while `fullscreen` is true — mirrors the WASM build's Screen Wake Lock
+    /// (`xtask::fullscreen_bridge`), same trigger. Released by drop when set back to
+    /// `None`, so no explicit "release" call is needed on the way out of fullscreen.
+    #[cfg(not(target_arch = "wasm32"))]
+    wake_lock: Option<keepawake::KeepAwake>,
     #[cfg(not(target_arch = "wasm32"))]
     last_click: f64,
     #[cfg(not(target_arch = "wasm32"))]
@@ -135,6 +140,8 @@ impl Control {
             episode: 0,
             #[cfg(not(target_arch = "wasm32"))]
             fullscreen: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            wake_lock: None,
             #[cfg(not(target_arch = "wasm32"))]
             last_click: f64::NEG_INFINITY,
             #[cfg(not(target_arch = "wasm32"))]
@@ -234,6 +241,18 @@ impl Control {
             if toggle_fullscreen {
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
+                self.wake_lock = self
+                    .fullscreen
+                    .then(|| {
+                        keepawake::Builder::default()
+                            .display(true)
+                            .reason("hcg game running fullscreen")
+                            .app_name("hcg")
+                            .app_reverse_domain("io.github.hcg")
+                            .create()
+                            .ok()
+                    })
+                    .flatten();
             }
 
             // `get_char_pressed` (layout-aware text input, unlike `KeyCode` which is a
