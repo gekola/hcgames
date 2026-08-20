@@ -1174,6 +1174,13 @@ pub async fn amain(cli: CliArgs) -> control::ExitReason {
         if let Some(reason) = control.exit_requested() {
             break reason;
         }
+        if let Some(seed) = control.take_reseed() {
+            rand::srand(seed);
+            session = Session::new(session.mode, session.game.generation + 1);
+            view = View::new(&session);
+            daily_done = false;
+            board_cache.mark_dirty();
+        }
         let dt = control.scale(get_frame_time());
 
         if is_key_pressed(KeyCode::V) || control.variant_swipe() {

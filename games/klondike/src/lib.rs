@@ -514,6 +514,18 @@ pub async fn run_ui(cli: CliArgs) -> control::ExitReason {
         if let Some(reason) = control.exit_requested() {
             break reason;
         }
+        if let Some(seed) = control.take_reseed() {
+            macroquad::rand::srand(seed);
+            game = new_game_for(mode, game.generation + 1);
+            display_game = game.clone();
+            solver = Solver::new();
+            end_time = None;
+            accum = 0.0;
+            anim_t = 1.0;
+            flying.clear();
+            daily_done = false;
+            board_cache.mark_dirty();
+        }
         let now = macroquad::miniquad::date::now();
         let dt = control.scale(get_frame_time().min(0.1));
         let layout = Layout::from_screen();

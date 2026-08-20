@@ -233,6 +233,13 @@ pub async fn amain(cli: CliArgs) -> control::ExitReason {
         if let Some(reason) = control.exit_requested() {
             break reason;
         }
+        if let Some(seed) = control.take_reseed() {
+            rand::srand(seed);
+            game = game::Game::new(0);
+            last_remaining = game.remaining();
+            daily_done = false;
+            board_cache.mark_dirty();
+        }
         let dt = control.scale(get_frame_time().min(0.05));
         let now = macroquad::miniquad::date::now();
 

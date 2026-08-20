@@ -455,6 +455,25 @@ the canvas element — and its own pinned size / `fitCanvas()` scale-to-fit tran
 untouched. If you add a new hotkey to `control::Control` (or a page-level one), update the
 `dl` in `hotkey_popup()` to match, or the popup will lie.
 
+**Known upstream bug, not fixable from this repo: native fullscreen is broken on Linux
+X11.** `miniquad`'s X11 backend (`native/linux_x11.rs::set_fullscreen`, confirmed
+unfixed in current upstream `master`, not just the pinned `0.4.10`) interns an *empty*
+X atom instead of `_NET_WM_STATE_FULLSCREEN` when asked to go back to windowed, and
+always sends the EWMH `_NET_WM_STATE` ClientMessage with the "ADD" action (`data[0] =
+1`) instead of "REMOVE" (`0`) — the function's own TODO comment admits going back to
+windowed doesn't really work. It also unconditionally unmaps/remaps the window on
+*every* toggle (both directions), which is almost certainly why a toggle can also cost
+the window input focus — symptoms reported: `F`/double-click sometimes fails to leave
+fullscreen (or flickers back into it), and keys stop being delivered afterward until the
+window is manually refocused or the same key is pressed twice. Wayland's backend
+(`native/linux_wayland.rs`) uses the real `xdg_toplevel` `set_fullscreen`/
+`unset_fullscreen` protocol requests and doesn't have this problem — this is X11
+(including XWayland) specifically. Decided not to patch/vendor `miniquad` over this
+(real fix would mean forking the crate); `Control`'s `FULLSCREEN_TOGGLE_COOLDOWN_SECS`
+debounce (and the mirrored one in `bundle/src/shell.rs`'s menu) softens accidental
+double-toggles but doesn't touch the underlying bug. Revisit if `miniquad` ever fixes
+this upstream, or if the vendor-a-patched-copy option becomes worth it later.
+
 When adding a new selectable mode/variant to an existing game, prefer folding it into an
 existing cycling hotkey (e.g. klondike/spider's `V` variant cycle) over adding a dedicated
 new key — even if the mode should stay out of the *automatic* rotation (an `Auto` mode

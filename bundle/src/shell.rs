@@ -26,6 +26,12 @@ const TILE_LABEL_H: f32 = 34.0;
 /// a *maximum* distance for a gesture to still count as a tap rather than a drag/scroll.
 const TAP_MAX_DIST: f32 = 24.0;
 const TAP_MAX_SECS: f64 = 0.5;
+/// Mirrors `control::Control`'s own (private) double-click-to-fullscreen window — the
+/// menu runs before any game's `Control` exists, so it needs its own copy of this and
+/// the fullscreen-toggle state below, same reason it tracks its own `tap_start`.
+const DOUBLE_CLICK_SECS: f64 = 0.4;
+/// See `control::Control`'s own (private) constant of the same name/purpose.
+const FULLSCREEN_TOGGLE_COOLDOWN_SECS: f64 = 0.3;
 
 /// Entry point called from `main()` on every native target. Parses `--game <name>` (if
 /// given, boots straight into that game — this is what `mise run run-bundle <name>` and
@@ -94,6 +100,18 @@ async fn shell_main(boot: Option<usize>) {
             match run_game(selected).await {
                 control::ExitReason::Menu => {
                     in_game = false;
+                    // A game's own `Control` tracks fullscreen per-instance and never
+                    // un-fullscreens on the way out (Esc exits to the menu, it doesn't
+                    // toggle F first) — without this, leaving a fullscreened game left
+                    // the OS window fullscreened while the menu tried to resize itself
+                    // down to `SHELL_W`x`SHELL_H` underneath that, and a fullscreened
+                    // window ignores/fights a resize request on most window managers,
+                    // leaving the menu's tile hit-boxes (computed from the *requested*
+                    // size, not the actual on-screen one) misaligned with where
+                    // anything actually rendered — clicks landed nowhere real. Always
+                    // force windowed on the way back, whether or not the game that just
+                    // exited was actually fullscreened; a harmless no-op otherwise.
+                    set_fullscreen(false);
                     request_new_screen_size(SHELL_W, SHELL_H);
                     // `run_game`'s loop breaks on Esc *before* its own
                     // `next_frame().await`, so the key-pressed flag is still set this
@@ -154,9 +172,55 @@ async fn run_menu(selected: &mut usize, previews: &[Texture2D], hero: &HeroScene
     // `control::Control`'s own `one_finger_start` field, but the menu runs before any
     // game (and its `Control`) exists, so it tracks this itself.
     let mut tap_start: Option<(f32, f32, f64)> = None;
+    let mut fullscreen = false;
+    let mut last_click = f64::NEG_INFINITY;
+    // See `control::Control`'s own (private) `FULLSCREEN_TOGGLE_COOLDOWN_SECS` doc
+    // comment: some window managers/backends refocus the window as part of a
+    // fullscreen transition and replay whatever key was still physically down as a
+    // fresh `KeyDown`, which `is_key_pressed` sees as a second toggle a frame or two
+    // later — flickering straight back to the state just left. Ignore any toggle
+    // (`F`, double-click, or Esc's own forced un-fullscreen) within this window of the
+    // last one, regardless of trigger.
+    let mut last_fullscreen_toggle = f64::NEG_INFINITY;
     loop {
-        if is_quit_requested() || is_key_pressed(KeyCode::Escape) {
+        if is_quit_requested() {
             return MenuAction::Quit;
+        }
+        if is_key_pressed(KeyCode::Escape) {
+            // Esc backs out of fullscreen first, same as a browser/game convention —
+            // only quits outright once the menu is already windowed. Without this, Esc
+            // on a fullscreened menu quit the whole app in one press, with no way to
+            // just drop back to windowed and keep browsing.
+            if fullscreen {
+                let now = get_time();
+                if now - last_fullscreen_toggle > FULLSCREEN_TOGGLE_COOLDOWN_SECS {
+                    last_fullscreen_toggle = now;
+                    fullscreen = false;
+                    set_fullscreen(false);
+                }
+            } else {
+                return MenuAction::Quit;
+            }
+        }
+
+        // `F`/double-click toggles fullscreen here too, same trigger as every game's
+        // own `control::Control` — the menu previously had no fullscreen handling at
+        // all, so `F` only started working once a game was already running.
+        let mut toggle_fullscreen = is_key_pressed(KeyCode::F);
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let now = get_time();
+            if now - last_click < DOUBLE_CLICK_SECS {
+                toggle_fullscreen = true;
+                last_click = f64::NEG_INFINITY;
+            } else {
+                last_click = now;
+            }
+        }
+        let now = get_time();
+        if toggle_fullscreen && now - last_fullscreen_toggle > FULLSCREEN_TOGGLE_COOLDOWN_SECS {
+            last_fullscreen_toggle = now;
+            fullscreen = !fullscreen;
+            set_fullscreen(fullscreen);
         }
         if is_key_pressed(KeyCode::Right)
             && !(*selected + 1).is_multiple_of(cols)
@@ -283,6 +347,13 @@ async fn run_menu(selected: &mut usize, previews: &[Texture2D], hero: &HeroScene
 /// right after the resize request lands (`request_new_screen_size` applies on the next
 /// `next_frame().await`, not immediately) is a brief visual wobble, not a correctness bug.
 fn size_to(conf: Conf) {
+    // Same reasoning as the Menu-return path above, mirrored for the opposite
+    // direction: if the menu itself was fullscreened (its own `F` toggle, added
+    // alongside this fix), a game starting up would otherwise inherit a fullscreened
+    // OS window while its fresh `control::Control` thinks it's windowed — the same
+    // requested-size-vs-actual-size mismatch, just entering a game instead of leaving
+    // one. Always force windowed before resizing into a game.
+    set_fullscreen(false);
     request_new_screen_size(conf.window_width as f32, conf.window_height as f32);
 }
 

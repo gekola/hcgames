@@ -294,6 +294,14 @@ pub async fn run(kind: GridKind, cli: CliArgs) -> control::ExitReason {
         if let Some(reason) = control.exit_requested() {
             break reason;
         }
+        if let Some(seed) = control.take_reseed() {
+            rand::srand(seed);
+            board = Board::new(kind);
+            update_probs(&mut board);
+            accum = 0.0;
+            daily_done = false;
+            board_cache.mark_dirty();
+        }
         accum += control.scale(get_frame_time().min(0.1));
 
         let cur_size = (screen_width(), screen_height());

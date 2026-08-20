@@ -5,9 +5,9 @@ use xtask::{
     analytics_bridge, base_url, daily_challenge_button, daily_mode_query_bridge, description,
     favicon_links, fullscreen_bridge, game_id_bridge, game_json_ld, game_page_info, gtag_head,
     hotkey_popup, loading_screen, manifest_json, native_size, native_size_style, orientation_hint,
-    pwa_head, screenshot_bridge, scroll_cue, session_signals_bridge, share_result_bridge,
-    social_image, social_video, stream_mode_query_bridge, sw_register_bridge, title,
-    variant_query_bridge,
+    popup_pause_bridge, pwa_head, screenshot_bridge, scroll_cue, session_signals_bridge,
+    share_result_bridge, social_image, social_video, stream_mode_query_bridge, sw_register_bridge,
+    title, variant_query_bridge,
 };
 
 fn main() {
@@ -75,6 +75,7 @@ fn main() {
                 (sw_register_bridge("../sw.js"))
                 (stream_mode_query_bridge())
                 (daily_mode_query_bridge())
+                (popup_pause_bridge())
                 (screenshot_bridge(&name))
                 (share_result_bridge())
                 // Every page, not just minesweeper's: the shared binary links in

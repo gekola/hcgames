@@ -5,6 +5,14 @@ const MIN_MULT: f32 = 0.1;
 const MAX_MULT: f32 = 10.0;
 #[cfg(not(target_arch = "wasm32"))]
 const DOUBLE_CLICK_SECS: f64 = 0.4;
+/// Some window managers/backends refocus the window as part of a fullscreen
+/// transition and replay whatever key was still physically down at that moment as a
+/// fresh `KeyDown` — which reads to `is_key_pressed` as a second, unintended toggle
+/// landing a frame or two after the first, flickering back to the state the player
+/// just left. Any toggle within this window of the last one is ignored rather than
+/// applied, regardless of which trigger (`F` or double-click) fired it.
+#[cfg(not(target_arch = "wasm32"))]
+const FULLSCREEN_TOGGLE_COOLDOWN_SECS: f64 = 0.3;
 /// Horizontal drag distance (px) per `STEP` multiplier change during a two-finger slide.
 const TWO_FINGER_PX_PER_STEP: f32 = 80.0;
 /// Minimum straight-line distance (px) for a one-finger touch to count as a swipe.
@@ -18,6 +26,11 @@ unsafe extern "C" {
     fn hcg_is_stream_mode() -> i32;
     fn hcg_is_daily_mode() -> i32;
     fn hcg_offer_share(text_ptr: *const u8, text_len: u32);
+    /// Live (not read-once) — polled every `scale()` call. Backs the page-level `?`
+    /// hotkey popup (`xtask::popup_pause_bridge`), the WASM half of "popups pause the
+    /// game" — the native half is `Control::popup_open`, read directly since it's a
+    /// Rust-side bool there instead of a DOM class to query.
+    fn hcg_is_popup_open() -> i32;
 }
 
 /// Fires a Google Analytics event (`gtag('event', name, params)`) via the small JS plugin
@@ -103,6 +116,9 @@ pub struct Control {
     wake_lock: Option<keepawake::KeepAwake>,
     #[cfg(not(target_arch = "wasm32"))]
     last_click: f64,
+    /// See `FULLSCREEN_TOGGLE_COOLDOWN_SECS`.
+    #[cfg(not(target_arch = "wasm32"))]
+    last_fullscreen_toggle: f64,
     #[cfg(not(target_arch = "wasm32"))]
     popup_open: bool,
     /// Set by `handle_keys()`, read (not recomputed) by `exit_requested()` — see that
@@ -117,6 +133,19 @@ pub struct Control {
     variant_swipe: bool,
     stream_mode: bool,
     daily_mode: bool,
+    /// Seed actually driving the RNG right now — set once by `seed()` at startup, then
+    /// again on every manual reseed. Shown (read-only, live) in the `R` editor panel.
+    current_seed: u64,
+    /// True while the `R` panel is open. Cross-platform (not `#[cfg]`-gated, unlike
+    /// `popup_open`/`pending_exit`) since a manual reseed is a legitimate thing to want
+    /// on a browser tab too, not just the native standalone shell.
+    seed_editing: bool,
+    /// Digits typed so far in the open editor — prefilled from `current_seed` when `R`
+    /// opens it, so Enter alone with no edits is a no-op reseed rather than a blank field.
+    seed_input: String,
+    /// Set for one frame by `Enter` in the editor; a game's loop takes it, reseeds the
+    /// global RNG, and restarts its current episode — see `take_reseed()`.
+    pending_reseed: Option<u64>,
 }
 
 /// Why a game's `play_until_exit()` loop returned control to the standalone shell (see
@@ -145,6 +174,8 @@ impl Control {
             #[cfg(not(target_arch = "wasm32"))]
             last_click: f64::NEG_INFINITY,
             #[cfg(not(target_arch = "wasm32"))]
+            last_fullscreen_toggle: f64::NEG_INFINITY,
+            #[cfg(not(target_arch = "wasm32"))]
             popup_open: false,
             #[cfg(not(target_arch = "wasm32"))]
             pending_exit: None,
@@ -159,6 +190,10 @@ impl Control {
             daily_mode: unsafe { hcg_is_daily_mode() != 0 },
             #[cfg(not(target_arch = "wasm32"))]
             daily_mode: false,
+            current_seed: 0,
+            seed_editing: false,
+            seed_input: String::new(),
+            pending_reseed: None,
         }
     }
 
@@ -193,17 +228,29 @@ impl Control {
     /// concern once daily mode is involved: `Control` is what owns `daily_mode` itself,
     /// so it should own the seed decision built on top of it rather than splitting that
     /// decision across two crates.
-    pub fn seed(&self) -> u64 {
-        if let Some(n) = std::env::var("HCG_SEED").ok().and_then(|s| s.parse().ok()) {
-            return n;
-        }
-        if !self.daily_mode {
-            return macroquad::miniquad::date::now() as u64;
-        }
-        let mut x = today_day_index().wrapping_add(0x9E37_79B9_7F4A_7C15);
-        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        x ^ (x >> 31)
+    pub fn seed(&mut self) -> u64 {
+        let n = if let Some(n) = std::env::var("HCG_SEED").ok().and_then(|s| s.parse().ok()) {
+            n
+        } else if !self.daily_mode {
+            macroquad::miniquad::date::now() as u64
+        } else {
+            let mut x = today_day_index().wrapping_add(0x9E37_79B9_7F4A_7C15);
+            x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            x ^ (x >> 31)
+        };
+        self.current_seed = n;
+        n
+    }
+
+    /// One-shot: `Some(seed)` the frame after `Enter` confirms the `R` editor, else
+    /// `None`. A game's loop calls this once per frame (right after `exit_requested()`)
+    /// and, when it fires, reseeds the global RNG and restarts its current episode from
+    /// scratch — same shape as a fresh `amain` start, just triggered mid-run instead of
+    /// at startup. `daily_mode` stays whatever it already was; a manual reseed is an
+    /// explicit opt into a specific board, not a way to leave/enter the daily challenge.
+    pub fn take_reseed(&mut self) -> Option<u64> {
+        self.pending_reseed.take()
     }
 
     pub fn handle_keys(&mut self) {
@@ -218,6 +265,42 @@ impl Control {
         }
         if is_key_pressed(KeyCode::Space) {
             self.paused = !self.paused;
+        }
+
+        // Seed editor: `R` opens/closes it, prefilled from the seed actually driving
+        // the RNG right now so a bare Enter is a no-op. Cross-platform (unlike the
+        // native-only popup below) — `get_char_pressed` already works on WASM the same
+        // way it does natively, no page-level JS bridge needed.
+        if is_key_pressed(KeyCode::R) {
+            if self.seed_editing {
+                self.seed_editing = false;
+            } else {
+                self.seed_editing = true;
+                self.seed_input = self.current_seed.to_string();
+            }
+        }
+        // Captured before Escape can close the editor below, and reused by the
+        // native-only Escape handler further down so a single Esc press that closes the
+        // editor doesn't *also* close the popup / exit to menu the same frame.
+        let seed_editor_was_open = self.seed_editing;
+        if seed_editor_was_open {
+            while let Some(c) = get_char_pressed() {
+                if c.is_ascii_digit() && self.seed_input.len() < 20 {
+                    self.seed_input.push(c);
+                }
+            }
+            if is_key_pressed(KeyCode::Backspace) {
+                self.seed_input.pop();
+            }
+            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                if let Ok(n) = self.seed_input.parse::<u64>() {
+                    self.current_seed = n;
+                    self.pending_reseed = Some(n);
+                }
+                self.seed_editing = false;
+            } else if is_key_pressed(KeyCode::Escape) {
+                self.seed_editing = false;
+            }
         }
 
         // WASM fullscreen is handled entirely by page-level JS (`xtask::fullscreen_bridge`)
@@ -238,7 +321,11 @@ impl Control {
                     self.last_click = now;
                 }
             }
-            if toggle_fullscreen {
+            let now = get_time();
+            if toggle_fullscreen
+                && now - self.last_fullscreen_toggle > FULLSCREEN_TOGGLE_COOLDOWN_SECS
+            {
+                self.last_fullscreen_toggle = now;
                 self.fullscreen = !self.fullscreen;
                 set_fullscreen(self.fullscreen);
                 self.wake_lock = self
@@ -273,7 +360,7 @@ impl Control {
             // also set it (from a mouse click) after this method already ran this frame.
             if is_quit_requested() {
                 self.pending_exit = Some(ExitReason::Quit);
-            } else if is_key_pressed(KeyCode::Escape) {
+            } else if is_key_pressed(KeyCode::Escape) && !seed_editor_was_open {
                 if self.popup_open {
                     self.popup_open = false;
                 } else {
@@ -359,11 +446,13 @@ impl Control {
         None
     }
 
-    /// No-op on WASM (the browser's own hotkey popup is page-level HTML/JS,
-    /// `xtask::hotkey_popup` — this would be a second, redundant one drawn over the
-    /// canvas) — an unconditional signature so every game can call it every frame without
-    /// its own `#[cfg]`, same reasoning as `exit_requested`. Natively, draws two things,
-    /// always in this order so the popup paints over the hint: a small always-visible
+    /// The hint/popup half is a no-op on WASM (the browser's own hotkey popup is
+    /// page-level HTML/JS, `xtask::hotkey_popup` — this would be a second, redundant one
+    /// drawn over the canvas) — an unconditional signature so every game can call it
+    /// every frame without its own `#[cfg]`, same reasoning as `exit_requested`. The
+    /// seed editor at the bottom (`draw_seed_editor`) is the exception: it draws on both
+    /// platforms, since `R` itself is a cross-platform hotkey (see `handle_keys`).
+    /// Natively, draws two things, always in this order so the popup paints over the hint: a small always-visible
     /// "back to menu" hint in the bottom-right corner (chosen to avoid the top-left corner
     /// every game's own score/generation HUD text uses), clickable as a mouse-first
     /// equivalent of pressing Esc; and, when `?` has toggled `popup_open` on, a full
@@ -403,19 +492,53 @@ impl Control {
                 self.draw_popup();
             }
         }
+        self.draw_seed_editor();
+    }
+
+    /// Centered panel shown while `seed_editing` is true (`R` to open, digits to edit,
+    /// Enter to apply, Esc to cancel — see `handle_keys`). Cross-platform, unlike
+    /// `draw_popup`: the seed itself is a cross-platform concept (`Control::seed`'s
+    /// `HCG_SEED`/daily-hash/wall-clock precedence applies identically on native and
+    /// WASM), so there's no page-level JS equivalent to defer to here.
+    fn draw_seed_editor(&self) {
+        if !self.seed_editing {
+            return;
+        }
+        let label = format!("Seed: {}", self.seed_input);
+        let hint = "Enter to apply  \u{b7}  Esc to cancel  \u{b7}  digits only";
+        let fs = 28.0;
+        let hint_fs = 16.0;
+        let pad = 16.0;
+        let label_w = measure_text(&label, None, fs as u16, 1.0).width;
+        let hint_w = measure_text(hint, None, hint_fs as u16, 1.0).width;
+        let w = label_w.max(hint_w) + pad * 2.0;
+        let h = fs + hint_fs + pad * 2.5;
+        let x = ((screen_width() - w) * 0.5).floor();
+        let y = ((screen_height() - h) * 0.5).floor();
+        draw_rectangle(x, y, w, h, Color::new(0.1, 0.1, 0.15, 0.95));
+        draw_rectangle_lines(x, y, w, h, 2.0, Color::new(0.4, 0.75, 1.0, 1.0));
+        draw_text(&label, x + pad, y + pad + fs * 0.7, fs, WHITE);
+        draw_text(
+            hint,
+            x + pad,
+            y + h - pad * 0.5,
+            hint_fs,
+            Color::new(0.7, 0.7, 0.8, 1.0),
+        );
     }
 
     /// The panel half of `draw_overlay` — split out only for readability, not meant to be
     /// called on its own (it doesn't check `popup_open`).
     #[cfg(not(target_arch = "wasm32"))]
     fn draw_popup(&self) {
-        const LINES: [(&str, &str); 9] = [
+        const LINES: [(&str, &str); 10] = [
             ("=", "speed up"),
             ("-", "slow down"),
             ("0", "reset speed"),
             ("Space", "pause / resume"),
             ("F", "toggle fullscreen (or double-click)"),
             ("V", "switch game variant (games that have one)"),
+            ("R", "show / type a seed to replay"),
             ("S", "save screenshot"),
             ("?", "toggle this help"),
             ("Esc", "back to menu (or close this help)"),
@@ -461,8 +584,27 @@ impl Control {
     }
 
     /// Zero while paused, otherwise `dt` scaled by the speed multiplier.
+    /// Every game funnels its per-frame `dt` through this single gate, so pausing a
+    /// popup is exactly "act paused for as long as it's open" with no per-game code —
+    /// same mechanism `Space` already uses, just driven by popup state instead of the
+    /// `paused` flag. Covers the seed editor (cross-platform, a `Control` field) and
+    /// the native hotkey popup (`popup_open`, also a `Control` field) directly; the
+    /// page-level `?` hotkey popup on WASM has no Rust-side field (it's a DOM class
+    /// toggled by page JS), so that one's checked live via `hcg_is_popup_open()` — see
+    /// `xtask::popup_pause_bridge`.
     pub fn scale(&self, dt: f32) -> f32 {
-        if self.paused { 0.0 } else { dt * self.mult }
+        if self.paused || self.seed_editing {
+            return 0.0;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.popup_open {
+            return 0.0;
+        }
+        #[cfg(target_arch = "wasm32")]
+        if unsafe { hcg_is_popup_open() != 0 } {
+            return 0.0;
+        }
+        dt * self.mult
     }
 
     /// `x1.000`-style label for the in-canvas HUD, or `PAUSED` when paused.

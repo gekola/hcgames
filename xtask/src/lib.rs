@@ -308,6 +308,7 @@ pub fn hotkey_popup(name: &str) -> Markup {
                     @if has_variant_switch {
                         dt { "V" } dd { "switch game variant" }
                     }
+                    dt { "R" } dd { "show / type a seed to replay" }
                     dt { "S" } dd { "save screenshot" }
                     dt { "2-finger slide" } dd { "adjust speed (touch)" }
                     @if has_variant_switch {
@@ -1058,6 +1059,34 @@ pub fn daily_mode_query_bridge() -> Markup {
                  \x20 },\n\
                  \x20 version: 1,\n\
                  \x20 name: \"hcg_daily_mode\"\n\
+                 });"
+            )))
+        }
+    }
+}
+
+/// Registers a miniquad plugin exposing `env.hcg_is_popup_open`, letting
+/// `control::Control::scale()` poll — live, every frame, unlike the read-once
+/// `hcg_is_stream_mode`/`hcg_is_daily_mode` above — whether the page-level `?` hotkey
+/// popup (`hotkey_popup`'s `#hotkeys` div) is currently open, so a game pauses while a
+/// popup covers it instead of continuing to simulate underneath. The element doesn't
+/// exist in the DOM yet when this registers (it renders later in `<body>`), but doesn't
+/// need to: the closure only runs later, once the wasm module is calling it every
+/// frame, by which point the whole page has rendered. Registered unconditionally, same
+/// as `stream_mode_query_bridge`/`daily_mode_query_bridge` — every page has this popup.
+pub fn popup_pause_bridge() -> Markup {
+    html! {
+        script {
+            (PreEscaped(minify_js(
+                "miniquad_add_plugin({\n\
+                 \x20 register_plugin: function(importObject) {\n\
+                 \x20   importObject.env.hcg_is_popup_open = function() {\n\
+                 \x20     var el = document.getElementById('hotkeys');\n\
+                 \x20     return el && el.classList.contains('open') ? 1 : 0;\n\
+                 \x20   };\n\
+                 \x20 },\n\
+                 \x20 version: 1,\n\
+                 \x20 name: \"hcg_popup_pause\"\n\
                  });"
             )))
         }

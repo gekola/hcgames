@@ -230,6 +230,13 @@ pub async fn amain(cli: CliArgs) -> control::ExitReason {
         if let Some(reason) = control.exit_requested() {
             break reason;
         }
+        if let Some(seed) = control.take_reseed() {
+            rand::srand(seed);
+            game = Game::new(1);
+            accum = 0.0;
+            daily_done = false;
+            board_cache.mark_dirty();
+        }
 
         let n = game.body.len().max(1) as f32;
         let hunger = if game.score >= 10 {
